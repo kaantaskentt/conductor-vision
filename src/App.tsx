@@ -32,10 +32,11 @@ const FINGER_JOINTS = {
 } as const
 
 type CameraStatus = 'idle' | 'loading' | 'running' | 'error'
-type VisionMode = 'fingers' | 'motion' | 'color' | 'face' | 'scan'
+type VisionMode = 'fingers' | 'motion' | 'color' | 'face' | 'scan' | 'music'
 type TargetColor = keyof typeof TARGET_COLORS
 type FingerName = keyof typeof FINGER_JOINTS
 type FingerState = Record<FingerName, boolean>
+type EffectMode = 'filter' | 'reverb' | 'delay'
 
 type HandSummary = {
   id: string
@@ -84,6 +85,36 @@ type AnalysisState = VisualState & FaceState & {
   estimatedTokens: number
   raised: FingerState | null
   motionHistory: number[]
+}
+
+type DjState = {
+  trackName: string
+  isLoaded: boolean
+  isPlaying: boolean
+  volume: number
+  muted: boolean
+  filterAmount: number
+  reverbAmount: number
+  delayAmount: number
+  bpm: number
+  energy: number
+  gesture: string
+  activeControl: string
+  aiStatus: string
+  effectMode: EffectMode
+  dropMode: boolean
+  loopBuild: boolean
+  cueIndex: number
+}
+
+const EFFECT_MODES: EffectMode[] = ['filter', 'reverb', 'delay']
+
+function clamp(value: number, min = 0, max = 1) {
+  return Math.max(min, Math.min(max, value))
+}
+
+function percent(value: number) {
+  return Math.round(clamp(value) * 100)
 }
 
 function dist(a: NormalizedLandmark, b: NormalizedLandmark) {
@@ -219,19 +250,54 @@ function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const samplerRef = useRef<HTMLCanvasElement | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const handRef = useRef<HandLandmarker | null>(null)
   const faceRef = useRef<FaceLandmarker | null>(null)
   const animationRef = useRef<number | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const sourceRef = useRef<MediaElementAudioSourceNode | null>(null)
+  const gainRef = useRef<GainNode | null>(null)
+  const filterRef = useRef<BiquadFilterNode | null>(null)
+  const delayRef = useRef<DelayNode | null>(null)
+  const feedbackRef = useRef<GainNode | null>(null)
+  const wetRef = useRef<GainNode | null>(null)
   const lastVideoTimeRef = useRef(-1)
   const lastFrameAtRef = useRef(performance.now())
   const previousGrayRef = useRef<Uint8ClampedArray | null>(null)
   const smoothedMotionRef = useRef(0)
+  const handMotionRef = useRef<{ x: number; y: number; t: number; indexX: number; indexY: number }[]>([])
+  const lastHandSeenAtRef = useRef(0)
+  const fistStartedAtRef = useRef<number | null>(null)
+  const twoFingerSwitchAtRef = useRef(0)
+  const swipeAtRef = useRef(0)
+  const circleAtRef = useRef(0)
+  const targetVolumeRef = useRef(0.4)
 
   const [status, setStatus] = useState<CameraStatus>('idle')
   const [mode, setMode] = useState<VisionMode>('scan')
   const [targetColor, setTargetColor] = useState<TargetColor>('red')
   const [message, setMessage] = useState('Start camera. Hands and face can run together.')
+  const [dj, setDj] = useState<DjState>({
+    trackName: 'No track loaded',
+    isLoaded: false,
+    isPlaying: false,
+    volume: 40,
+    muted: false,
+    filterAmount: 0,
+    reverbAmount: 0,
+    delayAmount: 0,
+    bpm: 124,
+    energy: 42,
+    gesture: 'Waiting for track + hand',
+    activeControl: 'Upload MP3/WAV',
+    aiStatus: 'DJ deck idle',
+    effectMode: 'filter',
+    dropMode: false,
+    loopBuild: false,
+    cueIndex: 1,
+  })
   const [analysis, setAnalysis] = useState<AnalysisState>({
     ...emptyVisual('red'),
     fingerCount: null,
@@ -337,6 +403,235 @@ function App() {
       aiStatement: 'Stopped. Press Start to run local vision again.',
     }))
     setMessage('Stopped. Press Start to run it again.')
+  }
+
+  function setupAudioGraph() {
+    const audio = audioRef.current
+    if (!audio) throw new Error('Audio element missing')
+    const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!AudioContextClass) throw new Error('Web Audio is not supported in this browser')
+    const ctx = audioCtxRef.current ?? new AudioContextClass()
+    audioCtxRef.current = ctx
+
+    if (!sourceRef.current) {
+      const source = ctx.createMediaElementSource(audio)
+      const filter = ctx.createBiquadFilter()
+      const gain = ctx.createGain()
+      const delay = ctx.createDelay(1.2)
+      const feedback = ctx.createGain()
+      const wet = ctx.createGain()
+
+      filter.type = 'lowpass'
+      filter.frequency.value = 20000
+      filter.Q.value = 0.75
+      gain.gain.value = 0.4
+      delay.delayTime.value = 0.18
+      feedback.gain.value = 0.12
+      wet.gain.value = 0
+
+      source.connect(filter)
+      filter.connect(gain)
+      gain.connect(ctx.destination)
+      filter.connect(delay)
+      delay.connect(feedback)
+      feedback.connect(delay)
+      delay.connect(wet)
+      wet.connect(ctx.destination)
+
+      sourceRef.current = source
+      filterRef.current = filter
+      gainRef.current = gain
+      delayRef.current = delay
+      feedbackRef.current = feedback
+      wetRef.current = wet
+    }
+
+    return ctx
+  }
+
+  async function handleMusicUpload(file: File | undefined) {
+    if (!file) return
+    const valid = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/wave'].includes(file.type) || /\.(mp3|wav)$/i.test(file.name)
+    if (!valid) {
+      setDj((current) => ({ ...current, aiStatus: 'Use MP3 or WAV for this deck' }))
+      return
+    }
+    const audio = audioRef.current
+    if (!audio) return
+    const ctx = setupAudioGraph()
+    if (ctx.state === 'suspended') await ctx.resume()
+    const url = URL.createObjectURL(file)
+    audio.src = url
+    audio.loop = true
+    audio.volume = 1
+    targetVolumeRef.current = 0.4
+    gainRef.current?.gain.setTargetAtTime(0.4, ctx.currentTime, 0.22)
+    await audio.play()
+    setDj((current) => ({
+      ...current,
+      trackName: file.name,
+      isLoaded: true,
+      isPlaying: true,
+      volume: 40,
+      muted: false,
+      bpm: 124,
+      energy: 48,
+      gesture: 'Track loaded',
+      activeControl: 'Hand height → volume',
+      aiStatus: 'Listening to motion',
+    }))
+    setMode('music')
+  }
+
+  async function toggleMusicPlayback() {
+    const audio = audioRef.current
+    if (!audio || !dj.isLoaded) return
+    const ctx = setupAudioGraph()
+    if (ctx.state === 'suspended') await ctx.resume()
+    if (audio.paused) {
+      await audio.play()
+      setDj((current) => ({ ...current, isPlaying: true, aiStatus: 'Listening to motion' }))
+    } else {
+      audio.pause()
+      setDj((current) => ({ ...current, isPlaying: false, aiStatus: 'Paused' }))
+    }
+  }
+
+  function setDeckVolume(nextVolume: number, timeConstant = 0.22) {
+    const ctx = audioCtxRef.current
+    const gain = gainRef.current
+    if (!ctx || !gain) return
+    const clamped = clamp(nextVolume, 0, 1)
+    targetVolumeRef.current = clamped
+    gain.gain.setTargetAtTime(dj.muted ? 0 : clamped, ctx.currentTime, timeConstant)
+  }
+
+  function toggleMute() {
+    const ctx = audioCtxRef.current
+    const gain = gainRef.current
+    if (!ctx || !gain) return
+    setDj((current) => {
+      const muted = !current.muted
+      gain.gain.setTargetAtTime(muted ? 0 : targetVolumeRef.current, ctx.currentTime, 0.18)
+      return { ...current, muted, isPlaying: true, gesture: muted ? 'Closed fist mute' : 'Mute released', activeControl: muted ? 'Muted' : 'Volume restored', aiStatus: 'Gesture locked' }
+    })
+  }
+
+  function cycleEffectMode() {
+    setDj((current) => {
+      const next = EFFECT_MODES[(EFFECT_MODES.indexOf(current.effectMode) + 1) % EFFECT_MODES.length]
+      return { ...current, effectMode: next, gesture: 'Two fingers up', activeControl: `Effect mode: ${next}`, aiStatus: 'Gesture locked' }
+    })
+  }
+
+  function detectCircle(history: { indexX: number; indexY: number }[]) {
+    if (history.length < 18) return false
+    const points = history.slice(-22)
+    const cx = points.reduce((sum, point) => sum + point.indexX, 0) / points.length
+    const cy = points.reduce((sum, point) => sum + point.indexY, 0) / points.length
+    const radii = points.map((point) => Math.hypot(point.indexX - cx, point.indexY - cy))
+    const avgRadius = radii.reduce((sum, value) => sum + value, 0) / radii.length
+    if (avgRadius < 0.035) return false
+    let sweep = 0
+    for (let i = 1; i < points.length; i += 1) {
+      const a = Math.atan2(points[i - 1].indexY - cy, points[i - 1].indexX - cx)
+      const b = Math.atan2(points[i].indexY - cy, points[i].indexX - cx)
+      let delta = b - a
+      if (delta > Math.PI) delta -= Math.PI * 2
+      if (delta < -Math.PI) delta += Math.PI * 2
+      sweep += delta
+    }
+    return Math.abs(sweep) > Math.PI * 1.65
+  }
+
+  function updateDjFromHand(landmarks: NormalizedLandmark[] | undefined, summary: HandSummary | undefined) {
+    const now = performance.now()
+    const ctx = audioCtxRef.current
+    if (!landmarks || !summary) {
+      if (lastHandSeenAtRef.current && now - lastHandSeenAtRef.current > 2000) {
+        setDeckVolume(0.4, 0.55)
+        setDj((current) => current.isLoaded ? { ...current, volume: Math.round(targetVolumeRef.current * 100), gesture: 'Hand lost', activeControl: 'Returning to 40%', aiStatus: 'Re-centering deck' } : current)
+      }
+      return
+    }
+
+    lastHandSeenAtRef.current = now
+    const wrist = landmarks[0]
+    const indexTip = landmarks[8]
+    const thumbTip = landmarks[4]
+    const palmScale = Math.max(dist(wrist, landmarks[9]), 0.04)
+    const handHighness = clamp((0.86 - wrist.y) / 0.62)
+    const mappedVolume = 0.18 + handHighness * 0.82
+    const isFist = summary.count === 0
+    const isOpenPalm = summary.count >= 5
+    const isTwoFingers = summary.count === 2 && summary.raised.index && summary.raised.middle
+    const pinch = clamp(1 - (dist(indexTip, thumbTip) / palmScale - 0.28) / 0.72)
+    const wristAngle = Math.atan2(landmarks[5].y - landmarks[17].y, landmarks[5].x - landmarks[17].x)
+    const rotationAmount = clamp((wristAngle + Math.PI) / (Math.PI * 2))
+    const filterFrequency = 420 + pinch * 15500
+    const delayAmount = clamp(rotationAmount)
+    const reverbAmount = clamp(Math.abs(rotationAmount - 0.5) * 2)
+
+    handMotionRef.current = [...handMotionRef.current.slice(-30), { x: wrist.x, y: wrist.y, t: now, indexX: indexTip.x, indexY: indexTip.y }]
+    const recent = handMotionRef.current
+    const older = recent.find((point) => now - point.t > 220) ?? recent[0]
+    const dx = wrist.x - older.x
+
+    if (isFist) {
+      fistStartedAtRef.current ??= now
+      if (now - fistStartedAtRef.current > 1500) {
+        fistStartedAtRef.current = now + 999999
+        toggleMute()
+      }
+    } else {
+      fistStartedAtRef.current = null
+      setDeckVolume(mappedVolume, 0.28)
+    }
+
+    if (isTwoFingers && now - twoFingerSwitchAtRef.current > 1600) {
+      twoFingerSwitchAtRef.current = now
+      cycleEffectMode()
+    }
+
+    let cueIndex = dj.cueIndex
+    let gesture = isOpenPalm ? 'Open palm: Full Energy Mode' : pinch > 0.62 ? 'Pinch: filter sweep' : isTwoFingers ? 'Two fingers: effect switch' : isFist ? 'Closed fist hold' : 'Hand height: volume ride'
+    let activeControl = isFist ? 'Hold to mute' : 'Volume'
+    if (Math.abs(dx) > 0.18 && now - swipeAtRef.current > 1200) {
+      swipeAtRef.current = now
+      cueIndex = clamp(cueIndex + (dx > 0 ? 1 : -1), 1, 8)
+      gesture = dx > 0 ? 'Swipe right: next cue' : 'Swipe left: previous cue'
+      activeControl = `Cue ${cueIndex}`
+    }
+
+    const circle = detectCircle(recent)
+    if (circle && now - circleAtRef.current > 1800) {
+      circleAtRef.current = now
+      gesture = 'Finger circle: loop build-up'
+      activeControl = 'Loop build'
+    }
+
+    if (ctx) {
+      filterRef.current?.frequency.setTargetAtTime(filterFrequency, ctx.currentTime, 0.18)
+      filterRef.current?.Q.setTargetAtTime(0.75 + pinch * 8, ctx.currentTime, 0.2)
+      delayRef.current?.delayTime.setTargetAtTime(0.08 + delayAmount * 0.42, ctx.currentTime, 0.24)
+      feedbackRef.current?.gain.setTargetAtTime(0.08 + delayAmount * 0.34, ctx.currentTime, 0.24)
+      wetRef.current?.gain.setTargetAtTime((reverbAmount * 0.18) + (delayAmount * 0.12), ctx.currentTime, 0.28)
+    }
+
+    setDj((current) => ({
+      ...current,
+      volume: current.muted ? 0 : percent(mappedVolume),
+      filterAmount: percent(pinch),
+      reverbAmount: percent(reverbAmount),
+      delayAmount: percent(delayAmount),
+      energy: Math.max(percent(mappedVolume), isOpenPalm ? 100 : Math.round((current.energy * 0.7) + (percent(mappedVolume) * 0.3))),
+      gesture,
+      activeControl,
+      aiStatus: isFist ? 'Gesture locking…' : current.isLoaded ? 'Listening to motion' : 'Upload a house track',
+      dropMode: isOpenPalm,
+      loopBuild: circle,
+      cueIndex,
+    }))
   }
 
   function predictLoop() {
@@ -490,8 +785,12 @@ function App() {
       const result = countRaisedFingers(landmarks, handedness)
       const wrist = landmarks[0]
       const color = index === 0 ? '#58a6ff' : '#22c55e'
-      drawingUtils.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS, { color, lineWidth: 3 })
-      drawingUtils.drawLandmarks(landmarks, { color: '#ffffff', fillColor: '#0f172a', lineWidth: 2, radius: 4 })
+      if (mode === 'music') {
+        drawDjHand(ctx, landmarks, canvas, index === 0 ? '#22d3ee' : '#f472b6')
+      } else {
+        drawingUtils.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS, { color, lineWidth: 3 })
+        drawingUtils.drawLandmarks(landmarks, { color: '#ffffff', fillColor: '#0f172a', lineWidth: 2, radius: 4 })
+      }
       drawPill(ctx, `${handedness}: ${result.count}`, wrist.x * canvas.width + 16, wrist.y * canvas.height - 18, color)
       return {
         id: `${handedness}-${index}`,
@@ -539,6 +838,7 @@ function App() {
 
     const totalFingers = summaries.reduce((sum, hand) => sum + hand.count, 0)
     const bestHand = summaries[0]
+    updateDjFromHand(hands.landmarks[0], bestHand)
     const face = classifySmile(faces)
     const handLabel = summaries.length ? summaries.map((hand) => `${hand.label} ${hand.count}`).join(' + ') : 'No hand'
     const aiStatement = makeStatement(totalFingers, summaries, visual, face)
@@ -579,6 +879,37 @@ function App() {
     ctx.fillText(text, Math.max(8, x) + 12, Math.max(36, y) - 5)
   }
 
+  function drawDjHand(ctx: CanvasRenderingContext2D, landmarks: NormalizedLandmark[], canvas: HTMLCanvasElement, color: string) {
+    ctx.save()
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.shadowColor = color
+    ctx.shadowBlur = 18
+    ctx.strokeStyle = color
+    ctx.lineWidth = 3.2
+    HandLandmarker.HAND_CONNECTIONS.forEach((connection) => {
+      const a = landmarks[connection.start]
+      const b = landmarks[connection.end]
+      ctx.beginPath()
+      ctx.moveTo(a.x * canvas.width, a.y * canvas.height)
+      ctx.lineTo(b.x * canvas.width, b.y * canvas.height)
+      ctx.stroke()
+    })
+    landmarks.forEach((point, index) => {
+      const radius = [4, 8, 12, 16, 20].includes(index) ? 7 : 4.5
+      ctx.beginPath()
+      ctx.fillStyle = '#ffffff'
+      ctx.arc(point.x * canvas.width, point.y * canvas.height, radius, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.beginPath()
+      ctx.strokeStyle = color
+      ctx.lineWidth = 2
+      ctx.arc(point.x * canvas.width, point.y * canvas.height, radius + 5, 0, Math.PI * 2)
+      ctx.stroke()
+    })
+    ctx.restore()
+  }
+
   function makeStatement(totalFingers: number, hands: HandSummary[], visual: VisualState, face: FaceState) {
     if (mode === 'fingers') return hands.length ? `${hands.length} hand(s): ${totalFingers} total fingers.` : 'No hand yet. Show one or both hands.'
     if (mode === 'color') return `${targetColor}: ${visual.targetCoverage}% match. Best visible color: ${visual.bestColorName} ${visual.bestColorPercent}%.`
@@ -588,6 +919,7 @@ function App() {
   }
 
   const modes: { id: VisionMode; title: string }[] = [
+    { id: 'music', title: 'Music' },
     { id: 'scan', title: 'Hands + Face' },
     { id: 'fingers', title: 'Fingers' },
     { id: 'face', title: 'Face' },
@@ -603,10 +935,11 @@ function App() {
 
   return (
     <main className="app-shell">
+      <audio ref={audioRef} preload="metadata" />
       <section className="hero-panel compact">
         <p className="eyebrow">Local camera vision · zero cloud tokens</p>
-        <h1>Vision Playground</h1>
-        <p className="lede">Hands, face, motion, and target color detection running locally in-browser.</p>
+        <h1>{mode === 'music' ? 'AI DJ Deck' : 'Vision Playground'}</h1>
+        <p className="lede">{mode === 'music' ? 'Upload a house track and ride volume, filter, echo, drops, cues, and loops with hand gestures.' : 'Hands, face, motion, and target color detection running locally in-browser.'}</p>
       </section>
 
       <section className="stage-card simple">
@@ -615,11 +948,11 @@ function App() {
           <canvas ref={canvasRef} className="overlay" />
           <div className="hud top-left">
             <strong>{mode.toUpperCase()}</strong>
-            <span>{analysis.aiStatement}</span>
+            <span>{mode === 'music' ? `${dj.gesture} · ${dj.activeControl}` : analysis.aiStatement}</span>
           </div>
           <div className="hud top-right">
-            <strong>Local</strong>
-            <span>{analysis.estimatedTokens} cloud tokens</span>
+            <strong>{mode === 'music' ? 'AI DJ' : 'Local'}</strong>
+            <span>{mode === 'music' ? dj.aiStatus : `${analysis.estimatedTokens} cloud tokens`}</span>
           </div>
           {status !== 'running' && <div className="placeholder">Camera preview appears here</div>}
         </div>
@@ -637,10 +970,44 @@ function App() {
               <strong>{analysis.fingerCount ?? '—'}</strong>
             </div>
             <div className="hero-number compact-number face-number">
-              <span>Faces</span>
-              <strong>{analysis.count}</strong>
+              <span>{mode === 'music' ? 'Volume' : 'Faces'}</span>
+              <strong>{mode === 'music' ? `${dj.volume}` : analysis.count}</strong>
             </div>
           </div>
+
+          {mode === 'music' && (
+            <div className="dj-panel">
+              <div className="deck-topline">
+                <span>House demo deck</span>
+                <b>{dj.isPlaying ? 'LIVE' : dj.isLoaded ? 'ARMED' : 'LOAD TRACK'}</b>
+              </div>
+              <div className="track-name">{dj.trackName}</div>
+              <input
+                ref={fileInputRef}
+                className="file-input"
+                type="file"
+                accept="audio/mpeg,audio/mp3,audio/wav,.mp3,.wav"
+                onChange={(event) => handleMusicUpload(event.target.files?.[0])}
+              />
+              <div className="dj-actions">
+                <button type="button" onClick={() => fileInputRef.current?.click()}>Upload MP3/WAV</button>
+                <button type="button" className="secondary" onClick={toggleMusicPlayback} disabled={!dj.isLoaded}>{dj.isPlaying ? 'Pause' : 'Play'}</button>
+                <button type="button" className="panic" onClick={toggleMute} disabled={!dj.isLoaded}>{dj.muted ? 'Unmute' : 'Mute'}</button>
+              </div>
+              <div className="deck-meter"><i style={{ width: `${dj.volume}%` }} /></div>
+              <div className="dj-grid">
+                <div><span>Gesture</span><strong>{dj.gesture}</strong></div>
+                <div><span>Control</span><strong>{dj.activeControl}</strong></div>
+                <div><span>Filter</span><strong>{dj.filterAmount}%</strong></div>
+                <div><span>Reverb</span><strong>{dj.reverbAmount}%</strong></div>
+                <div><span>Delay</span><strong>{dj.delayAmount}%</strong></div>
+                <div><span>Mode</span><strong>{dj.effectMode}</strong></div>
+                <div><span>BPM / Energy</span><strong>{dj.bpm} · {dj.energy}%</strong></div>
+                <div><span>Cue</span><strong>{dj.cueIndex}</strong></div>
+              </div>
+              <p className="gesture-help">Raise/lower hand = volume · pinch = filter · wrist rotate = echo/reverb · open palm = drop mode · fist hold = mute · two fingers = effect mode · circle = loop · swipe = cue.</p>
+            </div>
+          )}
 
           <div className="hands-card">
             <span className="section-label">Hands detected</span>
