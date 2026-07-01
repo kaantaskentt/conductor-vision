@@ -113,6 +113,8 @@ type DjState = {
   selectedControl: DeckControl
   tapTarget: DeckControl
   tapProgress: number
+  audioLevel: number
+  beatPulse: number
 }
 
 
@@ -292,6 +294,8 @@ function App() {
   const delayRef = useRef<DelayNode | null>(null)
   const feedbackRef = useRef<GainNode | null>(null)
   const wetRef = useRef<GainNode | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const audioBinsRef = useRef<Uint8Array<ArrayBuffer> | null>(null)
   const lastVideoTimeRef = useRef(-1)
   const lastFrameAtRef = useRef(performance.now())
   const previousGrayRef = useRef<Uint8ClampedArray | null>(null)
@@ -342,6 +346,8 @@ function App() {
     selectedControl: 'none',
     tapTarget: 'none',
     tapProgress: 0,
+    audioLevel: 0,
+    beatPulse: 0,
   })
   const [analysis, setAnalysis] = useState<AnalysisState>({
     ...emptyVisual('red'),
@@ -504,12 +510,15 @@ function App() {
     delayRef.current?.disconnect()
     feedbackRef.current?.disconnect()
     wetRef.current?.disconnect()
+    analyserRef.current?.disconnect()
     sourceRef.current = null
     filterRef.current = null
     gainRef.current = null
     delayRef.current = null
     feedbackRef.current = null
     wetRef.current = null
+    analyserRef.current = null
+    audioBinsRef.current = null
     void audioCtxRef.current?.close().catch(() => undefined)
     audioCtxRef.current = null
   }
@@ -525,12 +534,15 @@ function App() {
 
     if (!sourceRef.current) {
       const source = ctx.createMediaElementSource(audio)
+      const analyser = ctx.createAnalyser()
       const filter = ctx.createBiquadFilter()
       const gain = ctx.createGain()
       const delay = ctx.createDelay(1.2)
       const feedback = ctx.createGain()
       const wet = ctx.createGain()
 
+      analyser.fftSize = 128
+      analyser.smoothingTimeConstant = 0.82
       filter.type = 'lowpass'
       filter.frequency.value = 20000
       filter.Q.value = 0.75
@@ -539,7 +551,8 @@ function App() {
       feedback.gain.value = 0.12
       wet.gain.value = 0
 
-      source.connect(filter)
+      source.connect(analyser)
+      analyser.connect(filter)
       filter.connect(gain)
       gain.connect(ctx.destination)
       filter.connect(delay)
@@ -549,6 +562,8 @@ function App() {
       wet.connect(ctx.destination)
 
       sourceRef.current = source
+      analyserRef.current = analyser
+      audioBinsRef.current = new Uint8Array(analyser.frequencyBinCount)
       filterRef.current = filter
       gainRef.current = gain
       delayRef.current = delay
@@ -616,6 +631,8 @@ function App() {
       selectedControl: 'none',
       tapTarget: 'none',
       tapProgress: 0,
+      audioLevel: 0,
+      beatPulse: 0,
     }))
     setMode('music')
     if (statusRef.current !== 'running' && statusRef.current !== 'loading') void startCamera()
@@ -780,9 +797,8 @@ function App() {
     let delayAmount = currentDj.delayAmount / 100
 
     if (selected === 'volume') {
-      const baseline = calibrationRef.current.baselineY
-      const mapped = clamp(0.18 + clamp((baseline + 0.3 - wrist.y) / 0.6) * 0.82, 0.18, 1)
-      const volume = targetVolumeRef.current * 0.88 + mapped * 0.12
+      const mapped = clamp(0.18 + clamp((0.86 - wrist.y) / 0.62) * 0.82, 0.18, 1)
+      const volume = targetVolumeRef.current * 0.86 + mapped * 0.14
       setDeckVolume(volume, 0.38)
       gesture = 'Volume active — move hand up/down'
       activeControl = 'Vertical volume control'
@@ -796,7 +812,7 @@ function App() {
       }
       gesture = 'Filter active — rotate wrist'
       activeControl = filterAmount > 0.52 ? 'Opening filter' : 'Closing filter'
-      nextHint = 'Treat your hand like a knob. Switch control to stop editing filter.'
+      nextHint = 'Turn wrist slowly. Filter holds its value when you switch away.'
     } else if (selected === 'reverb') {
       const next = clamp(smoothedReverbRef.current + dy * 1.9, 0, 1)
       smoothedReverbRef.current = smoothedReverbRef.current * 0.86 + next * 0.14
@@ -843,6 +859,20 @@ function App() {
     }))
   }
 
+  function updateAudioMeter() {
+    const analyser = analyserRef.current
+    const bins = audioBinsRef.current
+    if (!analyser || !bins || modeRef.current !== 'music') return
+    analyser.getByteFrequencyData(bins)
+    const lowEnd = bins.slice(0, Math.min(10, bins.length))
+    const avg = bins.reduce((sum, value) => sum + value, 0) / Math.max(bins.length, 1)
+    const bass = lowEnd.reduce((sum, value) => sum + value, 0) / Math.max(lowEnd.length, 1)
+    const audioLevel = percent(avg / 190)
+    const beatPulse = percent(bass / 210)
+    setDj((current) => current.isLoaded ? { ...current, audioLevel: Math.round((current.audioLevel * 0.78) + (audioLevel * 0.22)), beatPulse: Math.round((current.beatPulse * 0.72) + (beatPulse * 0.28)) } : current)
+  }
+
+
   function predictLoop() {
     const video = videoRef.current
     if (!video || !canvasRef.current || !handRef.current || !faceRef.current) return
@@ -854,6 +884,7 @@ function App() {
       const faces = faceRef.current.detectForVideo(video, timestamp)
       const visual = analyzePixels(video)
       drawResult(hands, faces, visual)
+      updateAudioMeter()
 
       const now = performance.now()
       const fps = Math.round(1000 / Math.max(now - lastFrameAtRef.current, 1))
@@ -1174,7 +1205,7 @@ function App() {
               {Array.from({ length: 22 }, (_, index) => <i key={index} style={{ height: `${18 + ((index * 19 + dj.energy) % 42)}px` }} />)}
             </div>
           </div>
-          <button type="button" className="music-upload-main" onClick={() => fileInputRef.current?.click()}>Music</button>
+          <button type="button" className="music-upload-main" onClick={() => fileInputRef.current?.click()}>Upload Track</button>
           <button type="button" className="sidebar-ghost" onClick={() => setMode('scan')}>Back to Vision</button>
         </aside>
 
@@ -1190,6 +1221,22 @@ function App() {
               <b>{status === 'running' ? 'Camera active' : 'Camera idle'}</b>
             </div>
           </header>
+
+          <div className="deck-strip">
+            <div className="deck-track">
+              <span>Track</span>
+              <strong>{dj.trackName}</strong>
+              <button type="button" onClick={() => fileInputRef.current?.click()}>Upload</button>
+              <button type="button" className="secondary" onClick={toggleMusicPlayback} disabled={!dj.isLoaded}>{dj.isPlaying ? 'Pause' : 'Play'}</button>
+            </div>
+            <div className="deck-selector" aria-label="Deck controls">
+              {CONTROL_ORDER.map((control) => (
+                <button key={control} type="button" className={dj.selectedControl === control ? 'active' : ''} onClick={() => selectDeckControl(control)} disabled={!dj.isLoaded}>
+                  {CONTROL_LABELS[control].title}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <div className="conductor-camera-card">
             <div className="camera-titlebar">
@@ -1252,10 +1299,20 @@ function App() {
             <em>{dj.gestureLocked ? 'Gesture locked' : 'Unlocked'} · {dj.confidence}% confidence</em>
             <p>{dj.nextHint}</p>
           </div>
-          <div className="control-card volume-card">
-            <span>Volume</span>
-            <strong>{dj.volume}%</strong>
-            <div className="deck-meter"><i style={{ width: `${dj.volume}%` }} /></div>
+          <div className="control-card volume-card motion-volume-card">
+            <span>Volume motion</span>
+            <strong>{dj.selectedControl === 'volume' ? 'Live' : `${dj.volume}%`}</strong>
+            <div className="vertical-volume"><i style={{ height: `${dj.volume}%` }} /></div>
+          </div>
+          <div className="control-card filter-knob-card">
+            <span>Filter knob</span>
+            <div className="dj-knob" style={{ transform: `rotate(${(-135 + (dj.filterAmount / 100) * 270)}deg)` }}><i /></div>
+            <small>{dj.selectedControl === 'filter' ? 'Rotate wrist' : 'Select Filter to control'}</small>
+          </div>
+          <div className="control-card beat-card">
+            <span>Beat / level</span>
+            <strong>{dj.beatPulse > 58 ? 'Kick' : dj.audioLevel > 18 ? 'Playing' : 'Idle'}</strong>
+            <div className="beat-bars">{Array.from({ length: 18 }, (_, index) => <i key={index} style={{ height: `${12 + ((index * 13 + dj.audioLevel + dj.beatPulse) % 58)}px`, opacity: index < Math.ceil(dj.audioLevel / 6) ? 1 : 0.28 }} />)}</div>
           </div>
           <div className="control-grid-premium control-selector">
             {CONTROL_ORDER.map((control) => {
@@ -1276,7 +1333,7 @@ function App() {
           </div>
           <div className="copy-card">
             <b>Motion is the mixer.</b>
-            <p>Upload a track, select one control, then move your hand. Nothing else listens until you switch controls.</p>
+            <p>Upload, press Play, choose one deck control, then move your hand. Volume uses simple up/down; Filter uses a visible DJ-style knob.</p>
           </div>
           <div className={`status ${status}`}>{status === 'idle' ? 'Start camera to unlock live hand, face, color, and motion interactions.' : message}</div>
           <div className="actions">

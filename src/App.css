@@ -751,3 +751,148 @@ select {
   .gesture-shortcuts, .finger-control-pads { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .control-selector { grid-template-columns: 1fr; }
 }
+
+/* Conductor v4: clearer DJ deck controls */
+.deck-strip {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(360px, 1.4fr);
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.deck-track, .deck-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 18px;
+  background: rgba(255,255,255,0.78);
+  box-shadow: 0 12px 34px rgba(15,23,42,0.08);
+}
+.deck-track span {
+  color: #64748b;
+  font-size: 0.64rem;
+  font-weight: 950;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+.deck-track strong {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
+  color: #0f172a;
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deck-track button, .deck-selector button {
+  flex: 0 0 auto;
+  padding: 0.58rem 0.72rem;
+  border-radius: 12px;
+  font-size: 0.76rem;
+  box-shadow: none;
+}
+.deck-selector { justify-content: flex-end; }
+.deck-selector button {
+  color: #334155;
+  background: #f8fafc;
+  border: 1px solid rgba(15,23,42,0.08);
+}
+.deck-selector button.active {
+  color: #fff;
+  background: #111827;
+  border-color: #111827;
+}
+.motion-volume-card {
+  display: grid;
+  grid-template-columns: 1fr 52px;
+  align-items: center;
+  gap: 10px;
+}
+.motion-volume-card span, .motion-volume-card strong { grid-column: 1; }
+.vertical-volume {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: stretch;
+  min-height: 92px;
+  position: relative;
+  overflow: hidden;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #e2e8f0, #f8fafc);
+  border: 1px solid rgba(15,23,42,0.08);
+}
+.vertical-volume i {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, #22d3ee, #2563eb 70%, #111827);
+  transition: height 240ms ease;
+}
+.filter-knob-card {
+  display: grid;
+  grid-template-columns: 1fr 92px;
+  gap: 8px 12px;
+  align-items: center;
+}
+.filter-knob-card span, .filter-knob-card small { grid-column: 1; }
+.dj-knob {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  position: relative;
+  width: 82px;
+  height: 82px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 35% 28%, rgba(255,255,255,0.95), rgba(226,232,240,0.45) 34%, transparent 35%),
+    conic-gradient(from -135deg, #111827 0deg, #2563eb 145deg, #22d3ee 270deg, #e2e8f0 271deg 360deg);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 14px 30px rgba(15,23,42,0.16);
+  transition: transform 180ms ease-out;
+}
+.dj-knob::after {
+  content: '';
+  position: absolute;
+  inset: 13px;
+  border-radius: inherit;
+  background: linear-gradient(145deg, #fff, #dbeafe);
+  box-shadow: inset 0 -10px 22px rgba(15,23,42,0.10);
+}
+.dj-knob i {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  top: 9px;
+  width: 4px;
+  height: 24px;
+  margin-left: -2px;
+  border-radius: 999px;
+  background: #111827;
+}
+.beat-card { overflow: hidden; }
+.beat-bars {
+  display: flex;
+  align-items: end;
+  gap: 4px;
+  height: 72px;
+  margin-top: 10px;
+}
+.beat-bars i {
+  flex: 1;
+  min-width: 3px;
+  border-radius: 999px 999px 0 0;
+  background: linear-gradient(180deg, #111827, #2563eb 55%, #22d3ee);
+  transition: height 100ms linear, opacity 120ms linear;
+}
+.conductor-orb { display: none; }
+.finger-control-pads { bottom: 14px; }
+.finger-control-pads span { min-height: 46px; }
+@media (max-width: 1180px) {
+  .deck-strip { grid-template-columns: 1fr; }
+  .deck-selector { justify-content: flex-start; flex-wrap: wrap; }
+}
+@media (max-width: 820px) {
+  .deck-track { flex-wrap: wrap; }
+  .deck-selector button { flex: 1 1 30%; }
+}
