@@ -38,6 +38,7 @@ type FingerName = keyof typeof FINGER_JOINTS
 type FingerState = Record<FingerName, boolean>
 type EffectMode = 'filter' | 'reverb' | 'delay'
 type GestureMode = 'none' | 'volume' | 'filter' | 'reverb' | 'mute' | 'swipe'
+type DeckControl = 'none' | 'volume' | 'filter' | 'reverb' | 'mute' | 'cue'
 
 type HandSummary = {
   id: string
@@ -109,7 +110,21 @@ type DjState = {
   confidence: number
   gestureLocked: boolean
   nextHint: string
+  selectedControl: DeckControl
+  tapTarget: DeckControl
+  tapProgress: number
 }
+
+
+const CONTROL_LABELS: Record<DeckControl, { title: string; hint: string; action: string }> = {
+  none: { title: 'No control', hint: 'Tap a control to begin.', action: 'Idle' },
+  volume: { title: 'Volume', hint: 'Move hand up/down.', action: 'Vertical hand motion' },
+  filter: { title: 'Filter', hint: 'Rotate wrist like a knob.', action: 'Wrist rotation' },
+  reverb: { title: 'Reverb', hint: 'Move hand up/down.', action: 'Atmosphere lift' },
+  mute: { title: 'Mute / Pause', hint: 'Tap to toggle.', action: 'Direct toggle' },
+  cue: { title: 'Cue Jump', hint: 'Swipe left/right.', action: 'Horizontal swipe' },
+}
+const CONTROL_ORDER: DeckControl[] = ['volume', 'filter', 'reverb', 'mute', 'cue']
 
 function clamp(value: number, min = 0, max = 1) {
   return Math.max(min, Math.min(max, value))
@@ -292,6 +307,7 @@ function App() {
   const smoothedFilterRef = useRef(1)
   const smoothedReverbRef = useRef(0)
   const gestureCandidateRef = useRef<{ mode: GestureMode; since: number }>({ mode: 'none', since: 0 })
+  const controlHoverRef = useRef<{ control: DeckControl; since: number; toggled: boolean }>({ control: 'none', since: 0, toggled: false })
   const audioUrlRef = useRef<string | null>(null)
   const modeRef = useRef<VisionMode>('scan')
   const targetColorRef = useRef<TargetColor>('red')
@@ -322,7 +338,10 @@ function App() {
     cueIndex: 1,
     confidence: 0,
     gestureLocked: false,
-    nextHint: 'Upload a track, then show an open right palm to control volume.',
+    nextHint: 'Upload a track, then select a control.',
+    selectedControl: 'none',
+    tapTarget: 'none',
+    tapProgress: 0,
   })
   const [analysis, setAnalysis] = useState<AnalysisState>({
     ...emptyVisual('red'),
@@ -415,6 +434,7 @@ function App() {
       calibrationRef.current = { ready: false, samples: 0, baselineY: 0.62, handScale: 0.16 }
       gestureLockRef.current = { mode: 'none', until: 0, confidence: 0 }
       gestureCandidateRef.current = { mode: 'none', since: 0 }
+      controlHoverRef.current = { control: 'none', since: 0, toggled: false }
       setMessage('Loading local hand + face models…')
       await loadVision()
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -563,13 +583,14 @@ function App() {
     calibrationRef.current = { ready: false, samples: 0, baselineY: 0.62, handScale: 0.16 }
     gestureLockRef.current = { mode: 'none', until: 0, confidence: 0 }
     gestureCandidateRef.current = { mode: 'none', since: 0 }
+    controlHoverRef.current = { control: 'none', since: 0, toggled: false }
     gainRef.current?.gain.setTargetAtTime(0.4, ctx.currentTime, 0.22)
     filterRef.current?.frequency.setTargetAtTime(18000, ctx.currentTime, 0.12)
     filterRef.current?.Q.setTargetAtTime(0.85, ctx.currentTime, 0.12)
     try {
       await audio.play()
     } catch {
-      setDj((current) => ({ ...current, aiStatus: 'Browser blocked autoplay. Press Play to start the deck.', isLoaded: true, isPlaying: false, trackName: file.name, filterAmount: 100, confidence: 0, gestureLocked: false, nextHint: 'Press Play, then show an open right palm to control volume.' }))
+      setDj((current) => ({ ...current, aiStatus: 'Browser blocked autoplay. Press Play to start the deck.', isLoaded: true, isPlaying: false, trackName: file.name, filterAmount: 100, confidence: 0, gestureLocked: false, nextHint: 'Press Play, then tap Volume, Filter, Reverb, Mute, or Cue.' }))
       setMode('music')
       if (statusRef.current !== 'running' && statusRef.current !== 'loading') void startCamera()
       return
@@ -591,7 +612,10 @@ function App() {
       aiStatus: statusRef.current === 'running' ? 'Calibrating hand position…' : 'Camera arming…',
       confidence: 0,
       gestureLocked: false,
-      nextHint: 'Open right palm = volume · right fist = filter · two hands together = reverb',
+      nextHint: 'Tap a control card first. Only the selected control will listen.',
+      selectedControl: 'none',
+      tapTarget: 'none',
+      tapProgress: 0,
     }))
     setMode('music')
     if (statusRef.current !== 'running' && statusRef.current !== 'loading') void startCamera()
@@ -639,17 +663,50 @@ function App() {
       gain.gain.setTargetAtTime(muted ? 0 : targetVolumeRef.current, ctx.currentTime, 0.18)
       if (muted) audio?.pause()
       else void audio?.play().catch(() => undefined)
-      return { ...current, muted, isPlaying: muted ? false : !audio?.paused, gesture: muted ? 'Closed fist hold — muted/paused' : 'Mute released', activeControl: muted ? 'Muted / paused' : 'Previous control held', aiStatus: 'Gesture locked', confidence: 100, gestureLocked: true, nextHint: muted ? 'Hold fist again or press Unmute to resume.' : 'Choose a clear gesture to resume control.' }
+      return { ...current, muted, isPlaying: muted ? false : true, gesture: muted ? 'Closed fist hold — muted/paused' : 'Mute released', activeControl: muted ? 'Muted / paused' : 'Previous control held', aiStatus: 'Gesture locked', confidence: 100, gestureLocked: true, nextHint: muted ? 'Hold fist again or press Unmute to resume.' : 'Choose a clear gesture to resume control.' }
     })
   }
 
+
+
+  function selectDeckControl(control: DeckControl) {
+    if (control === 'none') {
+      setDj((current) => ({ ...current, selectedControl: 'none', tapTarget: 'none', tapProgress: 0, gesture: 'No control selected', activeControl: 'Values held', aiStatus: 'Idle', confidence: 0, gestureLocked: false, nextHint: 'Tap Volume, Filter, Reverb, Mute, or Cue to begin.' }))
+      return
+    }
+    if (control === 'mute') {
+      toggleMute()
+      setDj((current) => ({ ...current, selectedControl: 'none', tapTarget: 'none', tapProgress: 0 }))
+      return
+    }
+    calibrationRef.current = { ...calibrationRef.current, ready: false, samples: 0 }
+    gestureLockRef.current = { mode: control === 'cue' ? 'swipe' : control, until: performance.now() + 700, confidence: 0.9 }
+    setDj((current) => ({
+      ...current,
+      selectedControl: control,
+      tapTarget: 'none',
+      tapProgress: 0,
+      gesture: `${CONTROL_LABELS[control].title} active`,
+      activeControl: CONTROL_LABELS[control].action,
+      aiStatus: 'Selected control is listening',
+      confidence: 90,
+      gestureLocked: true,
+      nextHint: CONTROL_LABELS[control].hint,
+    }))
+  }
+
+  function controlFromFinger(displayX: number, y: number): DeckControl {
+    if (y < 0.68 || y > 0.96) return 'none'
+    const index = Math.floor(clamp(displayX, 0, 0.999) * CONTROL_ORDER.length)
+    return CONTROL_ORDER[index] ?? 'none'
+  }
 
 
   function updateDjFromHands(landmarksList: NormalizedLandmark[][], summaries: HandSummary[]) {
     if (modeRef.current !== 'music') return
     const currentDj = djRef.current
     if (!currentDj?.isLoaded) {
-      setDj((current) => current.gesture === 'Upload a track first' ? current : { ...current, gesture: 'Upload a track first', activeControl: 'Music button', aiStatus: 'Load MP3/WAV/FLAC to arm DJ controls', confidence: 0, gestureLocked: false, nextHint: 'Upload a track to enable gesture controls.' })
+      setDj((current) => current.gesture === 'Upload a track first' ? current : { ...current, gesture: 'Upload a track first', activeControl: 'Music button', aiStatus: 'Load MP3/WAV/FLAC to arm controls', confidence: 0, gestureLocked: false, selectedControl: 'none', tapTarget: 'none', tapProgress: 0, nextHint: 'Upload a track to enable the deck.' })
       return
     }
 
@@ -659,9 +716,9 @@ function App() {
     if (!hands.length) {
       previousTwoHandYRef.current = null
       fistStartedAtRef.current = null
-      if (lastHandSeenAtRef.current && now - lastHandSeenAtRef.current > 900) {
-        gestureLockRef.current = { mode: 'none', until: 0, confidence: 0 }
-        setDj((current) => current.isLoaded ? { ...current, gesture: 'No clear gesture detected', activeControl: 'Values held', aiStatus: 'Waiting for hand', confidence: 0, gestureLocked: false, nextHint: 'Show an open right palm, a right fist, or two hands together.' } : current)
+      controlHoverRef.current = { control: 'none', since: 0, toggled: false }
+      if (lastHandSeenAtRef.current && now - lastHandSeenAtRef.current > 700) {
+        setDj((current) => current.isLoaded ? { ...current, gesture: current.selectedControl === 'none' ? 'No control selected' : `${CONTROL_LABELS[current.selectedControl].title} active`, activeControl: 'Tracking lost — values held', aiStatus: 'Hold still to recalibrate', confidence: 0, gestureLocked: false, tapTarget: 'none', tapProgress: 0, nextHint: current.selectedControl === 'none' ? 'Tap a control to begin.' : CONTROL_LABELS[current.selectedControl].hint } : current)
       }
       return
     }
@@ -669,144 +726,100 @@ function App() {
 
     const rightHand = hands.find((hand) => hand.summary.label === 'Right') ?? hands[0]
     const wrist = rightHand.landmarks[0]
+    const indexTip = rightHand.landmarks[8]
     const palmScale = Math.max(dist(wrist, rightHand.landmarks[9]), 0.04)
+    const displayedFingerX = 1 - indexTip.x
+    const hoveredControl = controlFromFinger(displayedFingerX, indexTip.y)
+    const hover = controlHoverRef.current
+    if (hover.control !== hoveredControl) {
+      controlHoverRef.current = { control: hoveredControl, since: now, toggled: false }
+    }
+    const hoverNow = controlHoverRef.current
+    const tapProgress = hoveredControl === 'none' ? 0 : clamp((now - hoverNow.since) / 650)
+    if (hoveredControl !== 'none' && tapProgress >= 1 && !hoverNow.toggled) {
+      controlHoverRef.current = { ...hoverNow, toggled: true }
+      selectDeckControl(hoveredControl)
+      return
+    }
+
+    const selected = currentDj.selectedControl
+    if (selected === 'none') {
+      setDj((current) => ({ ...current, gesture: hoveredControl === 'none' ? 'No control selected' : `Tap target: ${CONTROL_LABELS[hoveredControl].title}`, activeControl: 'Values held', aiStatus: hoveredControl === 'none' ? 'Waiting for selection' : 'Hold fingertip on control to select', confidence: percent(tapProgress), gestureLocked: false, tapTarget: hoveredControl, tapProgress: percent(tapProgress), nextHint: hoveredControl === 'none' ? 'Use the on-screen controls or hover your fingertip over a control pad.' : `Selecting ${CONTROL_LABELS[hoveredControl].title}…` }))
+      return
+    }
+
     const calibration = calibrationRef.current
     if (!calibration.ready) {
       const nextSamples = calibration.samples + 1
       calibrationRef.current = {
-        ready: nextSamples >= 28,
+        ready: nextSamples >= 16,
         samples: nextSamples,
         baselineY: ((calibration.baselineY * calibration.samples) + wrist.y) / nextSamples,
         handScale: ((calibration.handScale * calibration.samples) + palmScale) / nextSamples,
       }
-      setDj((current) => ({ ...current, gesture: 'Calibrating hand position', activeControl: 'Hold hand naturally', aiStatus: 'Calibration in progress', confidence: Math.min(96, Math.round((nextSamples / 28) * 100)), gestureLocked: false, nextHint: 'Keep your right hand visible for one second.' }))
+      setDj((current) => ({ ...current, gesture: `${CONTROL_LABELS[selected].title} active`, activeControl: 'Calibrating hand position', aiStatus: 'Hold steady', confidence: Math.min(96, Math.round((nextSamples / 16) * 100)), gestureLocked: true, tapTarget: hoveredControl, tapProgress: percent(tapProgress), nextHint: 'Hold your hand naturally for a moment.' }))
       return
     }
 
-    const isRightFist = rightHand.summary.count === 0
-    const isRightOpenPalm = rightHand.summary.count >= 4 && rightHand.summary.raised.index && rightHand.summary.raised.middle && rightHand.summary.raised.ring
-    const rightWristAngle = Math.atan2(rightHand.landmarks[5].y - rightHand.landmarks[17].y, rightHand.landmarks[5].x - rightHand.landmarks[17].x)
-    const knobAmount = clamp((rightWristAngle + 1.35) / 2.7)
-
-    const avgY = hands.reduce((sum, hand) => sum + hand.landmarks[0].y, 0) / hands.length
-    const handDistance = hands.length >= 2 ? Math.hypot(hands[0].landmarks[0].x - hands[1].landmarks[0].x, hands[0].landmarks[0].y - hands[1].landmarks[0].y) : 1
-    const bothHandsTogether = hands.length >= 2 && handDistance < 0.46
-    const previousTwoY = previousTwoHandYRef.current
-    previousTwoHandYRef.current = bothHandsTogether ? avgY : null
-    const twoHandDelta = previousTwoY === null ? 0 : previousTwoY - avgY
-
-    handMotionRef.current = [...handMotionRef.current.slice(-28), { x: wrist.x, y: wrist.y, t: now, indexX: rightHand.landmarks[8].x, indexY: rightHand.landmarks[8].y }]
+    handMotionRef.current = [...handMotionRef.current.slice(-28), { x: wrist.x, y: wrist.y, t: now, indexX: indexTip.x, indexY: indexTip.y }]
     const recent = handMotionRef.current
     const older = recent.find((point) => now - point.t > 240) ?? recent[0]
     const dx = wrist.x - older.x
+    const dy = older.y - wrist.y
+    const wristAngle = Math.atan2(rightHand.landmarks[5].y - rightHand.landmarks[17].y, rightHand.landmarks[5].x - rightHand.landmarks[17].x)
+    const knobAmount = clamp((wristAngle + 1.35) / 2.7)
 
-    const swipeConfidence = Math.abs(dx) > 0.19 && Math.abs(dx) > Math.abs(wrist.y - older.y) * 1.8 ? 0.82 : 0
-    const candidates = [
-      { mode: 'swipe' as GestureMode, confidence: swipeConfidence },
-      { mode: 'reverb' as GestureMode, confidence: bothHandsTogether ? clamp(0.66 + Math.min(0.28, Math.abs(twoHandDelta) * 5)) : 0 },
-      { mode: 'filter' as GestureMode, confidence: isRightFist ? 0.86 : 0 },
-      { mode: 'volume' as GestureMode, confidence: isRightOpenPalm ? 0.78 : 0 },
-    ]
-    const confident = candidates.find((candidate) => candidate.confidence >= 0.68) ?? { mode: 'none' as GestureMode, confidence: 0 }
-    const candidate = gestureCandidateRef.current
-    if (candidate.mode !== confident.mode) {
-      gestureCandidateRef.current = { mode: confident.mode, since: now }
-    }
-    const candidateStableFor = now - gestureCandidateRef.current.since
-    const locked = gestureLockRef.current.until > now
-    let activeMode = locked ? gestureLockRef.current.mode : 'none'
-    let confidence = locked ? Math.max(gestureLockRef.current.confidence, confident.confidence) : confident.confidence
-    const canInterrupt = confident.mode === 'swipe'
-    const lockTime = confident.mode === 'swipe' ? 720 : 560
-
-    if ((canInterrupt || !locked) && confident.mode !== 'none' && candidateStableFor > (confident.mode === 'swipe' ? 40 : 120)) {
-      gestureLockRef.current = { mode: confident.mode, until: now + lockTime, confidence: confident.confidence }
-      activeMode = confident.mode
-      confidence = confident.confidence
-    }
-    if (!locked && confident.mode === 'none') {
-      gestureLockRef.current = { mode: 'none', until: 0, confidence: 0 }
-    }
-
+    let gesture = `${CONTROL_LABELS[selected].title} active`
+    let activeControl = CONTROL_LABELS[selected].action
+    let aiStatus = 'Selected control is listening'
+    let nextHint = CONTROL_LABELS[selected].hint
+    let confidence = 0.86
     let cueIndex = currentDj.cueIndex
-    let gesture = 'No clear gesture detected'
-    let activeControl = 'Values held'
-    let aiStatus = confidence < 0.68 ? 'Hold previous values' : 'Listening to intentional gesture'
-    let nextHint = 'Use open right palm for volume, right fist for filter, or two hands together for reverb.'
-    let volume = targetVolumeRef.current
-    let filterAmount = smoothedFilterRef.current
     let reverbAmount = smoothedReverbRef.current
+    let filterAmount = smoothedFilterRef.current
     let delayAmount = currentDj.delayAmount / 100
 
-    if (isRightFist) {
-      fistStartedAtRef.current ??= now
-      if (now - fistStartedAtRef.current > 1500) {
-        fistStartedAtRef.current = now + 999999
-        gestureLockRef.current = { mode: 'mute', until: now + 900, confidence: 1 }
-        toggleMute()
-        return
-      }
-    } else {
-      fistStartedAtRef.current = null
-    }
-
-    const canApplyMute = activeMode === 'mute' && isRightFist
-    const canApplyReverb = activeMode === 'reverb' && bothHandsTogether
-    const canApplyFilter = activeMode === 'filter' && isRightFist
-    const canApplyVolume = activeMode === 'volume' && isRightOpenPalm
-
-    if (canApplyMute && confidence >= 0.68) {
-      gesture = 'Closed fist hold — hold to mute/pause'
-      activeControl = 'Mute / pause armed'
-      aiStatus = 'Gesture locked'
-      nextHint = 'Keep fist closed for 1.5s to mute/pause. Rotate fist to use filter after release.'
-    } else if (activeMode !== 'none' && confidence >= 0.68 && !canApplyReverb && !canApplyFilter && !canApplyVolume && activeMode !== 'swipe') {
-      gesture = 'Gesture locked — values held'
-      activeControl = 'Waiting for clear shape'
-      aiStatus = 'Gesture locked'
-      nextHint = 'Keep the same shape to control, or pause briefly to switch gestures.'
-    } else if (canApplyReverb && confidence >= 0.68) {
-      const next = clamp(smoothedReverbRef.current + twoHandDelta * 2.8, 0, 1)
-      smoothedReverbRef.current = smoothedReverbRef.current * 0.82 + next * 0.18
-      reverbAmount = smoothedReverbRef.current
-      delayAmount = reverbAmount * 0.42
-      gesture = 'Reverb Mode — move both hands together'
-      activeControl = twoHandDelta >= 0 ? 'Lifting atmosphere' : 'Lowering atmosphere'
-      aiStatus = 'Gesture locked'
-      nextHint = 'Move both hands up/down together. Separate hands to exit.'
-      if (ctx) {
-        wetRef.current?.gain.setTargetAtTime(0.04 + reverbAmount * 0.34, ctx.currentTime, 0.32)
-        delayRef.current?.delayTime.setTargetAtTime(0.1 + delayAmount * 0.32, ctx.currentTime, 0.32)
-        feedbackRef.current?.gain.setTargetAtTime(0.08 + reverbAmount * 0.28, ctx.currentTime, 0.32)
-      }
-    } else if (canApplyFilter && confidence >= 0.68) {
-      smoothedFilterRef.current = smoothedFilterRef.current * 0.78 + knobAmount * 0.22
-      filterAmount = smoothedFilterRef.current
-      const filterFrequency = 260 + filterAmount * 17740
-      gesture = 'Filter Knob Mode — rotate right fist'
-      activeControl = filterAmount > 0.52 ? 'Opening filter' : 'Closing low-pass'
-      aiStatus = 'Gesture locked'
-      nextHint = 'Rotate fist left/right like a knob. Open palm exits to volume.'
-      if (ctx) {
-        filterRef.current?.frequency.setTargetAtTime(filterFrequency, ctx.currentTime, 0.22)
-        filterRef.current?.Q.setTargetAtTime(0.85 + filterAmount * 5.5, ctx.currentTime, 0.24)
-      }
-    } else if (canApplyVolume && confidence >= 0.68) {
+    if (selected === 'volume') {
       const baseline = calibrationRef.current.baselineY
-      const mapped = clamp(0.18 + clamp((baseline + 0.28 - wrist.y) / 0.56) * 0.82, 0.18, 1)
-      volume = targetVolumeRef.current * 0.86 + mapped * 0.14
-      setDeckVolume(volume, 0.34)
-      gesture = 'Volume Mode — raise or lower open palm'
-      activeControl = 'Open right palm controls volume'
-      aiStatus = 'Gesture locked'
-      nextHint = 'Close into a fist for filter, or lower palm to 18% floor — not mute.'
-    } else if (activeMode === 'swipe' && confidence >= 0.68 && now - swipeAtRef.current > 1250) {
-      swipeAtRef.current = now
-      cueIndex = clamp(cueIndex + (dx > 0 ? 1 : -1), 1, 8)
-      gesture = dx > 0 ? 'Swipe right — next section' : 'Swipe left — previous section'
+      const mapped = clamp(0.18 + clamp((baseline + 0.3 - wrist.y) / 0.6) * 0.82, 0.18, 1)
+      const volume = targetVolumeRef.current * 0.88 + mapped * 0.12
+      setDeckVolume(volume, 0.38)
+      gesture = 'Volume active — move hand up/down'
+      activeControl = 'Vertical volume control'
+      nextHint = 'Move up to raise, down to lower. Floor is 18%; mute is separate.'
+    } else if (selected === 'filter') {
+      smoothedFilterRef.current = smoothedFilterRef.current * 0.82 + knobAmount * 0.18
+      filterAmount = smoothedFilterRef.current
+      if (ctx) {
+        filterRef.current?.frequency.setTargetAtTime(260 + filterAmount * 17740, ctx.currentTime, 0.24)
+        filterRef.current?.Q.setTargetAtTime(0.85 + filterAmount * 5.5, ctx.currentTime, 0.26)
+      }
+      gesture = 'Filter active — rotate wrist'
+      activeControl = filterAmount > 0.52 ? 'Opening filter' : 'Closing filter'
+      nextHint = 'Treat your hand like a knob. Switch control to stop editing filter.'
+    } else if (selected === 'reverb') {
+      const next = clamp(smoothedReverbRef.current + dy * 1.9, 0, 1)
+      smoothedReverbRef.current = smoothedReverbRef.current * 0.86 + next * 0.14
+      reverbAmount = smoothedReverbRef.current
+      delayAmount = reverbAmount * 0.35
+      if (ctx) {
+        wetRef.current?.gain.setTargetAtTime(0.04 + reverbAmount * 0.34, ctx.currentTime, 0.34)
+        delayRef.current?.delayTime.setTargetAtTime(0.1 + delayAmount * 0.32, ctx.currentTime, 0.34)
+        feedbackRef.current?.gain.setTargetAtTime(0.08 + reverbAmount * 0.28, ctx.currentTime, 0.34)
+      }
+      gesture = 'Reverb active — move hand up/down'
+      activeControl = dy >= 0 ? 'Lifting atmosphere' : 'Lowering atmosphere'
+      nextHint = 'Move up for more space, down for drier sound.'
+    } else if (selected === 'cue') {
+      confidence = Math.abs(dx) > 0.13 ? 0.9 : 0.54
+      if (Math.abs(dx) > 0.18 && now - swipeAtRef.current > 900) {
+        swipeAtRef.current = now
+        cueIndex = clamp(cueIndex + (dx > 0 ? 1 : -1), 1, 8)
+      }
+      gesture = 'Cue active — swipe left/right'
       activeControl = `Cue ${cueIndex}`
-      aiStatus = 'Gesture locked'
-      nextHint = 'Return to open palm/fist/two-hand gesture for controls.'
+      aiStatus = confidence > 0.7 ? 'Swipe detected' : 'Waiting for swipe'
+      nextHint = 'Swipe horizontally to jump sections. Switch controls when done.'
     }
 
     setDj((current) => ({
@@ -815,15 +828,17 @@ function App() {
       filterAmount: percent(filterAmount),
       reverbAmount: percent(reverbAmount),
       delayAmount: percent(delayAmount),
-      energy: Math.round((current.energy * 0.82) + (percent(targetVolumeRef.current) * 0.18)),
+      energy: Math.round((current.energy * 0.84) + (percent(targetVolumeRef.current) * 0.16)),
       gesture,
       activeControl,
       aiStatus,
       confidence: percent(confidence),
-      gestureLocked: gestureLockRef.current.until > now,
+      gestureLocked: true,
+      tapTarget: hoveredControl,
+      tapProgress: percent(tapProgress),
       nextHint,
-      dropMode: activeMode === 'volume' && confidence >= 0.68 && targetVolumeRef.current > 0.82,
-      loopBuild: activeMode === 'reverb' && reverbAmount > 0.72,
+      dropMode: selected === 'volume' && targetVolumeRef.current > 0.82,
+      loopBuild: selected === 'reverb' && reverbAmount > 0.72,
       cueIndex,
     }))
   }
@@ -987,7 +1002,7 @@ function App() {
         drawingUtils.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS, { color, lineWidth: 3 })
         drawingUtils.drawLandmarks(landmarks, { color: '#ffffff', fillColor: '#0f172a', lineWidth: 2, radius: 4 })
       }
-      drawPill(ctx, `${handedness}: ${result.count}`, wrist.x * canvas.width + 16, wrist.y * canvas.height - 18, color)
+      if (currentMode !== 'music') drawPill(ctx, `${handedness}: ${result.count}`, wrist.x * canvas.width + 16, wrist.y * canvas.height - 18, color)
       return {
         id: `${handedness}-${index}`,
         label: handedness,
@@ -998,7 +1013,7 @@ function App() {
       }
     })
 
-    const shouldDrawFace = currentMode === 'face' || currentMode === 'scan' || currentMode === 'music'
+    const shouldDrawFace = currentMode === 'face' || currentMode === 'scan'
     if (shouldDrawFace) {
       faces.faceLandmarks.forEach((landmarks) => {
         const xs = landmarks.map((point) => point.x * canvas.width)
@@ -1188,23 +1203,31 @@ function App() {
                 <div className="conductor-status">
                   <span>{analysis.hands.length ? 'hand confidence high' : 'waiting for hand'}</span>
                   <span>{analysis.hands.length ? '21 tracking points' : '0 tracking points'}</span>
-                  <span>{dj.gestureLocked ? 'gesture locked' : 'gesture unlocked'}</span>
+                  <span>{dj.selectedControl === 'none' ? 'select a control' : `${CONTROL_LABELS[dj.selectedControl].title} selected`}</span>
                 </div>
                 <div className="conductor-orb">
                   <i />
-                  <b>{dj.dropMode ? 'DROP' : dj.effectMode.toUpperCase()}</b>
+                  <b>{dj.selectedControl === 'none' ? 'SELECT' : CONTROL_LABELS[dj.selectedControl].title.toUpperCase()}</b>
+                </div>
+                <div className="finger-control-pads">
+                  {CONTROL_ORDER.map((control) => (
+                    <span key={control} className={`${dj.selectedControl === control ? 'active' : ''} ${dj.tapTarget === control ? 'targeted' : ''}`}>
+                      <b>{CONTROL_LABELS[control].title}</b>
+                      <i style={{ width: `${dj.tapTarget === control ? dj.tapProgress : 0}%` }} />
+                    </span>
+                  ))}
                 </div>
                 {status !== 'running' && <div className="camera-prompt">Turn on camera to conduct the track</div>}
               </div>
             </div>
             <div className="gesture-shortcuts">
               {[
-                ['Open palm', 'Volume'],
-                ['Right fist', 'Filter knob'],
-                ['Fist hold', 'Mute / pause'],
-                ['Two hands', 'Reverb lift'],
-                ['Hands down', 'Reverb lower'],
-                ['Swipe', 'Cue jump'],
+                ['1 Select', 'Tap / hover a control'],
+                ['2 Control', 'Move only selected effect'],
+                ['Volume', 'Hand up/down'],
+                ['Filter', 'Rotate wrist'],
+                ['Reverb', 'Hand up/down'],
+                ['Cue', 'Swipe left/right'],
               ].map(([gesture, action]) => (
                 <span key={gesture}><b>{gesture}</b><small>{action}</small></span>
               ))}
@@ -1234,13 +1257,17 @@ function App() {
             <strong>{dj.volume}%</strong>
             <div className="deck-meter"><i style={{ width: `${dj.volume}%` }} /></div>
           </div>
-          <div className="control-grid-premium">
-            <div><span>Filter</span><strong>{dj.filterAmount}%</strong></div>
-            <div><span>Reverb</span><strong>{dj.reverbAmount}%</strong></div>
-            <div><span>Delay</span><strong>{dj.delayAmount}%</strong></div>
-            <div><span>Energy</span><strong>{dj.energy > 72 ? 'High' : dj.energy > 38 ? 'Medium' : 'Low'}</strong></div>
-            <div><span>Effect</span><strong>{dj.effectMode}</strong></div>
-            <div><span>Status</span><strong>{dj.muted ? 'Muted' : dj.isPlaying ? 'Live' : 'Armed'}</strong></div>
+          <div className="control-grid-premium control-selector">
+            {CONTROL_ORDER.map((control) => {
+              const value = control === 'volume' ? dj.volume : control === 'filter' ? dj.filterAmount : control === 'reverb' ? dj.reverbAmount : control === 'mute' ? (dj.muted ? 100 : 0) : Math.round((dj.cueIndex / 8) * 100)
+              return (
+                <button key={control} type="button" className={dj.selectedControl === control ? 'active' : ''} onClick={() => selectDeckControl(control)} disabled={!dj.isLoaded}>
+                  <span>{CONTROL_LABELS[control].title}</span>
+                  <strong>{control === 'mute' ? (dj.muted ? 'Muted' : 'Ready') : control === 'cue' ? `Cue ${dj.cueIndex}` : `${value}%`}</strong>
+                  <small>{CONTROL_LABELS[control].action}</small>
+                </button>
+              )
+            })}
           </div>
           <div className="transport-card">
             <button type="button" onClick={() => fileInputRef.current?.click()}>Upload Track</button>
@@ -1249,7 +1276,7 @@ function App() {
           </div>
           <div className="copy-card">
             <b>Motion is the mixer.</b>
-            <p>Upload a track, open camera, then use intentional gestures: open palm for volume, right fist for filter, two hands for reverb, fist hold for mute, swipe for cues.</p>
+            <p>Upload a track, select one control, then move your hand. Nothing else listens until you switch controls.</p>
           </div>
           <div className={`status ${status}`}>{status === 'idle' ? 'Start camera to unlock live hand, face, color, and motion interactions.' : message}</div>
           <div className="actions">
