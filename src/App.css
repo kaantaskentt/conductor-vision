@@ -896,3 +896,151 @@ select {
   .deck-track { flex-wrap: wrap; }
   .deck-selector button { flex: 1 1 30%; }
 }
+
+/* Conductor v5: camera-first functional layout */
+.conductor-app {
+  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-areas:
+    "topbar topbar"
+    "main feedback";
+  align-items: start;
+  gap: 18px;
+  padding: 18px;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+.conductor-sidebar {
+  grid-area: topbar;
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 22px;
+}
+.conductor-logo > span { width: 38px; height: 38px; border-radius: 13px; font-size: 0.82rem; }
+.conductor-logo b { font-size: 0.98rem; }
+.conductor-logo small { display: none; }
+.conductor-nav { display: none; }
+.now-playing-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: 16px;
+}
+.now-playing-card span { font-size: 0.62rem; }
+.now-playing-card strong { margin: 0; font-size: 0.9rem; }
+.now-playing-card small { margin: 0; font-size: 0.72rem; white-space: nowrap; }
+.now-playing-card .mini-wave { display: none; }
+.music-upload-main, .sidebar-ghost { width: auto; padding: 0.7rem 0.9rem; border-radius: 13px; text-align: center; font-size: 0.8rem; }
+.conductor-main {
+  grid-area: main;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+.conductor-controls {
+  grid-area: feedback;
+  position: sticky;
+  top: 18px;
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  padding: 12px;
+  border-radius: 22px;
+}
+.conductor-header {
+  align-items: center;
+  min-height: 0;
+}
+.conductor-header span { font-size: 0.64rem; letter-spacing: 0.1em; }
+.conductor-header h1 { margin-top: 2px; font-size: clamp(1.65rem, 3.2vw, 3.1rem); letter-spacing: -0.055em; }
+.ai-badges { gap: 6px; }
+.ai-badges b { padding: 6px 8px; font-size: 0.6rem; }
+.deck-strip {
+  grid-template-columns: minmax(250px, 0.8fr) minmax(420px, 1.2fr);
+  margin: 0;
+}
+.deck-track, .deck-selector { padding: 8px; border-radius: 16px; }
+.deck-track button, .deck-selector button { padding: 0.58rem 0.68rem; }
+.deck-selector {
+  position: relative;
+  z-index: 6;
+  justify-content: flex-end;
+}
+.deck-selector button.active { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(15,23,42,0.14); }
+.conductor-camera-card {
+  padding: 10px;
+  border-radius: 24px;
+}
+.camera-titlebar { display: none; }
+.conductor-video-wrap {
+  min-height: min(66vh, 680px);
+  height: calc(100vh - 250px);
+  max-height: 720px;
+  border-radius: 20px;
+}
+.conductor-status {
+  top: 12px;
+  left: 12px;
+  right: auto;
+  max-width: calc(100% - 24px);
+}
+.conductor-status span { font-size: 0.6rem; padding: 5px 8px; }
+.finger-control-pads {
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  gap: 6px;
+}
+.finger-control-pads span {
+  min-height: 40px;
+  padding: 8px;
+  border-radius: 13px;
+}
+.finger-control-pads b { font-size: 0.66rem; }
+.gesture-shortcuts, .conductor-waveform-panel, .transport-card, .copy-card, .conductor-app .status, .control-selector { display: none; }
+.primary-gesture { order: 1; }
+.motion-volume-card { order: 2; }
+.filter-knob-card { order: 3; }
+.beat-card { order: 4; }
+.conductor-controls .actions { order: 5; display: grid; grid-template-columns: 1fr 0.8fr; gap: 8px; margin: 0; }
+.control-card { padding: 12px; border-radius: 18px; }
+.control-card strong { font-size: 1.08rem; }
+.primary-gesture p { display: none; }
+.primary-gesture em { margin-top: 0.55rem; }
+.motion-volume-card { min-height: 118px; }
+.vertical-volume { min-height: 96px; }
+.filter-knob-card { min-height: 118px; }
+.beat-card strong { font-size: 1rem; }
+.beat-bars { height: 56px; }
+@media (max-width: 1080px) {
+  .conductor-app {
+    grid-template-columns: 1fr;
+    grid-template-areas: "topbar" "main" "feedback";
+  }
+  .conductor-controls {
+    position: static;
+    max-height: none;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .conductor-controls .actions { grid-column: 1 / -1; }
+  .deck-strip { grid-template-columns: 1fr; }
+  .deck-selector { justify-content: flex-start; flex-wrap: wrap; }
+  .conductor-video-wrap { height: auto; min-height: 520px; }
+}
+@media (max-width: 720px) {
+  .conductor-app { padding: 10px; gap: 10px; }
+  .conductor-sidebar { grid-template-columns: 1fr; }
+  .now-playing-card { grid-template-columns: 1fr; }
+  .deck-track, .deck-selector { flex-wrap: wrap; }
+  .deck-selector button { flex: 1 1 40%; }
+  .conductor-header { align-items: start; flex-direction: column; }
+  .conductor-controls { grid-template-columns: 1fr; }
+  .conductor-video-wrap { min-height: 430px; }
+  .finger-control-pads { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
