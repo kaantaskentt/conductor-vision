@@ -32,13 +32,14 @@ const FINGER_JOINTS = {
 } as const
 
 type CameraStatus = 'idle' | 'loading' | 'running' | 'error'
-type VisionMode = 'fingers' | 'motion' | 'color' | 'face' | 'scan' | 'music'
+type VisionMode = 'fingers' | 'motion' | 'color' | 'face' | 'scan' | 'music' | 'lab'
 type TargetColor = keyof typeof TARGET_COLORS
 type FingerName = keyof typeof FINGER_JOINTS
 type FingerState = Record<FingerName, boolean>
 type EffectMode = 'filter' | 'reverb' | 'delay'
 type GestureMode = 'none' | 'volume' | 'filter' | 'reverb' | 'mute' | 'swipe'
 type DeckControl = 'none' | 'volume' | 'filter' | 'reverb' | 'mute' | 'cue'
+type LabModuleId = 'music' | 'hands' | 'face' | 'object' | 'segment' | 'scene' | 'depth' | 'playground'
 
 type HandSummary = {
   id: string
@@ -127,6 +128,24 @@ const CONTROL_LABELS: Record<DeckControl, { title: string; hint: string; action:
   cue: { title: 'Cue Jump', hint: 'Swipe left/right.', action: 'Horizontal swipe' },
 }
 const CONTROL_ORDER: DeckControl[] = ['volume', 'filter', 'reverb', 'mute', 'cue']
+
+const LAB_MODULES: Array<{
+  id: LabModuleId
+  title: string
+  model: string
+  status: 'Live' | 'Experimental' | 'API-ready'
+  description: string
+  examples: string[]
+}> = [
+  { id: 'music', title: 'Music Studio', model: 'MediaPipe Hands', status: 'Live', description: 'Gesture-controlled DJ deck with selected controls.', examples: ['Volume hand ride', 'Filter knob', 'Cue jump'] },
+  { id: 'hands', title: 'Hand Studio', model: 'MediaPipe Hands', status: 'Live', description: 'Real-time hands, landmarks, fingers, pinch, fist, palm.', examples: ['Fingers up', 'Air mouse', 'Virtual piano'] },
+  { id: 'face', title: 'Face Studio', model: 'MediaPipe Face Mesh', status: 'Live', description: 'Lightweight face landmarks, smile, blink-style signals, expression cues.', examples: ['Smile detection', 'Blink to click', 'Avatar control'] },
+  { id: 'object', title: 'Object Studio', model: 'Grounding DINO', status: 'API-ready', description: 'Type what to find. Server inference hook ready for open-vocabulary detection.', examples: ['phone', 'coffee mug', 'red backpack'] },
+  { id: 'segment', title: 'Segment Studio', model: 'SAM 2', status: 'Experimental', description: 'Click or upload an image to prepare object segmentation workflow.', examples: ['chair cutout', 'mug mask', 'person isolate'] },
+  { id: 'scene', title: 'Scene Studio', model: 'Florence-2', status: 'API-ready', description: 'Caption, OCR, visual Q&A, and image understanding module shell.', examples: ['Describe scene', 'Read paper', 'What color is it?'] },
+  { id: 'depth', title: 'Depth Studio', model: 'Depth Anything V2', status: 'Experimental', description: 'Upload or capture an image and prepare depth-map inference.', examples: ['Room depth', 'Near/far map', 'AR overlay'] },
+  { id: 'playground', title: 'Playground', model: 'Composable pipeline', status: 'Live', description: 'Combine lightweight hands, face, color, and motion. Heavy models are opt-in.', examples: ['Hands + face', 'Color + motion', 'Future full stack'] },
+]
 
 function clamp(value: number, min = 0, max = 1) {
   return Math.max(min, Math.min(max, value))
@@ -321,6 +340,11 @@ function App() {
   const [status, setStatus] = useState<CameraStatus>('idle')
   const [mode, setMode] = useState<VisionMode>('scan')
   const [targetColor, setTargetColor] = useState<TargetColor>('red')
+  const [labModule, setLabModule] = useState<LabModuleId>('hands')
+  const [labPrompt, setLabPrompt] = useState('phone')
+  const [labUpload, setLabUpload] = useState<string | null>(null)
+  const [labResult, setLabResult] = useState('Choose a module. Camera models run locally; heavier models are lazy/API-ready.')
+  const [labBusy, setLabBusy] = useState(false)
   const [message, setMessage] = useState('Start camera. Hands and face can run together.')
   const [dj, setDj] = useState<DjState>({
     trackName: 'No track loaded',
@@ -1162,6 +1186,7 @@ function App() {
   }
 
   const modes: { id: VisionMode; title: string }[] = [
+    { id: 'lab', title: 'Vision Lab' },
     { id: 'music', title: 'Music' },
     { id: 'scan', title: 'Hands + Face' },
     { id: 'fingers', title: 'Fingers' },
@@ -1175,6 +1200,86 @@ function App() {
     const y = 46 - (Math.min(value, 100) / 100) * 40
     return `${x},${y}`
   }).join(' ')
+
+
+  const activeLab = LAB_MODULES.find((item) => item.id === labModule) ?? LAB_MODULES[1]
+  const labNeedsCamera = labModule === 'hands' || labModule === 'face' || labModule === 'playground'
+  const labIsHeavy = activeLab.status !== 'Live'
+
+  function handleLabUpload(file: File | undefined) {
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setLabResult('Use a PNG or JPEG image for this module.')
+      return
+    }
+    if (labUpload) URL.revokeObjectURL(labUpload)
+    setLabUpload(URL.createObjectURL(file))
+    setLabResult('Image ready. Run the module when you are ready.')
+  }
+
+  function runLabModel() {
+    setLabBusy(true)
+    window.setTimeout(() => {
+      const messages: Record<LabModuleId, string> = {
+        music: 'Open Music Studio to use the full gesture deck.',
+        hands: analysis.hands.length ? `${analysis.hands.length} hand(s) tracked · ${analysis.fingerCount ?? 0} fingers · ${analysis.fps || '—'} FPS.` : 'No hand yet. Start camera and improve lighting.',
+        face: analysis.count ? `${analysis.label} · Smile ${analysis.smileScore}% · Eyes open ${analysis.eyeOpenScore}%.` : 'No face centered yet. Start camera and face the lens.',
+        object: `Grounding DINO request prepared for “${labPrompt}”. Server endpoint can return boxes + scores here.`,
+        segment: labUpload ? 'SAM 2 mask request prepared. Click-point segmentation endpoint can fill this output.' : 'Upload an image or capture a frame before segmenting.',
+        scene: labUpload ? 'Florence-2 caption/OCR/VQA request prepared for uploaded image.' : 'Upload or capture an image before asking Florence-2.',
+        depth: labUpload ? 'Depth Anything V2 request prepared. Depth map will render here when backend is connected.' : 'Upload or capture an image before depth inference.',
+        playground: `Live lightweight stack: ${analysis.hands.length} hands · ${analysis.count} faces · motion ${analysis.motionScore}/100 · ${targetColor} ${analysis.targetCoverage}%.`,
+      }
+      setLabResult(messages[labModule])
+      setLabBusy(false)
+    }, labIsHeavy ? 650 : 180)
+  }
+
+  if (mode === 'lab') {
+    return (
+      <main className="vision-lab-shell">
+        <aside className="lab-sidebar">
+          <div className="lab-brand"><span>VL</span><div><b>Vision Lab</b><small>Vision is the interface.</small></div></div>
+          <nav className="lab-nav" aria-label="Vision Lab modules">
+            {LAB_MODULES.map((item) => (
+              <button key={item.id} type="button" className={labModule === item.id ? 'active' : ''} onClick={() => { setLabModule(item.id); setLabResult(item.status === 'Live' ? 'Camera-ready module selected.' : 'Experimental module selected. Model will load only when run.'); }}>
+                <span>{item.title}</span><small>{item.model}</small>
+              </button>
+            ))}
+          </nav>
+          <button type="button" className="secondary" onClick={() => setMode('scan')}>Back to Vision</button>
+        </aside>
+
+        <section className="lab-main">
+          <header className="lab-header">
+            <div><span>{activeLab.status}</span><h1>{activeLab.title}</h1><p>{activeLab.description}</p></div>
+            <div className="lab-status-pills"><b>{activeLab.model}</b><b>{status === 'running' ? 'Camera ready' : 'Camera idle'}</b><b>{labBusy ? 'Model loading' : 'Smooth'}</b></div>
+          </header>
+
+          <div className="lab-stage">
+            <div className="lab-viewer">
+              {(labNeedsCamera || !labUpload) ? <><video ref={videoRef} className="camera" playsInline muted /><canvas ref={canvasRef} className="overlay" /></> : <img src={labUpload} alt="Uploaded preview" />}
+              {status !== 'running' && labNeedsCamera && <div className="lab-empty">Start camera to run this module.</div>}
+              {!labNeedsCamera && !labUpload && <div className="lab-empty">Upload an image or capture a frame.</div>}
+              <div className="lab-overlay-metrics"><span>{analysis.fps || '—'} FPS</span><span>{analysis.hands.length} hands</span><span>{analysis.count} faces</span></div>
+            </div>
+            <aside className="lab-panel">
+              <label className="lab-field">Prompt / target<input value={labPrompt} onChange={(event) => setLabPrompt(event.target.value)} placeholder="Find phone, coffee, keyboard…" /></label>
+              <div className="lab-actions">
+                {labNeedsCamera && <button type="button" onClick={startCamera} disabled={status === 'loading' || status === 'running'}>{status === 'loading' ? 'Loading…' : 'Start Camera'}</button>}
+                <label className="lab-upload">Upload<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => handleLabUpload(event.target.files?.[0])} /></label>
+                <button type="button" onClick={runLabModel} disabled={labBusy}>{labBusy ? 'Running…' : 'Run Model'}</button>
+                <button type="button" className="secondary" onClick={() => { setLabResult('Cleared. Choose input and run again.'); setLabUpload(null); }}>Clear</button>
+              </div>
+              <div className="lab-result"><span>Output</span><strong>{labResult}</strong></div>
+              <div className="lab-examples"><span>Examples</span>{activeLab.examples.map((example) => <button type="button" key={example} onClick={() => setLabPrompt(example)}>{example}</button>)}</div>
+              <div className="lab-runtime"><div><span>Status</span><b>{labBusy ? 'Loading' : activeLab.status}</b></div><div><span>Latency</span><b>{labIsHeavy ? 'API' : '<30ms*'}</b></div><div><span>Memory</span><b>Lazy</b></div></div>
+            </aside>
+          </div>
+        </section>
+      </main>
+    )
+  }
 
   if (mode === 'music') {
     return (
