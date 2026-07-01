@@ -934,7 +934,7 @@ function App() {
   }).join(' ')
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${mode === 'music' ? 'music-shell' : ''}`}>
       <audio ref={audioRef} preload="metadata" />
       <section className="hero-panel compact">
         <p className="eyebrow">Local camera vision · zero cloud tokens</p>
@@ -946,6 +946,25 @@ function App() {
         <div className="video-wrap">
           <video ref={videoRef} className="camera" playsInline muted />
           <canvas ref={canvasRef} className="overlay" />
+          {mode === 'music' && (
+            <div className="conductor-layer" aria-hidden="true">
+              <div className="conductor-status">
+                <span>AI {dj.isLoaded ? 'listening' : 'standby'}</span>
+                <span>{status === 'running' ? 'camera active' : 'camera idle'}</span>
+                <span>{analysis.hands.length ? 'hand locked' : 'find hand'}</span>
+                <span>{analysis.hands.length ? '21 pts' : '0 pts'}</span>
+              </div>
+              <div className="conductor-orb">
+                <i />
+                <b>{dj.dropMode ? 'DROP' : dj.effectMode.toUpperCase()}</b>
+              </div>
+              <div className="wave-strip">
+                {Array.from({ length: 42 }, (_, index) => (
+                  <span key={index} style={{ height: `${18 + ((index * 17 + dj.energy) % 52)}px` }} />
+                ))}
+              </div>
+            </div>
+          )}
           <div className="hud top-left">
             <strong>{mode.toUpperCase()}</strong>
             <span>{mode === 'music' ? `${dj.gesture} · ${dj.activeControl}` : analysis.aiStatement}</span>
@@ -1006,6 +1025,11 @@ function App() {
                 <div><span>Cue</span><strong>{dj.cueIndex}</strong></div>
               </div>
               <p className="gesture-help">Raise/lower hand = volume · pinch = filter · wrist rotate = echo/reverb · open palm = drop mode · fist hold = mute · two fingers = effect mode · circle = loop · swipe = cue.</p>
+              <div className="gesture-map">
+                {['Raise', 'Lower', 'Pinch', 'Rotate', 'Open Palm', 'Fist', '2 Fingers', 'Swipe'].map((item) => (
+                  <span key={item}>{item}</span>
+                ))}
+              </div>
             </div>
           )}
 

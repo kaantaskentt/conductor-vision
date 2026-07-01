@@ -16,6 +16,13 @@ body {
     linear-gradient(180deg, #f7fbff 0%, #e8effb 100%);
 }
 
+body:has(.music-shell) {
+  background:
+    radial-gradient(circle at 18% 4%, rgba(34, 211, 238, 0.2), transparent 28rem),
+    radial-gradient(circle at 88% 0%, rgba(217, 70, 239, 0.18), transparent 30rem),
+    linear-gradient(180deg, #070b18 0%, #0c1020 100%);
+}
+
 button, select { font: inherit; }
 
 button {
@@ -84,9 +91,100 @@ h1 {
   background: #0f172a;
   aspect-ratio: 16 / 10;
 }
+.music-shell .stage-card.simple {
+  border-color: rgba(129, 140, 248, 0.22);
+  background: rgba(8, 13, 30, 0.78);
+  box-shadow: 0 34px 100px rgba(0, 0, 0, 0.34);
+}
+.music-shell h1 { color: #f8fafc; text-shadow: 0 0 28px rgba(34,211,238,0.18); }
+.music-shell .lede { color: #a5b4fc; }
+.music-shell .video-wrap {
+  background:
+    radial-gradient(circle at 50% 42%, rgba(34,211,238,0.18), transparent 18rem),
+    radial-gradient(circle at 60% 48%, rgba(217,70,239,0.13), transparent 24rem),
+    #050816;
+}
 .camera, .overlay, .placeholder { position: absolute; inset: 0; width: 100%; height: 100%; }
 .camera, .overlay { object-fit: cover; transform: scaleX(-1); }
 .overlay { z-index: 2; }
+.conductor-layer { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+.conductor-status {
+  position: absolute;
+  top: 76px;
+  left: 14px;
+  right: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+.conductor-status span {
+  padding: 7px 10px;
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  border-radius: 999px;
+  color: #bfdbfe;
+  background: rgba(15, 23, 42, 0.58);
+  box-shadow: 0 0 24px rgba(34,211,238,0.12);
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  backdrop-filter: blur(10px);
+}
+.conductor-orb {
+  position: absolute;
+  left: 50%;
+  top: 48%;
+  display: grid;
+  place-items: center;
+  width: min(34vw, 230px);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(34,211,238,0.13), rgba(15,23,42,0.05) 58%, transparent 70%);
+  box-shadow: inset 0 0 40px rgba(34,211,238,0.12), 0 0 80px rgba(217,70,239,0.14);
+}
+.conductor-orb i {
+  position: absolute;
+  inset: 20%;
+  border-radius: inherit;
+  background: conic-gradient(from 90deg, #22d3ee, #a78bfa, #f472b6, #22d3ee);
+  filter: blur(18px);
+  opacity: 0.35;
+  animation: deck-spin 6s linear infinite;
+}
+.conductor-orb b {
+  position: relative;
+  color: rgba(255,255,255,0.72);
+  font-size: clamp(1.2rem, 3vw, 2rem);
+  font-weight: 950;
+  letter-spacing: 0.16em;
+}
+.wave-strip {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  left: 18px;
+  display: flex;
+  align-items: end;
+  gap: 4px;
+  height: 84px;
+  padding: 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 18px;
+  background: rgba(2, 6, 23, 0.62);
+  backdrop-filter: blur(12px);
+}
+.wave-strip span {
+  flex: 1;
+  min-width: 2px;
+  border-radius: 999px 999px 0 0;
+  background: linear-gradient(180deg, #f472b6, #a78bfa 45%, #22d3ee);
+  box-shadow: 0 0 16px rgba(34,211,238,0.28);
+  opacity: 0.82;
+  transition: height 260ms ease;
+}
 .placeholder {
   z-index: 4;
   display: grid;
@@ -264,6 +362,16 @@ h1 {
   white-space: nowrap;
 }
 .gesture-help { margin: 12px 0 0; color: #cbd5e1; line-height: 1.45; font-size: 0.88rem; }
+.gesture-map { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.gesture-map span {
+  padding: 6px 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 999px;
+  color: #dbeafe;
+  background: rgba(255,255,255,0.07);
+  font-size: 0.72rem;
+  font-weight: 850;
+}
 
 .hands-card { padding: 14px; }
 .hands-card p { margin: 9px 0 0; color: #64748b; line-height: 1.42; }
