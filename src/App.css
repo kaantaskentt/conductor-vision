@@ -564,3 +564,10 @@ select {
   .conductor-video-wrap { min-height: 420px; }
   .conductor-controls { grid-template-columns: 1fr; }
 }
+
+@media (max-width: 520px) {
+  .transport-card { grid-template-columns: 1fr; }
+  .conductor-video-wrap { min-height: 340px; }
+  .conductor-header h1 { font-size: 3.4rem; }
+  .ai-badges { justify-content: flex-start; }
+}

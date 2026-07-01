@@ -286,6 +286,11 @@ function App() {
   const swipeAtRef = useRef(0)
   const circleAtRef = useRef(0)
   const targetVolumeRef = useRef(0.4)
+  const audioUrlRef = useRef<string | null>(null)
+  const modeRef = useRef<VisionMode>('scan')
+  const targetColorRef = useRef<TargetColor>('red')
+  const djRef = useRef<DjState | null>(null)
+  const statusRef = useRef<CameraStatus>('idle')
 
   const [status, setStatus] = useState<CameraStatus>('idle')
   const [mode, setMode] = useState<VisionMode>('scan')
@@ -329,7 +334,33 @@ function App() {
   })
 
   useEffect(() => {
-    return () => stopCamera()
+    modeRef.current = mode
+  }, [mode])
+
+  useEffect(() => {
+    targetColorRef.current = targetColor
+  }, [targetColor])
+
+  useEffect(() => {
+    djRef.current = dj
+  }, [dj])
+
+  useEffect(() => {
+    statusRef.current = status
+  }, [status])
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video || !streamRef.current) return
+    video.srcObject = streamRef.current
+    void video.play().catch(() => undefined)
+  }, [mode])
+
+  useEffect(() => {
+    return () => {
+      stopCamera()
+      cleanupAudio()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -369,6 +400,7 @@ function App() {
   }
 
   async function startCamera() {
+    if (statusRef.current === 'loading' || statusRef.current === 'running') return
     try {
       setStatus('loading')
       setMessage('Loading local hand + face models…')
@@ -377,6 +409,9 @@ function App() {
         video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       })
+      if (animationRef.current) cancelAnimationFrame(animationRef.current)
+      animationRef.current = null
+      lastVideoTimeRef.current = -1
       streamRef.current = stream
       const video = videoRef.current
       if (!video) throw new Error('Video element missing')
@@ -387,6 +422,9 @@ function App() {
       predictLoop()
     } catch (error) {
       console.error(error)
+      streamRef.current?.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+      if (videoRef.current) videoRef.current.srcObject = null
       setStatus('error')
       setMessage(cameraErrorMessage(error))
     }
@@ -400,6 +438,8 @@ function App() {
     previousGrayRef.current = null
     smoothedMotionRef.current = 0
     if (videoRef.current) videoRef.current.srcObject = null
+    const canvas = canvasRef.current
+    canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
     setStatus('idle')
     setAnalysis((current) => ({
       ...current,
@@ -415,6 +455,27 @@ function App() {
       aiStatement: 'Stopped. Press Start to run local vision again.',
     }))
     setMessage('Stopped. Press Start to run it again.')
+  }
+
+  function cleanupAudio() {
+    audioRef.current?.pause()
+    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
+    audioUrlRef.current = null
+    audioRef.current = null
+    sourceRef.current?.disconnect()
+    filterRef.current?.disconnect()
+    gainRef.current?.disconnect()
+    delayRef.current?.disconnect()
+    feedbackRef.current?.disconnect()
+    wetRef.current?.disconnect()
+    sourceRef.current = null
+    filterRef.current = null
+    gainRef.current = null
+    delayRef.current = null
+    feedbackRef.current = null
+    wetRef.current = null
+    void audioCtxRef.current?.close().catch(() => undefined)
+    audioCtxRef.current = null
   }
 
   function setupAudioGraph() {
@@ -469,17 +530,26 @@ function App() {
       setDj((current) => ({ ...current, aiStatus: 'Use MP3, WAV, or FLAC for this deck' }))
       return
     }
-    const ctx = setupAudioGraph()
+    try {
+      const ctx = setupAudioGraph()
     const audio = audioRef.current
     if (!audio) return
     if (ctx.state === 'suspended') await ctx.resume()
+    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
     const url = URL.createObjectURL(file)
+    audioUrlRef.current = url
     audio.src = url
     audio.loop = true
     audio.volume = 1
     targetVolumeRef.current = 0.4
     gainRef.current?.gain.setTargetAtTime(0.4, ctx.currentTime, 0.22)
-    await audio.play()
+    try {
+      await audio.play()
+    } catch {
+      setDj((current) => ({ ...current, aiStatus: 'Browser blocked autoplay. Press Play to start the deck.', isLoaded: true, isPlaying: false, trackName: file.name }))
+      setMode('music')
+      return
+    }
     setDj((current) => ({
       ...current,
       trackName: file.name,
@@ -491,10 +561,15 @@ function App() {
       energy: 48,
       gesture: 'Track loaded',
       activeControl: 'Hand height → volume',
-      aiStatus: status === 'running' ? 'Listening to motion' : 'Camera arming…',
+      aiStatus: statusRef.current === 'running' ? 'Listening to motion' : 'Camera arming…',
     }))
     setMode('music')
-    if (status !== 'running' && status !== 'loading') void startCamera()
+    if (statusRef.current !== 'running' && statusRef.current !== 'loading') void startCamera()
+    } catch {
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
+      audioUrlRef.current = null
+      setDj((current) => ({ ...current, isPlaying: false, aiStatus: 'Could not load this audio file. Try MP3 or WAV.' }))
+    }
   }
 
   async function toggleMusicPlayback() {
@@ -503,8 +578,12 @@ function App() {
     const ctx = setupAudioGraph()
     if (ctx.state === 'suspended') await ctx.resume()
     if (audio.paused) {
-      await audio.play()
-      setDj((current) => ({ ...current, isPlaying: true, aiStatus: 'Listening to motion' }))
+      try {
+        await audio.play()
+        setDj((current) => ({ ...current, isPlaying: true, aiStatus: 'Listening to motion' }))
+      } catch {
+        setDj((current) => ({ ...current, isPlaying: false, aiStatus: 'Press Play again or choose another audio file.' }))
+      }
     } else {
       audio.pause()
       setDj((current) => ({ ...current, isPlaying: false, aiStatus: 'Paused' }))
@@ -517,7 +596,7 @@ function App() {
     if (!ctx || !gain) return
     const clamped = clamp(nextVolume, 0, 1)
     targetVolumeRef.current = clamped
-    gain.gain.setTargetAtTime(dj.muted ? 0 : clamped, ctx.currentTime, timeConstant)
+    gain.gain.setTargetAtTime(djRef.current?.muted ? 0 : clamped, ctx.currentTime, timeConstant)
   }
 
   function toggleMute() {
@@ -559,8 +638,9 @@ function App() {
   }
 
   function updateDjFromHand(landmarks: NormalizedLandmark[] | undefined, summary: HandSummary | undefined) {
-    if (mode !== 'music') return
-    if (!dj.isLoaded) {
+    if (modeRef.current !== 'music') return
+    const currentDj = djRef.current
+    if (!currentDj?.isLoaded) {
       setDj((current) => current.gesture === 'Upload a track first' ? current : { ...current, gesture: 'Upload a track first', activeControl: 'Music button', aiStatus: 'Load MP3/WAV/FLAC to arm DJ controls' })
       return
     }
@@ -612,7 +692,7 @@ function App() {
       cycleEffectMode()
     }
 
-    let cueIndex = dj.cueIndex
+    let cueIndex = currentDj.cueIndex
     let gesture = isOpenPalm ? 'Open palm: Full Energy Mode' : pinch > 0.62 ? 'Pinch: filter sweep' : isTwoFingers ? 'Two fingers: effect switch' : isFist ? 'Closed fist hold' : 'Hand height: volume ride'
     let activeControl = isFist ? 'Hold to mute' : 'Volume'
     if (Math.abs(dx) > 0.18 && now - swipeAtRef.current > 1200) {
@@ -686,13 +766,14 @@ function App() {
     sampler.width = 128
     sampler.height = 72
     const ctx = sampler.getContext('2d', { willReadFrequently: true })
-    if (!ctx) return emptyVisual(targetColor)
+    const activeTargetColor = targetColorRef.current
+    if (!ctx) return emptyVisual(activeTargetColor)
 
     ctx.drawImage(video, 0, 0, sampler.width, sampler.height)
     const image = ctx.getImageData(0, 0, sampler.width, sampler.height)
     const data = image.data
     const pixels = data.length / 4
-    const targetRgb = TARGET_COLORS[targetColor].rgb
+    const targetRgb = TARGET_COLORS[activeTargetColor].rgb
     const counts = Object.fromEntries((Object.keys(TARGET_COLORS) as TargetColor[]).map((name) => [name, 0])) as Record<TargetColor, number>
 
     let r = 0
@@ -722,7 +803,7 @@ function App() {
       const nearest = nearestColorName(pr, pg, pb)
 
       if (nearest !== 'none') counts[nearest] += 1
-      if (matchesColor(pr, pg, pb, targetColor)) targetHits += 1
+      if (matchesColor(pr, pg, pb, activeTargetColor)) targetHits += 1
       if (hsv.s > 0.25 && hsv.v > 0.2) {
         r += pr
         g += pg
@@ -799,12 +880,13 @@ function App() {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
     const drawingUtils = new DrawingUtils(ctx)
+    const currentMode = modeRef.current
     const summaries: HandSummary[] = hands.landmarks.map((landmarks, index) => {
       const handedness = hands.handedness[index]?.[0]?.categoryName ?? `Hand ${index + 1}`
       const result = countRaisedFingers(landmarks, handedness)
       const wrist = landmarks[0]
       const color = index === 0 ? '#58a6ff' : '#22c55e'
-      if (mode === 'music') {
+      if (currentMode === 'music') {
         drawDjHand(ctx, landmarks, canvas, index === 0 ? '#22d3ee' : '#f472b6')
       } else {
         drawingUtils.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS, { color, lineWidth: 3 })
@@ -821,7 +903,7 @@ function App() {
       }
     })
 
-    const shouldDrawFace = mode === 'face' || mode === 'scan' || mode === 'music'
+    const shouldDrawFace = currentMode === 'face' || currentMode === 'scan' || currentMode === 'music'
     if (shouldDrawFace) {
       faces.faceLandmarks.forEach((landmarks) => {
         const xs = landmarks.map((point) => point.x * canvas.width)
@@ -837,15 +919,15 @@ function App() {
       })
     }
 
-    if (mode === 'color' || mode === 'scan') {
+    if (currentMode === 'color' || currentMode === 'scan') {
       ctx.fillStyle = visual.targetHex
       ctx.globalAlpha = 0.22
       ctx.fillRect(0, canvas.height - 24, Math.max(3, (visual.targetCoverage / 100) * canvas.width), 24)
       ctx.globalAlpha = 1
-      drawPill(ctx, `${targetColor}: ${visual.targetCoverage}%`, 16, canvas.height - 34, visual.targetHex)
+      drawPill(ctx, `${targetColorRef.current}: ${visual.targetCoverage}%`, 16, canvas.height - 34, visual.targetHex)
     }
 
-    if (mode === 'motion' || mode === 'scan') {
+    if (currentMode === 'motion' || currentMode === 'scan') {
       const x = visual.motionCenterX * canvas.width
       const y = visual.motionCenterY * canvas.height
       ctx.beginPath()
@@ -867,7 +949,7 @@ function App() {
       handLabel,
       hands: summaries,
       dominantColor: visual.dominantColor,
-      targetColor,
+      targetColor: targetColorRef.current,
       targetCoverage: visual.targetCoverage,
       targetHex: visual.targetHex,
       bestColorName: visual.bestColorName,
@@ -930,10 +1012,11 @@ function App() {
   }
 
   function makeStatement(totalFingers: number, hands: HandSummary[], visual: VisualState, face: FaceState) {
-    if (mode === 'fingers') return hands.length ? `${hands.length} hand(s): ${totalFingers} total fingers.` : 'No hand yet. Show one or both hands.'
-    if (mode === 'color') return `${targetColor}: ${visual.targetCoverage}% match. Best visible color: ${visual.bestColorName} ${visual.bestColorPercent}%.`
-    if (mode === 'motion') return `Motion ${visual.motionScore}/100 · ${visual.motionChangedPercent}% of frame changing · ${visual.motionDirection}.`
-    if (mode === 'face') return face.count ? `${face.label}. Smile ${face.smileScore}%, eyes open ${face.eyeOpenScore}%.` : 'Face tracking is active, but no face is centered yet.'
+    const activeMode = modeRef.current
+    if (activeMode === 'fingers') return hands.length ? `${hands.length} hand(s): ${totalFingers} total fingers.` : 'No hand yet. Show one or both hands.'
+    if (activeMode === 'color') return `${targetColor}: ${visual.targetCoverage}% match. Best visible color: ${visual.bestColorName} ${visual.bestColorPercent}%.`
+    if (activeMode === 'motion') return `Motion ${visual.motionScore}/100 · ${visual.motionChangedPercent}% of frame changing · ${visual.motionDirection}.`
+    if (activeMode === 'face') return face.count ? `${face.label}. Smile ${face.smileScore}%, eyes open ${face.eyeOpenScore}%.` : 'Face tracking is active, but no face is centered yet.'
     return `${hands.length} hand(s), ${totalFingers} fingers · face: ${face.label} · ${targetColor}: ${visual.targetCoverage}% · motion ${visual.motionScore}/100.`
   }
 
@@ -960,7 +1043,7 @@ function App() {
           className="file-input"
           type="file"
           accept="audio/mpeg,audio/mp3,audio/wav,audio/flac,.mp3,.wav,.flac"
-          onChange={(event) => handleMusicUpload(event.target.files?.[0])}
+          onChange={(event) => { void handleMusicUpload(event.target.files?.[0]); event.currentTarget.value = '' }}
         />
 
         <aside className="conductor-sidebar">
