@@ -571,3 +571,26 @@ select {
   .conductor-header h1 { font-size: 3.4rem; }
   .ai-badges { justify-content: flex-start; }
 }
+
+.primary-gesture em {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 0.65rem;
+  padding: 0.42rem 0.62rem;
+  border-radius: 999px;
+  border: 1px solid rgba(34, 211, 238, 0.28);
+  background: rgba(34, 211, 238, 0.08);
+  color: #a5f3fc;
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.primary-gesture p {
+  margin: 0.7rem 0 0;
+  color: rgba(226, 232, 240, 0.68);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
