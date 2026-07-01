@@ -11,11 +11,16 @@ import {
 import './App.css'
 
 const TARGET_COLORS = {
-  red: [220, 56, 62],
-  green: [64, 190, 120],
-  blue: [64, 130, 255],
-  yellow: [246, 204, 67],
-  purple: [170, 96, 255],
+  red: { rgb: [220, 56, 62], hue: 0, tolerance: 15 },
+  orange: { rgb: [245, 132, 42], hue: 28, tolerance: 14 },
+  yellow: { rgb: [246, 204, 67], hue: 50, tolerance: 14 },
+  green: { rgb: [64, 190, 120], hue: 142, tolerance: 22 },
+  cyan: { rgb: [45, 190, 220], hue: 188, tolerance: 18 },
+  blue: { rgb: [64, 130, 255], hue: 218, tolerance: 18 },
+  purple: { rgb: [170, 96, 255], hue: 265, tolerance: 20 },
+  pink: { rgb: [235, 92, 172], hue: 326, tolerance: 18 },
+  white: { rgb: [245, 247, 250], hue: 0, tolerance: 180, neutral: 'white' },
+  black: { rgb: [25, 31, 42], hue: 0, tolerance: 180, neutral: 'black' },
 } as const
 
 const FINGER_JOINTS = {
@@ -27,16 +32,38 @@ const FINGER_JOINTS = {
 } as const
 
 type CameraStatus = 'idle' | 'loading' | 'running' | 'error'
-type VisionMode = 'fingers' | 'color' | 'motion' | 'face' | 'scan'
+type VisionMode = 'fingers' | 'motion' | 'color' | 'face' | 'scan'
 type TargetColor = keyof typeof TARGET_COLORS
 type FingerName = keyof typeof FINGER_JOINTS
 type FingerState = Record<FingerName, boolean>
 
+type HandSummary = {
+  id: string
+  label: string
+  count: number
+  raised: FingerState
+  x: number
+  y: number
+}
+
+type ColorCandidate = {
+  name: TargetColor
+  percent: number
+  hex: string
+}
+
 type VisualState = {
   dominantColor: string
   targetCoverage: number
+  targetHex: string
+  bestColorName: TargetColor | 'none'
+  bestColorPercent: number
+  candidates: ColorCandidate[]
   motionScore: number
   motionDirection: string
+  motionChangedPercent: number
+  motionCenterX: number
+  motionCenterY: number
 }
 
 type FaceState = {
@@ -49,6 +76,7 @@ type FaceState = {
 type AnalysisState = VisualState & FaceState & {
   fingerCount: number | null
   handLabel: string
+  hands: HandSummary[]
   fps: number
   targetColor: TargetColor
   aiStatement: string
@@ -59,7 +87,7 @@ type AnalysisState = VisualState & FaceState & {
 }
 
 function dist(a: NormalizedLandmark, b: NormalizedLandmark) {
-  return Math.hypot(a.x - b.x, a.y - b.y, (a.z ?? 0) - (b.z ?? 0) * 0.35)
+  return Math.hypot(a.x - b.x, a.y - b.y, ((a.z ?? 0) - (b.z ?? 0)) * 0.35)
 }
 
 function angle(a: NormalizedLandmark, b: NormalizedLandmark, c: NormalizedLandmark) {
@@ -80,36 +108,78 @@ function countRaisedFingers(landmarks: NormalizedLandmark[], handedness: string)
     const tip = landmarks[joint.tip]
     const pip = landmarks[joint.pip]
     const mcp = landmarks[joint.mcp]
-    const radialOpen = dist(wrist, tip) > dist(wrist, pip) + palmScale * 0.18
-    const jointStraight = angle(mcp, pip, tip) > 142
-    const classicOpen = tip.y < pip.y - 0.01
-    // The radial + angle test fixes palm-forward cases where the y-axis heuristic gets stuck.
-    raised[name] = (radialOpen && jointStraight) || (classicOpen && radialOpen)
+    const radialOpen = dist(wrist, tip) > dist(wrist, pip) + palmScale * 0.14
+    const jointStraight = angle(mcp, pip, tip) > 136
+    const verticalOpen = tip.y < pip.y - palmScale * 0.03
+    const zOpen = (tip.z ?? 0) < (pip.z ?? 0) + 0.025
+    raised[name] = (radialOpen && jointStraight) || (radialOpen && verticalOpen) || (jointStraight && zOpen && dist(mcp, tip) > palmScale * 0.72)
   })
 
   const thumb = FINGER_JOINTS.thumb
   const thumbTip = landmarks[thumb.tip]
   const thumbIp = landmarks[thumb.pip]
   const thumbMcp = landmarks[thumb.mcp]
-  const thumbRadial = dist(wrist, thumbTip) > dist(wrist, thumbIp) + palmScale * 0.12
-  const thumbStraight = angle(thumbMcp, thumbIp, thumbTip) > 132
+  const thumbRadial = dist(wrist, thumbTip) > dist(wrist, thumbIp) + palmScale * 0.1
+  const thumbStraight = angle(thumbMcp, thumbIp, thumbTip) > 126
   const thumbSide = handedness === 'Left'
-    ? thumbTip.x > thumbIp.x + palmScale * 0.08
-    : thumbTip.x < thumbIp.x - palmScale * 0.08
+    ? thumbTip.x > thumbIp.x + palmScale * 0.06
+    : thumbTip.x < thumbIp.x - palmScale * 0.06
   raised.thumb = (thumbRadial && thumbStraight) || (thumbRadial && thumbSide)
 
-  return {
-    count: Object.values(raised).filter(Boolean).length,
-    raised,
-  }
+  return { count: Object.values(raised).filter(Boolean).length, raised }
 }
 
 function rgbToHex(r: number, g: number, b: number) {
-  return `#${[r, g, b].map((value) => value.toString(16).padStart(2, '0')).join('')}`
+  return `#${[r, g, b].map((value) => Math.max(0, Math.min(255, value)).toString(16).padStart(2, '0')).join('')}`
 }
 
-function colorDistance(a: number[], b: readonly number[]) {
-  return Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
+function rgbToHsv(r: number, g: number, b: number) {
+  const rn = r / 255
+  const gn = g / 255
+  const bn = b / 255
+  const max = Math.max(rn, gn, bn)
+  const min = Math.min(rn, gn, bn)
+  const delta = max - min
+  let h = 0
+  if (delta !== 0) {
+    if (max === rn) h = 60 * (((gn - bn) / delta) % 6)
+    else if (max === gn) h = 60 * ((bn - rn) / delta + 2)
+    else h = 60 * ((rn - gn) / delta + 4)
+  }
+  if (h < 0) h += 360
+  return { h, s: max === 0 ? 0 : delta / max, v: max }
+}
+
+function hueDistance(a: number, b: number) {
+  const delta = Math.abs(a - b) % 360
+  return Math.min(delta, 360 - delta)
+}
+
+function matchesColor(r: number, g: number, b: number, targetName: TargetColor) {
+  const config = TARGET_COLORS[targetName]
+  const hsv = rgbToHsv(r, g, b)
+  if ('neutral' in config && config.neutral === 'white') return hsv.s < 0.22 && hsv.v > 0.72
+  if ('neutral' in config && config.neutral === 'black') return hsv.v < 0.18
+  return hsv.s > 0.28 && hsv.v > 0.18 && hueDistance(hsv.h, config.hue) <= config.tolerance
+}
+
+function nearestColorName(r: number, g: number, b: number): TargetColor | 'none' {
+  const hsv = rgbToHsv(r, g, b)
+  if (hsv.s < 0.18 && hsv.v > 0.72) return 'white'
+  if (hsv.v < 0.16) return 'black'
+  if (hsv.s < 0.24 || hsv.v < 0.18) return 'none'
+  let best: TargetColor = 'red'
+  let bestDistance = 999
+  ;(Object.keys(TARGET_COLORS) as TargetColor[]).forEach((name) => {
+    const config = TARGET_COLORS[name]
+    if ('neutral' in config) return
+    const distance = hueDistance(hsv.h, config.hue)
+    if (distance < bestDistance) {
+      best = name
+      bestDistance = distance
+    }
+  })
+  return bestDistance < 34 ? best : 'none'
 }
 
 function describeRaised(raised: FingerState | null) {
@@ -122,10 +192,27 @@ function classifySmile(face: FaceLandmarkerResult): FaceState {
   const categories = face.faceBlendshapes?.[0]?.categories ?? []
   const byName = Object.fromEntries(categories.map((item) => [item.categoryName, item.score]))
   const smileScore = Math.round((((byName.mouthSmileLeft ?? 0) + (byName.mouthSmileRight ?? 0)) / 2) * 100)
-  const eyeOpenScore = Math.round((((byName.eyeBlinkLeft ?? 0) + (byName.eyeBlinkRight ?? 0)) / 2) * 100)
+  const blinkScore = Math.round((((byName.eyeBlinkLeft ?? 0) + (byName.eyeBlinkRight ?? 0)) / 2) * 100)
   const count = face.faceLandmarks.length
   const label = count === 0 ? 'No face' : smileScore > 35 ? 'Smile detected' : 'Face tracking'
-  return { count, smileScore, eyeOpenScore: Math.max(0, 100 - eyeOpenScore), label }
+  return { count, smileScore, eyeOpenScore: Math.max(0, 100 - blinkScore), label }
+}
+
+function emptyVisual(targetColor: TargetColor): VisualState {
+  const rgb = TARGET_COLORS[targetColor].rgb
+  return {
+    dominantColor: '#000000',
+    targetCoverage: 0,
+    targetHex: rgbToHex(rgb[0], rgb[1], rgb[2]),
+    bestColorName: 'none',
+    bestColorPercent: 0,
+    candidates: [],
+    motionScore: 0,
+    motionDirection: 'still',
+    motionChangedPercent: 0,
+    motionCenterX: 0.5,
+    motionCenterY: 0.5,
+  }
 }
 
 function App() {
@@ -138,21 +225,20 @@ function App() {
   const streamRef = useRef<MediaStream | null>(null)
   const lastVideoTimeRef = useRef(-1)
   const lastFrameAtRef = useRef(performance.now())
-  const previousFrameRef = useRef<Uint8ClampedArray | null>(null)
+  const previousGrayRef = useRef<Uint8ClampedArray | null>(null)
+  const smoothedMotionRef = useRef(0)
 
   const [status, setStatus] = useState<CameraStatus>('idle')
-  const [mode, setMode] = useState<VisionMode>('fingers')
+  const [mode, setMode] = useState<VisionMode>('scan')
   const [targetColor, setTargetColor] = useState<TargetColor>('red')
-  const [message, setMessage] = useState('Start camera, then choose a mode.')
+  const [message, setMessage] = useState('Start camera. Hands and face can run together.')
   const [analysis, setAnalysis] = useState<AnalysisState>({
+    ...emptyVisual('red'),
     fingerCount: null,
     handLabel: '—',
+    hands: [],
     fps: 0,
-    dominantColor: '#000000',
     targetColor: 'red',
-    targetCoverage: 0,
-    motionScore: 0,
-    motionDirection: 'still',
     count: 0,
     smileScore: 0,
     eyeOpenScore: 0,
@@ -161,7 +247,7 @@ function App() {
     framesProcessed: 0,
     estimatedTokens: 0,
     raised: null,
-    motionHistory: Array.from({ length: 28 }, () => 0),
+    motionHistory: Array.from({ length: 36 }, () => 0),
   })
 
   useEffect(() => {
@@ -182,9 +268,9 @@ function App() {
         },
         runningMode: 'VIDEO',
         numHands: 2,
-        minHandDetectionConfidence: 0.38,
-        minHandPresenceConfidence: 0.38,
-        minTrackingConfidence: 0.38,
+        minHandDetectionConfidence: 0.32,
+        minHandPresenceConfidence: 0.32,
+        minTrackingConfidence: 0.32,
       })
     }
 
@@ -196,6 +282,9 @@ function App() {
         },
         runningMode: 'VIDEO',
         numFaces: 1,
+        minFaceDetectionConfidence: 0.35,
+        minFacePresenceConfidence: 0.35,
+        minTrackingConfidence: 0.35,
         outputFaceBlendshapes: true,
       })
     }
@@ -204,7 +293,7 @@ function App() {
   async function startCamera() {
     try {
       setStatus('loading')
-      setMessage('Loading local vision models…')
+      setMessage('Loading local hand + face models…')
       await loadVision()
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -216,7 +305,7 @@ function App() {
       video.srcObject = stream
       await video.play()
       setStatus('running')
-      setMessage('Camera running. Try palm-forward for five fingers, or switch modes.')
+      setMessage('Camera running. Show one or two hands; face tracking is active too.')
       predictLoop()
     } catch (error) {
       console.error(error)
@@ -230,16 +319,20 @@ function App() {
     animationRef.current = null
     streamRef.current?.getTracks().forEach((track) => track.stop())
     streamRef.current = null
-    previousFrameRef.current = null
+    previousGrayRef.current = null
+    smoothedMotionRef.current = 0
     if (videoRef.current) videoRef.current.srcObject = null
     setStatus('idle')
     setAnalysis((current) => ({
       ...current,
       fingerCount: null,
       handLabel: '—',
+      hands: [],
       fps: 0,
       motionScore: 0,
+      motionChangedPercent: 0,
       targetCoverage: 0,
+      count: 0,
       raised: null,
       aiStatement: 'Stopped. Press Start to run local vision again.',
     }))
@@ -276,53 +369,108 @@ function App() {
   function analyzePixels(video: HTMLVideoElement): VisualState {
     const sampler = samplerRef.current ?? document.createElement('canvas')
     samplerRef.current = sampler
-    sampler.width = 96
-    sampler.height = 54
+    sampler.width = 128
+    sampler.height = 72
     const ctx = sampler.getContext('2d', { willReadFrequently: true })
-    if (!ctx) return { dominantColor: '#000000', targetCoverage: 0, motionScore: 0, motionDirection: 'still' }
+    if (!ctx) return emptyVisual(targetColor)
 
     ctx.drawImage(video, 0, 0, sampler.width, sampler.height)
-    const data = ctx.getImageData(0, 0, sampler.width, sampler.height).data
+    const image = ctx.getImageData(0, 0, sampler.width, sampler.height)
+    const data = image.data
+    const pixels = data.length / 4
+    const targetRgb = TARGET_COLORS[targetColor].rgb
+    const counts = Object.fromEntries((Object.keys(TARGET_COLORS) as TargetColor[]).map((name) => [name, 0])) as Record<TargetColor, number>
+
     let r = 0
     let g = 0
     let b = 0
     let colorfulPixels = 0
     let targetHits = 0
-    let motionSum = 0
+    let motionEnergy = 0
+    let changedPixels = 0
+    let motionX = 0
+    let motionY = 0
     let leftMotion = 0
     let rightMotion = 0
-    const target = TARGET_COLORS[targetColor]
-    const previous = previousFrameRef.current
+    let upMotion = 0
+    let downMotion = 0
+    const gray = new Uint8ClampedArray(pixels)
+    const previous = previousGrayRef.current
 
     for (let i = 0; i < data.length; i += 4) {
-      const pixel = [data[i], data[i + 1], data[i + 2]]
-      const saturation = Math.max(...pixel) - Math.min(...pixel)
-      if (saturation > 38 && !(pixel[0] > 80 && pixel[1] > 55 && pixel[2] > 35 && pixel[0] > pixel[2] * 1.2)) {
-        r += pixel[0]
-        g += pixel[1]
-        b += pixel[2]
+      const pixelIndex = i / 4
+      const x = pixelIndex % sampler.width
+      const y = Math.floor(pixelIndex / sampler.width)
+      const pr = data[i]
+      const pg = data[i + 1]
+      const pb = data[i + 2]
+      const hsv = rgbToHsv(pr, pg, pb)
+      const nearest = nearestColorName(pr, pg, pb)
+
+      if (nearest !== 'none') counts[nearest] += 1
+      if (matchesColor(pr, pg, pb, targetColor)) targetHits += 1
+      if (hsv.s > 0.25 && hsv.v > 0.2) {
+        r += pr
+        g += pg
+        b += pb
         colorfulPixels += 1
       }
-      if (colorDistance(pixel, target) < 82) targetHits += 1
 
+      const luminance = Math.round(pr * 0.299 + pg * 0.587 + pb * 0.114)
+      gray[pixelIndex] = luminance
       if (previous) {
-        const delta = Math.abs(data[i] - previous[i]) + Math.abs(data[i + 1] - previous[i + 1]) + Math.abs(data[i + 2] - previous[i + 2])
-        motionSum += delta
-        const x = (i / 4) % sampler.width
-        if (x < sampler.width / 2) leftMotion += delta
-        else rightMotion += delta
+        const delta = Math.abs(luminance - previous[pixelIndex])
+        if (delta > 14) {
+          const weighted = Math.min(70, delta)
+          motionEnergy += weighted
+          changedPixels += 1
+          motionX += x * weighted
+          motionY += y * weighted
+          if (x < sampler.width / 2) leftMotion += weighted
+          else rightMotion += weighted
+          if (y < sampler.height / 2) upMotion += weighted
+          else downMotion += weighted
+        }
       }
     }
 
-    previousFrameRef.current = new Uint8ClampedArray(data)
-    const pixels = data.length / 4
-    const dominantColor = colorfulPixels > 12
+    previousGrayRef.current = gray
+    const rawMotion = previous ? Math.min(100, Math.round((motionEnergy / pixels) * 1.45 + (changedPixels / pixels) * 180)) : 0
+    smoothedMotionRef.current = smoothedMotionRef.current * 0.62 + rawMotion * 0.38
+    const motionScore = Math.round(smoothedMotionRef.current)
+    const motionChangedPercent = Math.round((changedPixels / pixels) * 100)
+    const motionCenterX = motionEnergy ? motionX / motionEnergy / sampler.width : 0.5
+    const motionCenterY = motionEnergy ? motionY / motionEnergy / sampler.height : 0.5
+    const horizontal = rightMotion > leftMotion * 1.22 ? 'left side active' : leftMotion > rightMotion * 1.22 ? 'right side active' : ''
+    const vertical = downMotion > upMotion * 1.25 ? 'lower frame' : upMotion > downMotion * 1.25 ? 'upper frame' : ''
+    const motionDirection = motionScore < 5 ? 'still' : [horizontal, vertical].filter(Boolean).join(' · ') || 'center active'
+
+    const dominantColor = colorfulPixels > 16
       ? rgbToHex(Math.round(r / colorfulPixels), Math.round(g / colorfulPixels), Math.round(b / colorfulPixels))
       : '#9aa7b5'
-    const motionScore = Math.min(100, Math.round((motionSum / pixels - 7) / 1.7))
-    const motionDirection = motionScore < 6 ? 'still' : rightMotion > leftMotion * 1.12 ? 'leftward' : leftMotion > rightMotion * 1.12 ? 'rightward' : 'active'
+    const candidates = (Object.keys(TARGET_COLORS) as TargetColor[])
+      .map((name) => ({
+        name,
+        percent: Math.round((counts[name] / pixels) * 100),
+        hex: rgbToHex(TARGET_COLORS[name].rgb[0], TARGET_COLORS[name].rgb[1], TARGET_COLORS[name].rgb[2]),
+      }))
+      .sort((a, b) => b.percent - a.percent)
+      .slice(0, 4)
+    const best = candidates[0]
 
-    return { dominantColor, targetCoverage: Math.round((targetHits / pixels) * 100), motionScore: Math.max(0, motionScore), motionDirection }
+    return {
+      dominantColor,
+      targetCoverage: Math.round((targetHits / pixels) * 100),
+      targetHex: rgbToHex(targetRgb[0], targetRgb[1], targetRgb[2]),
+      bestColorName: best?.percent ? best.name : 'none',
+      bestColorPercent: best?.percent ?? 0,
+      candidates,
+      motionScore,
+      motionDirection,
+      motionChangedPercent,
+      motionCenterX,
+      motionCenterY,
+    }
   }
 
   function drawResult(hands: HandLandmarkerResult, faces: FaceLandmarkerResult, visual: VisualState) {
@@ -337,26 +485,26 @@ function App() {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
     const drawingUtils = new DrawingUtils(ctx)
-    let bestCount: number | null = null
-    let bestLabel = 'No hand'
-    let raised: FingerState | null = null
-
-    hands.landmarks.forEach((landmarks, index) => {
-      const handedness = hands.handedness[index]?.[0]?.categoryName ?? 'Right'
-      const count = countRaisedFingers(landmarks, handedness)
-      if (bestCount === null || count.count > bestCount) {
-        bestCount = count.count
-        bestLabel = `${handedness} hand`
-        raised = count.raised
-      }
-
-      drawingUtils.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS, { color: '#58a6ff', lineWidth: 3 })
-      drawingUtils.drawLandmarks(landmarks, { color: '#ffffff', fillColor: '#0f172a', lineWidth: 2, radius: 4 })
+    const summaries: HandSummary[] = hands.landmarks.map((landmarks, index) => {
+      const handedness = hands.handedness[index]?.[0]?.categoryName ?? `Hand ${index + 1}`
+      const result = countRaisedFingers(landmarks, handedness)
       const wrist = landmarks[0]
-      drawPill(ctx, `${count.count} fingers`, wrist.x * canvas.width + 16, wrist.y * canvas.height - 18)
+      const color = index === 0 ? '#58a6ff' : '#22c55e'
+      drawingUtils.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS, { color, lineWidth: 3 })
+      drawingUtils.drawLandmarks(landmarks, { color: '#ffffff', fillColor: '#0f172a', lineWidth: 2, radius: 4 })
+      drawPill(ctx, `${handedness}: ${result.count}`, wrist.x * canvas.width + 16, wrist.y * canvas.height - 18, color)
+      return {
+        id: `${handedness}-${index}`,
+        label: handedness,
+        count: result.count,
+        raised: result.raised,
+        x: wrist.x,
+        y: wrist.y,
+      }
     })
 
-    if (mode === 'face' || mode === 'scan') {
+    const shouldDrawFace = mode === 'face' || mode === 'scan'
+    if (shouldDrawFace) {
       faces.faceLandmarks.forEach((landmarks) => {
         const xs = landmarks.map((point) => point.x * canvas.width)
         const ys = landmarks.map((point) => point.y * canvas.height)
@@ -367,31 +515,52 @@ function App() {
         ctx.strokeStyle = '#8b5cf6'
         ctx.lineWidth = 4
         ctx.strokeRect(minX, minY, maxX - minX, maxY - minY)
-        drawPill(ctx, 'face', minX, minY - 12, '#8b5cf6')
+        drawPill(ctx, 'face active', minX, minY - 12, '#8b5cf6')
       })
     }
 
     if (mode === 'color' || mode === 'scan') {
-      const [targetR, targetG, targetB] = TARGET_COLORS[targetColor]
-      ctx.fillStyle = rgbToHex(targetR, targetG, targetB)
+      ctx.fillStyle = visual.targetHex
       ctx.globalAlpha = 0.22
-      ctx.fillRect(0, canvas.height - 22, Math.max(4, (visual.targetCoverage / 100) * canvas.width), 22)
+      ctx.fillRect(0, canvas.height - 24, Math.max(3, (visual.targetCoverage / 100) * canvas.width), 24)
       ctx.globalAlpha = 1
+      drawPill(ctx, `${targetColor}: ${visual.targetCoverage}%`, 16, canvas.height - 34, visual.targetHex)
     }
 
+    if (mode === 'motion' || mode === 'scan') {
+      const x = visual.motionCenterX * canvas.width
+      const y = visual.motionCenterY * canvas.height
+      ctx.beginPath()
+      ctx.arc(x, y, Math.max(18, visual.motionScore * 0.75), 0, Math.PI * 2)
+      ctx.strokeStyle = 'rgba(37, 99, 235, 0.72)'
+      ctx.lineWidth = 4
+      ctx.stroke()
+    }
+
+    const totalFingers = summaries.reduce((sum, hand) => sum + hand.count, 0)
+    const bestHand = summaries[0]
     const face = classifySmile(faces)
-    const aiStatement = makeStatement(bestCount, bestLabel, raised, visual, face)
+    const handLabel = summaries.length ? summaries.map((hand) => `${hand.label} ${hand.count}`).join(' + ') : 'No hand'
+    const aiStatement = makeStatement(totalFingers, summaries, visual, face)
     setAnalysis((current) => ({
       ...current,
-      fingerCount: bestCount,
-      handLabel: bestLabel,
+      fingerCount: summaries.length ? totalFingers : null,
+      handLabel,
+      hands: summaries,
       dominantColor: visual.dominantColor,
       targetColor,
       targetCoverage: visual.targetCoverage,
+      targetHex: visual.targetHex,
+      bestColorName: visual.bestColorName,
+      bestColorPercent: visual.bestColorPercent,
+      candidates: visual.candidates,
       motionScore: visual.motionScore,
       motionDirection: visual.motionDirection,
+      motionChangedPercent: visual.motionChangedPercent,
+      motionCenterX: visual.motionCenterX,
+      motionCenterY: visual.motionCenterY,
       aiStatement,
-      raised,
+      raised: bestHand?.raised ?? null,
       ...face,
     }))
   }
@@ -403,27 +572,27 @@ function App() {
     ctx.strokeStyle = color
     ctx.lineWidth = 2
     ctx.beginPath()
-    ctx.roundRect(x, y - 28, width, 36, 18)
+    ctx.roundRect(Math.max(8, x), Math.max(36, y) - 28, width, 36, 18)
     ctx.fill()
     ctx.stroke()
     ctx.fillStyle = '#ffffff'
-    ctx.fillText(text, x + 12, y - 5)
+    ctx.fillText(text, Math.max(8, x) + 12, Math.max(36, y) - 5)
   }
 
-  function makeStatement(count: number | null, label: string, raised: FingerState | null, visual: VisualState, face: FaceState) {
-    if (mode === 'fingers') return count === null ? 'No hand yet. Try palm open and slightly angled.' : `${label}: ${count} fingers — ${describeRaised(raised)}.`
-    if (mode === 'color') return `Looking for ${targetColor}: ${visual.targetCoverage}% match. Color readout only appears in this mode.`
-    if (mode === 'motion') return `Motion is ${visual.motionScore}/100 and trending ${visual.motionDirection}.`
-    if (mode === 'face') return face.count ? `${face.label}. Smile ${face.smileScore}%, eyes open ${face.eyeOpenScore}%.` : 'No face detected yet.'
-    return `${count ?? 0} fingers · ${visual.targetCoverage}% ${targetColor} · motion ${visual.motionScore}/100 · ${face.label}.`
+  function makeStatement(totalFingers: number, hands: HandSummary[], visual: VisualState, face: FaceState) {
+    if (mode === 'fingers') return hands.length ? `${hands.length} hand(s): ${totalFingers} total fingers.` : 'No hand yet. Show one or both hands.'
+    if (mode === 'color') return `${targetColor}: ${visual.targetCoverage}% match. Best visible color: ${visual.bestColorName} ${visual.bestColorPercent}%.`
+    if (mode === 'motion') return `Motion ${visual.motionScore}/100 · ${visual.motionChangedPercent}% of frame changing · ${visual.motionDirection}.`
+    if (mode === 'face') return face.count ? `${face.label}. Smile ${face.smileScore}%, eyes open ${face.eyeOpenScore}%.` : 'Face tracking is active, but no face is centered yet.'
+    return `${hands.length} hand(s), ${totalFingers} fingers · face: ${face.label} · ${targetColor}: ${visual.targetCoverage}% · motion ${visual.motionScore}/100.`
   }
 
   const modes: { id: VisionMode; title: string }[] = [
+    { id: 'scan', title: 'Hands + Face' },
     { id: 'fingers', title: 'Fingers' },
+    { id: 'face', title: 'Face' },
     { id: 'motion', title: 'Motion' },
     { id: 'color', title: 'Color' },
-    { id: 'face', title: 'Face' },
-    { id: 'scan', title: 'Scan' },
   ]
 
   const graphPoints = analysis.motionHistory.map((value, index) => {
@@ -437,7 +606,7 @@ function App() {
       <section className="hero-panel compact">
         <p className="eyebrow">Local camera vision · zero cloud tokens</p>
         <h1>Vision Playground</h1>
-        <p className="lede">A simpler live demo for hands, motion, color, and face tracking. Everything runs in-browser.</p>
+        <p className="lede">Hands, face, motion, and target color detection running locally in-browser.</p>
       </section>
 
       <section className="stage-card simple">
@@ -462,10 +631,36 @@ function App() {
             ))}
           </div>
 
-          <div className="hero-number">
-            <span>{mode === 'face' ? 'Faces' : 'Fingers'}</span>
-            <strong>{mode === 'face' ? analysis.count : analysis.fingerCount ?? '—'}</strong>
+          <div className="dual-metric">
+            <div className="hero-number compact-number">
+              <span>Fingers</span>
+              <strong>{analysis.fingerCount ?? '—'}</strong>
+            </div>
+            <div className="hero-number compact-number face-number">
+              <span>Faces</span>
+              <strong>{analysis.count}</strong>
+            </div>
           </div>
+
+          <div className="hands-card">
+            <span className="section-label">Hands detected</span>
+            {analysis.hands.length ? analysis.hands.map((hand) => (
+              <div className="hand-row" key={hand.id}>
+                <b>{hand.label}</b>
+                <strong>{hand.count}</strong>
+                <small>{describeRaised(hand.raised)}</small>
+              </div>
+            )) : <p>No hands yet. Show one or two hands.</p>}
+          </div>
+
+          {(mode === 'face' || mode === 'scan') && (
+            <div className="mini-grid">
+              <div><span>Face status</span><strong>{analysis.label}</strong></div>
+              <div><span>Smile</span><strong>{analysis.smileScore}%</strong></div>
+              <div><span>Eyes open</span><strong>{analysis.eyeOpenScore}%</strong></div>
+              <div><span>Face scan</span><strong>{status === 'running' ? 'Active' : 'Idle'}</strong></div>
+            </div>
+          )}
 
           {(mode === 'motion' || mode === 'scan') && (
             <div className="graph-card">
@@ -474,6 +669,7 @@ function App() {
                 <path d="M0 46 C20 46 22 16 50 16 C78 16 80 46 100 46" className="bell" />
                 <polyline points={graphPoints} className="motion-line" />
               </svg>
+              <p>{analysis.motionChangedPercent}% changing · {analysis.motionDirection}</p>
             </div>
           )}
 
@@ -485,20 +681,22 @@ function App() {
                   {Object.keys(TARGET_COLORS).map((color) => <option key={color} value={color}>{color}</option>)}
                 </select>
               </label>
-              <p>{analysis.targetCoverage}% of sampled frame matches <b>{targetColor}</b>. Dominant color hidden unless color mode is active.</p>
-            </div>
-          )}
-
-          {(mode === 'face' || mode === 'scan') && (
-            <div className="mini-grid">
-              <div><span>Smile</span><strong>{analysis.smileScore}%</strong></div>
-              <div><span>Eyes open</span><strong>{analysis.eyeOpenScore}%</strong></div>
+              <div className="color-result">
+                <i style={{ background: analysis.targetHex }} />
+                <strong>{analysis.targetCoverage}% {targetColor}</strong>
+              </div>
+              <p>Best visible match: <b>{analysis.bestColorName}</b> {analysis.bestColorPercent}%.</p>
+              <div className="color-chips">
+                {analysis.candidates.map((candidate) => (
+                  <span key={candidate.name}><i style={{ background: candidate.hex }} />{candidate.name} {candidate.percent}%</span>
+                ))}
+              </div>
             </div>
           )}
 
           <div className="mini-grid">
-            <div><span>Hand</span><strong>{analysis.handLabel}</strong></div>
             <div><span>FPS</span><strong>{analysis.fps || '—'}</strong></div>
+            <div><span>Cloud tokens</span><strong>{analysis.estimatedTokens}</strong></div>
           </div>
 
           <div className={`status ${status}`}>{message}</div>
