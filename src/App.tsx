@@ -933,45 +933,158 @@ function App() {
     return `${x},${y}`
   }).join(' ')
 
+  if (mode === 'music') {
+    return (
+      <main className="conductor-app">
+        <audio ref={audioRef} preload="metadata" />
+        <input
+          ref={fileInputRef}
+          className="file-input"
+          type="file"
+          accept="audio/mpeg,audio/mp3,audio/wav,audio/flac,.mp3,.wav,.flac"
+          onChange={(event) => handleMusicUpload(event.target.files?.[0])}
+        />
+
+        <aside className="conductor-sidebar">
+          <div className="conductor-logo">
+            <span>TC</span>
+            <div><b>The Conductor</b><small>Don’t touch the deck.</small></div>
+          </div>
+          <nav className="conductor-nav" aria-label="Conductor navigation">
+            {['Perform', 'Tracks', 'Effects', 'Visuals', 'Settings'].map((item) => (
+              <button key={item} type="button" className={item === 'Perform' ? 'active' : ''}>{item}</button>
+            ))}
+          </nav>
+          <div className="now-playing-card">
+            <span>Now Playing</span>
+            <strong>{dj.trackName}</strong>
+            <small>AI DJ Mode: House · {dj.bpm} BPM</small>
+            <div className="mini-wave">
+              {Array.from({ length: 22 }, (_, index) => <i key={index} style={{ height: `${18 + ((index * 19 + dj.energy) % 42)}px` }} />)}
+            </div>
+          </div>
+          <button type="button" className="music-upload-main" onClick={() => fileInputRef.current?.click()}>Music</button>
+          <button type="button" className="sidebar-ghost" onClick={() => setMode('scan')}>Back to Vision</button>
+        </aside>
+
+        <section className="conductor-main">
+          <header className="conductor-header">
+            <div>
+              <span>Vision Mode — Hand Tracking Active</span>
+              <h1>The Conductor</h1>
+            </div>
+            <div className="ai-badges">
+              <b>{dj.isLoaded ? 'AI is listening' : 'AI standby'}</b>
+              <b>{analysis.hands.length ? 'Calibrated' : 'Find hand'}</b>
+              <b>{status === 'running' ? 'Camera active' : 'Camera idle'}</b>
+            </div>
+          </header>
+
+          <div className="conductor-camera-card">
+            <div className="camera-titlebar">
+              <span>Command the track.</span>
+              <b>{dj.aiStatus}</b>
+            </div>
+            <div className="conductor-video-wrap">
+              <video ref={videoRef} className="camera" playsInline muted />
+              <canvas ref={canvasRef} className="overlay" />
+              <div className="conductor-layer" aria-hidden="true">
+                <div className="conductor-status">
+                  <span>{analysis.hands.length ? 'hand confidence high' : 'waiting for hand'}</span>
+                  <span>{analysis.hands.length ? '21 tracking points' : '0 tracking points'}</span>
+                  <span>{dj.dropMode ? 'drop armed' : 'gesture locked'}</span>
+                </div>
+                <div className="conductor-orb">
+                  <i />
+                  <b>{dj.dropMode ? 'DROP' : dj.effectMode.toUpperCase()}</b>
+                </div>
+                {status !== 'running' && <div className="camera-prompt">Turn on camera to conduct the track</div>}
+              </div>
+            </div>
+            <div className="gesture-shortcuts">
+              {[
+                ['Raise hand', 'Volume up'],
+                ['Lower hand', 'Volume down'],
+                ['Pinch', 'Filter sweep'],
+                ['Rotate', 'Echo / reverb'],
+                ['Open palm', 'Drop mode'],
+                ['Fist hold', 'Mute'],
+                ['2 fingers', 'Effect mode'],
+                ['Swipe', 'Cue jump'],
+              ].map(([gesture, action]) => (
+                <span key={gesture}><b>{gesture}</b><small>{action}</small></span>
+              ))}
+            </div>
+          </div>
+
+          <div className="conductor-waveform-panel">
+            <div className="waveform-meta"><span>Uploaded house track timeline</span><b>Deck A · Cue {dj.cueIndex}</b></div>
+            <div className="wave-strip conductor-wave">
+              {Array.from({ length: 64 }, (_, index) => (
+                <span key={index} style={{ height: `${16 + ((index * 17 + dj.energy) % 62)}px` }} />
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <aside className="conductor-controls">
+          <div className="control-card primary-gesture">
+            <span>Gesture Detected</span>
+            <strong>{dj.gesture}</strong>
+            <small>{dj.activeControl}</small>
+          </div>
+          <div className="control-card volume-card">
+            <span>Volume</span>
+            <strong>{dj.volume}%</strong>
+            <div className="deck-meter"><i style={{ width: `${dj.volume}%` }} /></div>
+          </div>
+          <div className="control-grid-premium">
+            <div><span>Filter</span><strong>{dj.filterAmount}%</strong></div>
+            <div><span>Reverb</span><strong>{dj.reverbAmount}%</strong></div>
+            <div><span>Delay</span><strong>{dj.delayAmount}%</strong></div>
+            <div><span>Energy</span><strong>{dj.energy > 72 ? 'High' : dj.energy > 38 ? 'Medium' : 'Low'}</strong></div>
+            <div><span>Effect</span><strong>{dj.effectMode}</strong></div>
+            <div><span>Status</span><strong>{dj.muted ? 'Muted' : dj.isPlaying ? 'Live' : 'Armed'}</strong></div>
+          </div>
+          <div className="transport-card">
+            <button type="button" onClick={() => fileInputRef.current?.click()}>Upload Track</button>
+            <button type="button" className="secondary" onClick={toggleMusicPlayback} disabled={!dj.isLoaded}>{dj.isPlaying ? 'Pause' : 'Play'}</button>
+            <button type="button" className="panic" onClick={toggleMute} disabled={!dj.isLoaded}>{dj.muted ? 'Unmute' : 'Mute'}</button>
+          </div>
+          <div className="copy-card">
+            <b>Motion is the mixer.</b>
+            <p>Upload a house track, open camera, then conduct volume, filter, echo, drops, loops, and cues with your hand.</p>
+          </div>
+          <div className={`status ${status}`}>{message}</div>
+          <div className="actions">
+            <button type="button" onClick={startCamera} disabled={status === 'loading' || status === 'running'}>{status === 'loading' ? 'Loading…' : 'Start Camera'}</button>
+            <button type="button" className="secondary" onClick={stopCamera} disabled={status !== 'running'}>Stop</button>
+          </div>
+        </aside>
+      </main>
+    )
+  }
+
   return (
-    <main className={`app-shell ${mode === 'music' ? 'music-shell' : ''}`}>
+    <main className="app-shell">
       <audio ref={audioRef} preload="metadata" />
       <section className="hero-panel compact">
         <p className="eyebrow">Local camera vision · zero cloud tokens</p>
-        <h1>{mode === 'music' ? 'AI DJ Deck' : 'Vision Playground'}</h1>
-        <p className="lede">{mode === 'music' ? 'Upload a house track and ride volume, filter, echo, drops, cues, and loops with hand gestures.' : 'Hands, face, motion, and target color detection running locally in-browser.'}</p>
+        <h1>Vision Playground</h1>
+        <p className="lede">Hands, face, motion, and target color detection running locally in-browser.</p>
       </section>
 
       <section className="stage-card simple">
         <div className="video-wrap">
           <video ref={videoRef} className="camera" playsInline muted />
           <canvas ref={canvasRef} className="overlay" />
-          {mode === 'music' && (
-            <div className="conductor-layer" aria-hidden="true">
-              <div className="conductor-status">
-                <span>AI {dj.isLoaded ? 'listening' : 'standby'}</span>
-                <span>{status === 'running' ? 'camera active' : 'camera idle'}</span>
-                <span>{analysis.hands.length ? 'hand locked' : 'find hand'}</span>
-                <span>{analysis.hands.length ? '21 pts' : '0 pts'}</span>
-              </div>
-              <div className="conductor-orb">
-                <i />
-                <b>{dj.dropMode ? 'DROP' : dj.effectMode.toUpperCase()}</b>
-              </div>
-              <div className="wave-strip">
-                {Array.from({ length: 42 }, (_, index) => (
-                  <span key={index} style={{ height: `${18 + ((index * 17 + dj.energy) % 52)}px` }} />
-                ))}
-              </div>
-            </div>
-          )}
           <div className="hud top-left">
             <strong>{mode.toUpperCase()}</strong>
-            <span>{mode === 'music' ? `${dj.gesture} · ${dj.activeControl}` : analysis.aiStatement}</span>
+            <span>{analysis.aiStatement}</span>
           </div>
           <div className="hud top-right">
-            <strong>{mode === 'music' ? 'AI DJ' : 'Local'}</strong>
-            <span>{mode === 'music' ? dj.aiStatus : `${analysis.estimatedTokens} cloud tokens`}</span>
+            <strong>Local</strong>
+            <span>{analysis.estimatedTokens} cloud tokens</span>
           </div>
           {status !== 'running' && <div className="placeholder">Camera preview appears here</div>}
         </div>
@@ -989,49 +1102,10 @@ function App() {
               <strong>{analysis.fingerCount ?? '—'}</strong>
             </div>
             <div className="hero-number compact-number face-number">
-              <span>{mode === 'music' ? 'Volume' : 'Faces'}</span>
-              <strong>{mode === 'music' ? `${dj.volume}` : analysis.count}</strong>
+              <span>Faces</span>
+              <strong>{analysis.count}</strong>
             </div>
           </div>
-
-          {mode === 'music' && (
-            <div className="dj-panel">
-              <div className="deck-topline">
-                <span>House demo deck</span>
-                <b>{dj.isPlaying ? 'LIVE' : dj.isLoaded ? 'ARMED' : 'LOAD TRACK'}</b>
-              </div>
-              <div className="track-name">{dj.trackName}</div>
-              <input
-                ref={fileInputRef}
-                className="file-input"
-                type="file"
-                accept="audio/mpeg,audio/mp3,audio/wav,.mp3,.wav"
-                onChange={(event) => handleMusicUpload(event.target.files?.[0])}
-              />
-              <div className="dj-actions">
-                <button type="button" onClick={() => fileInputRef.current?.click()}>Upload MP3/WAV</button>
-                <button type="button" className="secondary" onClick={toggleMusicPlayback} disabled={!dj.isLoaded}>{dj.isPlaying ? 'Pause' : 'Play'}</button>
-                <button type="button" className="panic" onClick={toggleMute} disabled={!dj.isLoaded}>{dj.muted ? 'Unmute' : 'Mute'}</button>
-              </div>
-              <div className="deck-meter"><i style={{ width: `${dj.volume}%` }} /></div>
-              <div className="dj-grid">
-                <div><span>Gesture</span><strong>{dj.gesture}</strong></div>
-                <div><span>Control</span><strong>{dj.activeControl}</strong></div>
-                <div><span>Filter</span><strong>{dj.filterAmount}%</strong></div>
-                <div><span>Reverb</span><strong>{dj.reverbAmount}%</strong></div>
-                <div><span>Delay</span><strong>{dj.delayAmount}%</strong></div>
-                <div><span>Mode</span><strong>{dj.effectMode}</strong></div>
-                <div><span>BPM / Energy</span><strong>{dj.bpm} · {dj.energy}%</strong></div>
-                <div><span>Cue</span><strong>{dj.cueIndex}</strong></div>
-              </div>
-              <p className="gesture-help">Raise/lower hand = volume · pinch = filter · wrist rotate = echo/reverb · open palm = drop mode · fist hold = mute · two fingers = effect mode · circle = loop · swipe = cue.</p>
-              <div className="gesture-map">
-                {['Raise', 'Lower', 'Pinch', 'Rotate', 'Open Palm', 'Fist', '2 Fingers', 'Swipe'].map((item) => (
-                  <span key={item}>{item}</span>
-                ))}
-              </div>
-            </div>
-          )}
 
           <div className="hands-card">
             <span className="section-label">Hands detected</span>
@@ -1098,7 +1172,6 @@ function App() {
         </aside>
       </section>
     </main>
-  )
-}
+  )}
 
 export default App
