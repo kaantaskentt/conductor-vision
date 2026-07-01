@@ -246,6 +246,18 @@ function emptyVisual(targetColor: TargetColor): VisualState {
   }
 }
 
+
+function cameraErrorMessage(error: unknown) {
+  if (!window.isSecureContext) return 'Camera requires HTTPS or localhost. Open the secure Vercel URL and try again.'
+  if (error instanceof DOMException) {
+    if (error.name === 'NotAllowedError') return 'Camera permission was blocked. Allow camera access in the browser, then press Start Camera again.'
+    if (error.name === 'NotFoundError') return 'No camera was found. Connect a webcam or use a device with a camera.'
+    if (error.name === 'NotReadableError') return 'The camera is already in use by another app. Close it and try again.'
+  }
+  if (error instanceof Error && /fetch|network|model|wasm/i.test(error.message)) return 'The local vision model could not load. Check the connection and refresh.'
+  return 'Could not start the camera. Refresh once, then try Start Camera again.'
+}
+
 function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -376,7 +388,7 @@ function App() {
     } catch (error) {
       console.error(error)
       setStatus('error')
-      setMessage(error instanceof Error ? error.message : 'Could not start the camera/model.')
+      setMessage(cameraErrorMessage(error))
     }
   }
 
@@ -406,8 +418,9 @@ function App() {
   }
 
   function setupAudioGraph() {
-    const audio = audioRef.current
-    if (!audio) throw new Error('Audio element missing')
+    const audio = audioRef.current ?? new Audio()
+    audioRef.current = audio
+    audio.preload = 'metadata'
     const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
     if (!AudioContextClass) throw new Error('Web Audio is not supported in this browser')
     const ctx = audioCtxRef.current ?? new AudioContextClass()
@@ -451,14 +464,14 @@ function App() {
 
   async function handleMusicUpload(file: File | undefined) {
     if (!file) return
-    const valid = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/wave'].includes(file.type) || /\.(mp3|wav)$/i.test(file.name)
+    const valid = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/flac', 'audio/x-flac'].includes(file.type) || /\.(mp3|wav|flac)$/i.test(file.name)
     if (!valid) {
-      setDj((current) => ({ ...current, aiStatus: 'Use MP3 or WAV for this deck' }))
+      setDj((current) => ({ ...current, aiStatus: 'Use MP3, WAV, or FLAC for this deck' }))
       return
     }
+    const ctx = setupAudioGraph()
     const audio = audioRef.current
     if (!audio) return
-    const ctx = setupAudioGraph()
     if (ctx.state === 'suspended') await ctx.resume()
     const url = URL.createObjectURL(file)
     audio.src = url
@@ -478,9 +491,10 @@ function App() {
       energy: 48,
       gesture: 'Track loaded',
       activeControl: 'Hand height → volume',
-      aiStatus: 'Listening to motion',
+      aiStatus: status === 'running' ? 'Listening to motion' : 'Camera arming…',
     }))
     setMode('music')
+    if (status !== 'running' && status !== 'loading') void startCamera()
   }
 
   async function toggleMusicPlayback() {
@@ -545,6 +559,11 @@ function App() {
   }
 
   function updateDjFromHand(landmarks: NormalizedLandmark[] | undefined, summary: HandSummary | undefined) {
+    if (mode !== 'music') return
+    if (!dj.isLoaded) {
+      setDj((current) => current.gesture === 'Upload a track first' ? current : { ...current, gesture: 'Upload a track first', activeControl: 'Music button', aiStatus: 'Load MP3/WAV/FLAC to arm DJ controls' })
+      return
+    }
     const now = performance.now()
     const ctx = audioCtxRef.current
     if (!landmarks || !summary) {
@@ -802,7 +821,7 @@ function App() {
       }
     })
 
-    const shouldDrawFace = mode === 'face' || mode === 'scan'
+    const shouldDrawFace = mode === 'face' || mode === 'scan' || mode === 'music'
     if (shouldDrawFace) {
       faces.faceLandmarks.forEach((landmarks) => {
         const xs = landmarks.map((point) => point.x * canvas.width)
@@ -936,7 +955,6 @@ function App() {
   if (mode === 'music') {
     return (
       <main className="conductor-app">
-        <audio ref={audioRef} preload="metadata" />
         <input
           ref={fileInputRef}
           className="file-input"
@@ -952,7 +970,7 @@ function App() {
           </div>
           <nav className="conductor-nav" aria-label="Conductor navigation">
             {['Perform', 'Tracks', 'Effects', 'Visuals', 'Settings'].map((item) => (
-              <button key={item} type="button" className={item === 'Perform' ? 'active' : ''}>{item}</button>
+              <button key={item} type="button" className={item === 'Perform' ? 'active' : ''} disabled={item !== 'Perform'}>{item}</button>
             ))}
           </nav>
           <div className="now-playing-card">
@@ -1055,7 +1073,7 @@ function App() {
             <b>Motion is the mixer.</b>
             <p>Upload a house track, open camera, then conduct volume, filter, echo, drops, loops, and cues with your hand.</p>
           </div>
-          <div className={`status ${status}`}>{message}</div>
+          <div className={`status ${status}`}>{status === 'idle' ? 'Start camera to unlock live hand, face, color, and motion interactions.' : message}</div>
           <div className="actions">
             <button type="button" onClick={startCamera} disabled={status === 'loading' || status === 'running'}>{status === 'loading' ? 'Loading…' : 'Start Camera'}</button>
             <button type="button" className="secondary" onClick={stopCamera} disabled={status !== 'running'}>Stop</button>
@@ -1066,12 +1084,11 @@ function App() {
   }
 
   return (
-    <main className="app-shell">
-      <audio ref={audioRef} preload="metadata" />
+    <main className="app-shell vision-shell">
       <section className="hero-panel compact">
-        <p className="eyebrow">Local camera vision · zero cloud tokens</p>
-        <h1>Vision Playground</h1>
-        <p className="lede">Hands, face, motion, and target color detection running locally in-browser.</p>
+        <p className="eyebrow">Launch-ready local vision AI · zero cloud camera uploads</p>
+        <h1>Vision Studio</h1>
+        <p className="lede">Try hand tracking, face sensing, motion, color detection, gestures, and The Conductor music mode in one polished browser demo.</p>
       </section>
 
       <section className="stage-card simple">
