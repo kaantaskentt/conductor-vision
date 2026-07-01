@@ -289,8 +289,9 @@ function App() {
   const gestureLockRef = useRef<{ mode: GestureMode; until: number; confidence: number }>({ mode: 'none', until: 0, confidence: 0 })
   const calibrationRef = useRef<{ ready: boolean; samples: number; baselineY: number; handScale: number }>({ ready: false, samples: 0, baselineY: 0.62, handScale: 0.16 })
   const previousTwoHandYRef = useRef<number | null>(null)
-  const smoothedFilterRef = useRef(0)
+  const smoothedFilterRef = useRef(1)
   const smoothedReverbRef = useRef(0)
+  const gestureCandidateRef = useRef<{ mode: GestureMode; since: number }>({ mode: 'none', since: 0 })
   const audioUrlRef = useRef<string | null>(null)
   const modeRef = useRef<VisionMode>('scan')
   const targetColorRef = useRef<TargetColor>('red')
@@ -307,7 +308,7 @@ function App() {
     isPlaying: false,
     volume: 40,
     muted: false,
-    filterAmount: 0,
+    filterAmount: 100,
     reverbAmount: 0,
     delayAmount: 0,
     bpm: 124,
@@ -413,6 +414,7 @@ function App() {
       setStatus('loading')
       calibrationRef.current = { ready: false, samples: 0, baselineY: 0.62, handScale: 0.16 }
       gestureLockRef.current = { mode: 'none', until: 0, confidence: 0 }
+      gestureCandidateRef.current = { mode: 'none', since: 0 }
       setMessage('Loading local hand + face models…')
       await loadVision()
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -556,12 +558,20 @@ function App() {
     audio.loop = true
     audio.volume = 1
     targetVolumeRef.current = 0.4
+    smoothedFilterRef.current = 1
+    smoothedReverbRef.current = 0
+    calibrationRef.current = { ready: false, samples: 0, baselineY: 0.62, handScale: 0.16 }
+    gestureLockRef.current = { mode: 'none', until: 0, confidence: 0 }
+    gestureCandidateRef.current = { mode: 'none', since: 0 }
     gainRef.current?.gain.setTargetAtTime(0.4, ctx.currentTime, 0.22)
+    filterRef.current?.frequency.setTargetAtTime(18000, ctx.currentTime, 0.12)
+    filterRef.current?.Q.setTargetAtTime(0.85, ctx.currentTime, 0.12)
     try {
       await audio.play()
     } catch {
-      setDj((current) => ({ ...current, aiStatus: 'Browser blocked autoplay. Press Play to start the deck.', isLoaded: true, isPlaying: false, trackName: file.name }))
+      setDj((current) => ({ ...current, aiStatus: 'Browser blocked autoplay. Press Play to start the deck.', isLoaded: true, isPlaying: false, trackName: file.name, filterAmount: 100, confidence: 0, gestureLocked: false, nextHint: 'Press Play, then show an open right palm to control volume.' }))
       setMode('music')
+      if (statusRef.current !== 'running' && statusRef.current !== 'loading') void startCamera()
       return
     }
     setDj((current) => ({
@@ -571,6 +581,9 @@ function App() {
       isPlaying: true,
       volume: 40,
       muted: false,
+      filterAmount: 100,
+      reverbAmount: 0,
+      delayAmount: 0,
       bpm: 124,
       energy: 48,
       gesture: 'Track loaded',
@@ -597,7 +610,7 @@ function App() {
     if (audio.paused) {
       try {
         await audio.play()
-        setDj((current) => ({ ...current, isPlaying: true, aiStatus: 'Listening to motion' }))
+        setDj((current) => ({ ...current, isPlaying: true, muted: false, aiStatus: 'Listening to motion' }))
       } catch {
         setDj((current) => ({ ...current, isPlaying: false, aiStatus: 'Press Play again or choose another audio file.' }))
       }
@@ -619,11 +632,14 @@ function App() {
   function toggleMute() {
     const ctx = audioCtxRef.current
     const gain = gainRef.current
+    const audio = audioRef.current
     if (!ctx || !gain) return
     setDj((current) => {
       const muted = !current.muted
       gain.gain.setTargetAtTime(muted ? 0 : targetVolumeRef.current, ctx.currentTime, 0.18)
-      return { ...current, muted, isPlaying: true, gesture: muted ? 'Closed fist hold — muted' : 'Mute released', activeControl: muted ? 'Muted' : 'Previous control held', aiStatus: 'Gesture locked', confidence: 100, gestureLocked: true, nextHint: muted ? 'Open controls stay held until you unmute.' : 'Choose a clear gesture to resume control.' }
+      if (muted) audio?.pause()
+      else void audio?.play().catch(() => undefined)
+      return { ...current, muted, isPlaying: muted ? false : !audio?.paused, gesture: muted ? 'Closed fist hold — muted/paused' : 'Mute released', activeControl: muted ? 'Muted / paused' : 'Previous control held', aiStatus: 'Gesture locked', confidence: 100, gestureLocked: true, nextHint: muted ? 'Hold fist again or press Unmute to resume.' : 'Choose a clear gesture to resume control.' }
     })
   }
 
@@ -684,20 +700,29 @@ function App() {
     const older = recent.find((point) => now - point.t > 240) ?? recent[0]
     const dx = wrist.x - older.x
 
+    const swipeConfidence = Math.abs(dx) > 0.19 && Math.abs(dx) > Math.abs(wrist.y - older.y) * 1.8 ? 0.82 : 0
     const candidates = [
+      { mode: 'swipe' as GestureMode, confidence: swipeConfidence },
       { mode: 'reverb' as GestureMode, confidence: bothHandsTogether ? clamp(0.66 + Math.min(0.28, Math.abs(twoHandDelta) * 5)) : 0 },
       { mode: 'filter' as GestureMode, confidence: isRightFist ? 0.86 : 0 },
       { mode: 'volume' as GestureMode, confidence: isRightOpenPalm ? 0.78 : 0 },
-      { mode: 'swipe' as GestureMode, confidence: Math.abs(dx) > 0.19 ? 0.74 : 0 },
     ]
     const confident = candidates.find((candidate) => candidate.confidence >= 0.68) ?? { mode: 'none' as GestureMode, confidence: 0 }
+    const candidate = gestureCandidateRef.current
+    if (candidate.mode !== confident.mode) {
+      gestureCandidateRef.current = { mode: confident.mode, since: now }
+    }
+    const candidateStableFor = now - gestureCandidateRef.current.since
     const locked = gestureLockRef.current.until > now
-    let activeMode = locked ? gestureLockRef.current.mode : confident.mode
+    let activeMode = locked ? gestureLockRef.current.mode : 'none'
     let confidence = locked ? Math.max(gestureLockRef.current.confidence, confident.confidence) : confident.confidence
+    const canInterrupt = confident.mode === 'swipe'
+    const lockTime = confident.mode === 'swipe' ? 720 : 560
 
-    if (!locked && confident.mode !== 'none') {
-      gestureLockRef.current = { mode: confident.mode, until: now + 520, confidence: confident.confidence }
+    if ((canInterrupt || !locked) && confident.mode !== 'none' && candidateStableFor > (confident.mode === 'swipe' ? 40 : 120)) {
+      gestureLockRef.current = { mode: confident.mode, until: now + lockTime, confidence: confident.confidence }
       activeMode = confident.mode
+      confidence = confident.confidence
     }
     if (!locked && confident.mode === 'none') {
       gestureLockRef.current = { mode: 'none', until: 0, confidence: 0 }
@@ -715,7 +740,7 @@ function App() {
 
     if (isRightFist) {
       fistStartedAtRef.current ??= now
-      if (now - fistStartedAtRef.current > 1500 && activeMode === 'filter') {
+      if (now - fistStartedAtRef.current > 1500) {
         fistStartedAtRef.current = now + 999999
         gestureLockRef.current = { mode: 'mute', until: now + 900, confidence: 1 }
         toggleMute()
@@ -725,11 +750,17 @@ function App() {
       fistStartedAtRef.current = null
     }
 
+    const canApplyMute = activeMode === 'mute' && isRightFist
     const canApplyReverb = activeMode === 'reverb' && bothHandsTogether
     const canApplyFilter = activeMode === 'filter' && isRightFist
     const canApplyVolume = activeMode === 'volume' && isRightOpenPalm
 
-    if (activeMode !== 'none' && confidence >= 0.68 && !canApplyReverb && !canApplyFilter && !canApplyVolume && activeMode !== 'swipe') {
+    if (canApplyMute && confidence >= 0.68) {
+      gesture = 'Closed fist hold — hold to mute/pause'
+      activeControl = 'Mute / pause armed'
+      aiStatus = 'Gesture locked'
+      nextHint = 'Keep fist closed for 1.5s to mute/pause. Rotate fist to use filter after release.'
+    } else if (activeMode !== 'none' && confidence >= 0.68 && !canApplyReverb && !canApplyFilter && !canApplyVolume && activeMode !== 'swipe') {
       gesture = 'Gesture locked — values held'
       activeControl = 'Waiting for clear shape'
       aiStatus = 'Gesture locked'
