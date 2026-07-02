@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import {
   DrawingUtils,
   FaceLandmarker,
@@ -39,7 +39,8 @@ type FingerState = Record<FingerName, boolean>
 type EffectMode = 'filter' | 'reverb' | 'delay'
 type GestureMode = 'none' | 'volume' | 'filter' | 'reverb' | 'mute' | 'swipe'
 type DeckControl = 'none' | 'volume' | 'filter' | 'reverb' | 'mute' | 'cue'
-type LabModuleId = 'music' | 'hands' | 'face' | 'object' | 'segment' | 'scene' | 'depth' | 'playground'
+type LabModuleId = 'segment' | 'depth' | 'hands' | 'music'
+type LabPoint = { x: number; y: number; displayX: number; displayY: number }
 
 type HandSummary = {
   id: string
@@ -133,19 +134,38 @@ const LAB_MODULES: Array<{
   id: LabModuleId
   title: string
   model: string
-  status: 'Live' | 'Experimental' | 'API-ready'
+  status: 'Live' | 'On-demand'
   description: string
   examples: string[]
 }> = [
-  { id: 'music', title: 'Music Studio', model: 'MediaPipe Hands', status: 'Live', description: 'Gesture-controlled DJ deck with selected controls.', examples: ['Volume hand ride', 'Filter knob', 'Cue jump'] },
-  { id: 'hands', title: 'Hand Studio', model: 'MediaPipe Hands', status: 'Live', description: 'Real-time hands, landmarks, fingers, pinch, fist, palm.', examples: ['Fingers up', 'Air mouse', 'Virtual piano'] },
-  { id: 'face', title: 'Face Studio', model: 'MediaPipe Face Mesh', status: 'Live', description: 'Lightweight face landmarks, smile, blink-style signals, expression cues.', examples: ['Smile detection', 'Blink to click', 'Avatar control'] },
-  { id: 'object', title: 'Object Studio', model: 'Grounding DINO', status: 'API-ready', description: 'Type what to find. Server inference hook ready for open-vocabulary detection.', examples: ['phone', 'coffee mug', 'red backpack'] },
-  { id: 'segment', title: 'Segment Studio', model: 'SAM 2', status: 'Experimental', description: 'Click or upload an image to prepare object segmentation workflow.', examples: ['chair cutout', 'mug mask', 'person isolate'] },
-  { id: 'scene', title: 'Scene Studio', model: 'Florence-2', status: 'API-ready', description: 'Caption, OCR, visual Q&A, and image understanding module shell.', examples: ['Describe scene', 'Read paper', 'What color is it?'] },
-  { id: 'depth', title: 'Depth Studio', model: 'Depth Anything V2', status: 'Experimental', description: 'Upload or capture an image and prepare depth-map inference.', examples: ['Room depth', 'Near/far map', 'AR overlay'] },
-  { id: 'playground', title: 'Playground', model: 'Composable pipeline', status: 'Live', description: 'Combine lightweight hands, face, color, and motion. Heavy models are opt-in.', examples: ['Hands + face', 'Color + motion', 'Future full stack'] },
+  { id: 'segment', title: 'Segment', model: 'SlimSAM / Segment Anything', status: 'On-demand', description: 'Upload or capture a frame, click the object, and generate a real segmentation mask in the browser.', examples: ['Click person', 'Click mug', 'Click chair'] },
+  { id: 'depth', title: 'Depth', model: 'Depth Anything V2 Small', status: 'On-demand', description: 'Turn an uploaded/captured frame into a real near/far depth map in the browser.', examples: ['Room depth', 'Desk depth', 'AR map'] },
+  { id: 'hands', title: 'Hands', model: 'MediaPipe Hands', status: 'Live', description: 'Real-time hands, landmarks, fingers, pinch, fist, and palm signals.', examples: ['Fingers up', 'Air mouse', 'Gesture test'] },
+  { id: 'music', title: 'Conductor', model: 'MediaPipe Hands + Web Audio', status: 'Live', description: 'Gesture-controlled DJ deck with selected controls.', examples: ['Volume hand ride', 'Filter knob', 'Cue jump'] },
 ]
+
+const SAM_MODEL_ID = 'Xenova/slimsam-77-uniform'
+const DEPTH_MODEL_ID = 'onnx-community/depth-anything-v2-small'
+
+let samLoader: Promise<{ model: any; processor: any; RawImage: any }> | null = null
+let depthLoader: Promise<{ estimator: any; RawImage: any }> | null = null
+
+async function loadSam() {
+  samLoader ??= import('@huggingface/transformers').then(async ({ SamModel, AutoProcessor, RawImage }) => ({
+    model: await SamModel.from_pretrained(SAM_MODEL_ID, { dtype: 'q8', device: 'wasm' } as any),
+    processor: await AutoProcessor.from_pretrained(SAM_MODEL_ID),
+    RawImage,
+  }))
+  return samLoader
+}
+
+async function loadDepth() {
+  depthLoader ??= import('@huggingface/transformers').then(async ({ pipeline, RawImage }) => ({
+    estimator: await pipeline('depth-estimation', DEPTH_MODEL_ID, { dtype: 'q8', device: 'wasm' } as any),
+    RawImage,
+  }))
+  return depthLoader
+}
 
 function clamp(value: number, min = 0, max = 1) {
   return Math.max(min, Math.min(max, value))
@@ -340,10 +360,12 @@ function App() {
   const [status, setStatus] = useState<CameraStatus>('idle')
   const [mode, setMode] = useState<VisionMode>('scan')
   const [targetColor, setTargetColor] = useState<TargetColor>('red')
-  const [labModule, setLabModule] = useState<LabModuleId>('hands')
-  const [labPrompt, setLabPrompt] = useState('phone')
+  const [labModule, setLabModule] = useState<LabModuleId>('segment')
+  const [labPrompt, setLabPrompt] = useState('Click an object')
   const [labUpload, setLabUpload] = useState<string | null>(null)
-  const [labResult, setLabResult] = useState('Choose a module. Camera models run locally; heavier models are lazy/API-ready.')
+  const [labArtifact, setLabArtifact] = useState<string | null>(null)
+  const [labPoint, setLabPoint] = useState<LabPoint | null>(null)
+  const [labResult, setLabResult] = useState('Two real model demos: Segment Anything and Depth Anything. Upload/capture a frame to start.')
   const [labBusy, setLabBusy] = useState(false)
   const [message, setMessage] = useState('Start camera. Hands and face can run together.')
   const [dj, setDj] = useState<DjState>({
@@ -1187,12 +1209,8 @@ function App() {
 
   const modes: { id: VisionMode; title: string }[] = [
     { id: 'lab', title: 'Vision Lab' },
-    { id: 'music', title: 'Music' },
-    { id: 'scan', title: 'Hands + Face' },
-    { id: 'fingers', title: 'Fingers' },
-    { id: 'face', title: 'Face' },
-    { id: 'motion', title: 'Motion' },
-    { id: 'color', title: 'Color' },
+    { id: 'music', title: 'Conductor' },
+    { id: 'scan', title: 'Camera' },
   ]
 
   const graphPoints = analysis.motionHistory.map((value, index) => {
@@ -1202,9 +1220,115 @@ function App() {
   }).join(' ')
 
 
-  const activeLab = LAB_MODULES.find((item) => item.id === labModule) ?? LAB_MODULES[1]
-  const labNeedsCamera = labModule === 'hands' || labModule === 'face' || labModule === 'playground'
+  const activeLab = LAB_MODULES.find((item) => item.id === labModule) ?? LAB_MODULES[0]
+  const labNeedsCamera = labModule === 'hands' || labModule === 'music'
   const labIsHeavy = activeLab.status !== 'Live'
+
+  async function imageUrlToCanvas(url: string) {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.src = url
+    await img.decode()
+    const canvas = document.createElement('canvas')
+    const maxSide = 960
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight))
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale))
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
+    canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height)
+    return canvas
+  }
+
+  function videoToCanvas() {
+    const video = videoRef.current
+    if (!video?.videoWidth || !video.videoHeight) return null
+    const canvas = document.createElement('canvas')
+    const maxSide = 960
+    const scale = Math.min(1, maxSide / Math.max(video.videoWidth, video.videoHeight))
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale))
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale))
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    ctx.translate(canvas.width, 0)
+    ctx.scale(-1, 1)
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    return canvas
+  }
+
+  async function getLabSourceCanvas() {
+    if (labUpload) return imageUrlToCanvas(labUpload)
+    const canvas = videoToCanvas()
+    if (canvas) return canvas
+    throw new Error('Upload an image or start the camera first.')
+  }
+
+  function drawMaskOverlay(source: HTMLCanvasElement, maskTensor: any, maskIndex: number, score: number) {
+    const output = document.createElement('canvas')
+    output.width = source.width
+    output.height = source.height
+    const ctx = output.getContext('2d')
+    if (!ctx) return source.toDataURL('image/png')
+    ctx.drawImage(source, 0, 0)
+
+    const dims: number[] = maskTensor.dims ?? []
+    const data: Uint8Array | Int8Array | Float32Array = maskTensor.data
+    const height = dims[dims.length - 2] ?? source.height
+    const width = dims[dims.length - 1] ?? source.width
+    const masks = dims.length >= 4 ? dims[dims.length - 3] : 1
+    const offset = Math.min(maskIndex, masks - 1) * width * height
+    const maskCanvas = document.createElement('canvas')
+    maskCanvas.width = width
+    maskCanvas.height = height
+    const maskCtx = maskCanvas.getContext('2d')
+    const imageData = maskCtx?.createImageData(width, height)
+    if (maskCtx && imageData) {
+      for (let index = 0; index < width * height; index += 1) {
+        const active = Number(data[offset + index]) > 0
+        imageData.data[index * 4] = 88
+        imageData.data[index * 4 + 1] = 92
+        imageData.data[index * 4 + 2] = 255
+        imageData.data[index * 4 + 3] = active ? 118 : 0
+      }
+      maskCtx.putImageData(imageData, 0, 0)
+      ctx.drawImage(maskCanvas, 0, 0, source.width, source.height)
+    }
+
+    if (labPoint) {
+      const markerX = labPoint.displayX * source.width
+      const markerY = labPoint.displayY * source.height
+      ctx.fillStyle = '#ffffff'
+      ctx.strokeStyle = '#585cff'
+      ctx.lineWidth = 5
+      ctx.beginPath()
+      ctx.arc(markerX, markerY, 10, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.stroke()
+    }
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.78)'
+    ctx.fillRect(16, 16, 190, 38)
+    ctx.fillStyle = '#fff'
+    ctx.font = '700 15px system-ui'
+    ctx.fillText(`SAM mask · ${Math.round(score * 100)}%`, 30, 41)
+    return output.toDataURL('image/png')
+  }
+
+  function drawDepthMap(depthImage: any) {
+    const canvas = document.createElement('canvas')
+    canvas.width = depthImage.width
+    canvas.height = depthImage.height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    const imageData = ctx.createImageData(canvas.width, canvas.height)
+    const channels = depthImage.channels || 1
+    for (let i = 0; i < canvas.width * canvas.height; i += 1) {
+      const value = depthImage.data[i * channels] ?? depthImage.data[i] ?? 0
+      imageData.data[i * 4] = Math.min(255, value * 0.72 + 24)
+      imageData.data[i * 4 + 1] = Math.min(255, value * 0.9 + 32)
+      imageData.data[i * 4 + 2] = Math.min(255, 255 - value * 0.38)
+      imageData.data[i * 4 + 3] = 255
+    }
+    ctx.putImageData(imageData, 0, 0)
+    return canvas.toDataURL('image/png')
+  }
 
   function handleLabUpload(file: File | undefined) {
     if (!file) return
@@ -1214,25 +1338,62 @@ function App() {
     }
     if (labUpload) URL.revokeObjectURL(labUpload)
     setLabUpload(URL.createObjectURL(file))
-    setLabResult('Image ready. Run the module when you are ready.')
+    setLabArtifact(null)
+    setLabPoint(null)
+    setLabResult(labModule === 'segment' ? 'Image ready. Click the object you want to segment.' : 'Image ready. Run the model when you are ready.')
   }
 
-  function runLabModel() {
+  function handleLabViewerClick(event: MouseEvent<HTMLDivElement>) {
+    if (labModule !== 'segment') return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const displayX = clamp((event.clientX - rect.left) / rect.width)
+    const displayY = clamp((event.clientY - rect.top) / rect.height)
+    setLabArtifact(null)
+    setLabPoint({ x: Math.round(displayX * 960), y: Math.round(displayY * 960), displayX, displayY })
+    setLabResult('Point selected. Run Segment to create the mask.')
+  }
+
+  async function runLabModel() {
+    if (labModule === 'music') {
+      setMode('music')
+      return
+    }
+    if (labModule === 'hands') {
+      setLabResult(analysis.hands.length ? `${analysis.hands.length} hand(s) tracked · ${analysis.fingerCount ?? 0} fingers · ${analysis.fps || '—'} FPS.` : 'No hand yet. Start camera and improve lighting.')
+      return
+    }
+
     setLabBusy(true)
-    window.setTimeout(() => {
-      const messages: Record<LabModuleId, string> = {
-        music: 'Open Music Studio to use the full gesture deck.',
-        hands: analysis.hands.length ? `${analysis.hands.length} hand(s) tracked · ${analysis.fingerCount ?? 0} fingers · ${analysis.fps || '—'} FPS.` : 'No hand yet. Start camera and improve lighting.',
-        face: analysis.count ? `${analysis.label} · Smile ${analysis.smileScore}% · Eyes open ${analysis.eyeOpenScore}%.` : 'No face centered yet. Start camera and face the lens.',
-        object: `Grounding DINO request prepared for “${labPrompt}”. Server endpoint can return boxes + scores here.`,
-        segment: labUpload ? 'SAM 2 mask request prepared. Click-point segmentation endpoint can fill this output.' : 'Upload an image or capture a frame before segmenting.',
-        scene: labUpload ? 'Florence-2 caption/OCR/VQA request prepared for uploaded image.' : 'Upload or capture an image before asking Florence-2.',
-        depth: labUpload ? 'Depth Anything V2 request prepared. Depth map will render here when backend is connected.' : 'Upload or capture an image before depth inference.',
-        playground: `Live lightweight stack: ${analysis.hands.length} hands · ${analysis.count} faces · motion ${analysis.motionScore}/100 · ${targetColor} ${analysis.targetCoverage}%.`,
+    setLabArtifact(null)
+    try {
+      const source = await getLabSourceCanvas()
+      if (labModule === 'segment') {
+        const point = labPoint ?? { x: Math.round(source.width / 2), y: Math.round(source.height / 2), displayX: 0.5, displayY: 0.5 }
+        setLabResult('Loading SlimSAM. First run downloads the model; later runs use browser cache.')
+        const { model, processor, RawImage } = await loadSam()
+        const rawImage = RawImage.fromCanvas(source)
+        const input_points = [[[Math.round(point.displayX * source.width), Math.round(point.displayY * source.height)]]]
+        const inputs = await processor(rawImage, { input_points })
+        const outputs = await model(inputs)
+        const masks = await processor.post_process_masks(outputs.pred_masks, inputs.original_sizes, inputs.reshaped_input_sizes)
+        const scores = Array.from(outputs.iou_scores.data as Float32Array | number[]).map(Number)
+        const bestIndex = scores.reduce((best, value, index) => value > scores[best] ? index : best, 0)
+        setLabArtifact(drawMaskOverlay(source, masks[0], bestIndex, scores[bestIndex] ?? 0))
+        setLabResult(`Segmented with SlimSAM. Best mask confidence: ${Math.round((scores[bestIndex] ?? 0) * 100)}%.`)
+      } else if (labModule === 'depth') {
+        setLabResult('Loading Depth Anything V2 Small. First run may take a minute.')
+        const { estimator, RawImage } = await loadDepth()
+        const rawImage = RawImage.fromCanvas(source)
+        const output = await estimator(rawImage)
+        const depthUrl = drawDepthMap(output.depth)
+        if (depthUrl) setLabArtifact(depthUrl)
+        setLabResult(`Depth map generated locally: ${output.depth.width}×${output.depth.height}. Brighter/cooler areas are closer.`)
       }
-      setLabResult(messages[labModule])
+    } catch (error) {
+      setLabResult(error instanceof Error ? error.message : 'Model run failed. Try a smaller image or refresh.')
+    } finally {
       setLabBusy(false)
-    }, labIsHeavy ? 650 : 180)
+    }
   }
 
   if (mode === 'lab') {
@@ -1242,7 +1403,7 @@ function App() {
           <div className="lab-brand"><span>VL</span><div><b>Vision Lab</b><small>Vision is the interface.</small></div></div>
           <nav className="lab-nav" aria-label="Vision Lab modules">
             {LAB_MODULES.map((item) => (
-              <button key={item.id} type="button" className={labModule === item.id ? 'active' : ''} onClick={() => { setLabModule(item.id); setLabResult(item.status === 'Live' ? 'Camera-ready module selected.' : 'Experimental module selected. Model will load only when run.'); }}>
+              <button key={item.id} type="button" className={labModule === item.id ? 'active' : ''} onClick={() => { setLabModule(item.id); setLabArtifact(null); setLabPoint(null); setLabResult(item.status === 'Live' ? 'Camera-ready module selected.' : 'Real browser model selected. Upload/capture a frame, then run it.'); }}>
                 <span>{item.title}</span><small>{item.model}</small>
               </button>
             ))}
@@ -1257,23 +1418,24 @@ function App() {
           </header>
 
           <div className="lab-stage">
-            <div className="lab-viewer">
-              {(labNeedsCamera || !labUpload) ? <><video ref={videoRef} className="camera" playsInline muted /><canvas ref={canvasRef} className="overlay" /></> : <img src={labUpload} alt="Uploaded preview" />}
+            <div className={`lab-viewer ${labModule === 'segment' ? 'clickable' : ''}`} onClick={handleLabViewerClick}>
+              {labArtifact ? <img src={labArtifact} alt="Model output" /> : (labNeedsCamera || !labUpload) ? <><video ref={videoRef} className="camera" playsInline muted /><canvas ref={canvasRef} className="overlay" /></> : <img src={labUpload} alt="Uploaded preview" />}
               {status !== 'running' && labNeedsCamera && <div className="lab-empty">Start camera to run this module.</div>}
               {!labNeedsCamera && !labUpload && <div className="lab-empty">Upload an image or capture a frame.</div>}
+              {labModule === 'segment' && labUpload && !labArtifact && labPoint && <span className="lab-point" style={{ left: `${labPoint.displayX * 100}%`, top: `${labPoint.displayY * 100}%` }} />}
               <div className="lab-overlay-metrics"><span>{analysis.fps || '—'} FPS</span><span>{analysis.hands.length} hands</span><span>{analysis.count} faces</span></div>
             </div>
             <aside className="lab-panel">
-              <label className="lab-field">Prompt / target<input value={labPrompt} onChange={(event) => setLabPrompt(event.target.value)} placeholder="Find phone, coffee, keyboard…" /></label>
+              <label className="lab-field">Target note<input value={labPrompt} onChange={(event) => setLabPrompt(event.target.value)} placeholder="Click object, room depth, desk depth…" /></label>
               <div className="lab-actions">
-                {labNeedsCamera && <button type="button" onClick={startCamera} disabled={status === 'loading' || status === 'running'}>{status === 'loading' ? 'Loading…' : 'Start Camera'}</button>}
+                {(labNeedsCamera || !labUpload) && <button type="button" onClick={startCamera} disabled={status === 'loading' || status === 'running'}>{status === 'loading' ? 'Loading…' : 'Start Camera'}</button>}
                 <label className="lab-upload">Upload<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => handleLabUpload(event.target.files?.[0])} /></label>
-                <button type="button" onClick={runLabModel} disabled={labBusy}>{labBusy ? 'Running…' : 'Run Model'}</button>
-                <button type="button" className="secondary" onClick={() => { setLabResult('Cleared. Choose input and run again.'); setLabUpload(null); }}>Clear</button>
+                <button type="button" onClick={runLabModel} disabled={labBusy}>{labBusy ? 'Running…' : labModule === 'segment' ? 'Run Segment' : labModule === 'depth' ? 'Run Depth' : 'Run'}</button>
+                <button type="button" className="secondary" onClick={() => { setLabResult('Cleared. Choose input and run again.'); if (labUpload) URL.revokeObjectURL(labUpload); setLabUpload(null); setLabArtifact(null); setLabPoint(null); }}>Clear</button>
               </div>
               <div className="lab-result"><span>Output</span><strong>{labResult}</strong></div>
               <div className="lab-examples"><span>Examples</span>{activeLab.examples.map((example) => <button type="button" key={example} onClick={() => setLabPrompt(example)}>{example}</button>)}</div>
-              <div className="lab-runtime"><div><span>Status</span><b>{labBusy ? 'Loading' : activeLab.status}</b></div><div><span>Latency</span><b>{labIsHeavy ? 'API' : '<30ms*'}</b></div><div><span>Memory</span><b>Lazy</b></div></div>
+              <div className="lab-runtime"><div><span>Status</span><b>{labBusy ? 'Loading' : activeLab.status}</b></div><div><span>Runtime</span><b>{labIsHeavy ? 'WASM' : 'Live'}</b></div><div><span>Models</span><b>{labIsHeavy ? 'Lazy' : 'Ready'}</b></div></div>
             </aside>
           </div>
         </section>
