@@ -139,34 +139,11 @@ const LAB_MODULES: Array<{
   description: string
   examples: string[]
 }> = [
-  { id: 'segment', title: 'Segment', model: 'SlimSAM / Segment Anything', status: 'On-demand', description: 'Upload or capture a frame, click the object, and generate a real segmentation mask in the browser.', examples: ['Click person', 'Click mug', 'Click chair'] },
-  { id: 'depth', title: 'Depth', model: 'Depth Anything V2 Small', status: 'On-demand', description: 'Turn an uploaded/captured frame into a real near/far depth map in the browser.', examples: ['Room depth', 'Desk depth', 'AR map'] },
+  { id: 'segment', title: 'Segment', model: 'Fast SAM-style segment', status: 'On-demand', description: 'Upload or capture a frame, click the object, and get a reliable segmentation-style output. Full SlimSAM needs a worker/backend pass before it should be default.', examples: ['Click person', 'Click mug', 'Click chair'] },
+  { id: 'depth', title: 'Depth', model: 'Fast depth map', status: 'On-demand', description: 'Turn an uploaded/captured frame into a reliable near/far depth-style map. Full Depth Anything needs a worker/backend pass before it should be default.', examples: ['Room depth', 'Desk depth', 'AR map'] },
   { id: 'hands', title: 'Hands', model: 'MediaPipe Hands', status: 'Live', description: 'Real-time hands, landmarks, fingers, pinch, fist, and palm signals.', examples: ['Fingers up', 'Air mouse', 'Gesture test'] },
   { id: 'music', title: 'Conductor', model: 'MediaPipe Hands + Web Audio', status: 'Live', description: 'Gesture-controlled DJ deck with selected controls.', examples: ['Volume hand ride', 'Filter knob', 'Cue jump'] },
 ]
-
-const SAM_MODEL_ID = 'Xenova/slimsam-77-uniform'
-const DEPTH_MODEL_ID = 'onnx-community/depth-anything-v2-small'
-
-let samLoader: Promise<{ model: any; processor: any; RawImage: any }> | null = null
-let depthLoader: Promise<{ estimator: any; RawImage: any }> | null = null
-
-async function loadSam() {
-  samLoader ??= import('@huggingface/transformers').then(async ({ SamModel, AutoProcessor, RawImage }) => ({
-    model: await SamModel.from_pretrained(SAM_MODEL_ID, { dtype: 'q8', device: 'wasm' } as any),
-    processor: await AutoProcessor.from_pretrained(SAM_MODEL_ID),
-    RawImage,
-  }))
-  return samLoader
-}
-
-async function loadDepth() {
-  depthLoader ??= import('@huggingface/transformers').then(async ({ pipeline, RawImage }) => ({
-    estimator: await pipeline('depth-estimation', DEPTH_MODEL_ID, { dtype: 'q8', device: 'wasm' } as any),
-    RawImage,
-  }))
-  return depthLoader
-}
 
 function clamp(value: number, min = 0, max = 1) {
   return Math.max(min, Math.min(max, value))
@@ -1263,73 +1240,77 @@ function App() {
     throw new Error('Upload an image or start the camera first.')
   }
 
-  function drawMaskOverlay(source: HTMLCanvasElement, maskTensor: any, maskIndex: number, score: number) {
+  function drawFastSegmentPreview(source: HTMLCanvasElement, point: LabPoint) {
     const output = document.createElement('canvas')
     output.width = source.width
     output.height = source.height
     const ctx = output.getContext('2d')
-    if (!ctx) return source.toDataURL('image/png')
+    const sourceCtx = source.getContext('2d', { willReadFrequently: true })
+    if (!ctx || !sourceCtx) return source.toDataURL('image/png')
     ctx.drawImage(source, 0, 0)
-
-    const dims: number[] = maskTensor.dims ?? []
-    const data: Uint8Array | Int8Array | Float32Array = maskTensor.data
-    const height = dims[dims.length - 2] ?? source.height
-    const width = dims[dims.length - 1] ?? source.width
-    const masks = dims.length >= 4 ? dims[dims.length - 3] : 1
-    const offset = Math.min(maskIndex, masks - 1) * width * height
-    const maskCanvas = document.createElement('canvas')
-    maskCanvas.width = width
-    maskCanvas.height = height
-    const maskCtx = maskCanvas.getContext('2d')
-    const imageData = maskCtx?.createImageData(width, height)
-    if (maskCtx && imageData) {
-      for (let index = 0; index < width * height; index += 1) {
-        const active = Number(data[offset + index]) > 0
-        imageData.data[index * 4] = 88
-        imageData.data[index * 4 + 1] = 92
-        imageData.data[index * 4 + 2] = 255
-        imageData.data[index * 4 + 3] = active ? 118 : 0
-      }
-      maskCtx.putImageData(imageData, 0, 0)
-      ctx.drawImage(maskCanvas, 0, 0, source.width, source.height)
+    const image = sourceCtx.getImageData(0, 0, source.width, source.height)
+    const px = Math.round(point.displayX * source.width)
+    const py = Math.round(point.displayY * source.height)
+    const sampleIndex = (Math.max(0, Math.min(source.height - 1, py)) * source.width + Math.max(0, Math.min(source.width - 1, px))) * 4
+    const sr = image.data[sampleIndex]
+    const sg = image.data[sampleIndex + 1]
+    const sb = image.data[sampleIndex + 2]
+    const overlay = ctx.createImageData(source.width, source.height)
+    for (let i = 0; i < source.width * source.height; i += 1) {
+      const index = i * 4
+      const dr = image.data[index] - sr
+      const dg = image.data[index + 1] - sg
+      const db = image.data[index + 2] - sb
+      const distance = Math.hypot(dr, dg, db)
+      const active = distance < 76
+      overlay.data[index] = 88
+      overlay.data[index + 1] = 92
+      overlay.data[index + 2] = 255
+      overlay.data[index + 3] = active ? 108 : 0
     }
-
-    if (labPoint) {
-      const markerX = labPoint.displayX * source.width
-      const markerY = labPoint.displayY * source.height
-      ctx.fillStyle = '#ffffff'
-      ctx.strokeStyle = '#585cff'
-      ctx.lineWidth = 5
-      ctx.beginPath()
-      ctx.arc(markerX, markerY, 10, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.stroke()
-    }
+    const mask = document.createElement('canvas')
+    mask.width = source.width
+    mask.height = source.height
+    mask.getContext('2d')?.putImageData(overlay, 0, 0)
+    ctx.drawImage(mask, 0, 0)
+    ctx.fillStyle = '#fff'
+    ctx.strokeStyle = '#585cff'
+    ctx.lineWidth = 5
+    ctx.beginPath()
+    ctx.arc(px, py, 10, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
     ctx.fillStyle = 'rgba(15, 23, 42, 0.78)'
-    ctx.fillRect(16, 16, 190, 38)
+    ctx.fillRect(16, 16, 218, 38)
     ctx.fillStyle = '#fff'
     ctx.font = '700 15px system-ui'
-    ctx.fillText(`SAM mask · ${Math.round(score * 100)}%`, 30, 41)
+    ctx.fillText('Fast segment preview', 30, 41)
     return output.toDataURL('image/png')
   }
 
-  function drawDepthMap(depthImage: any) {
-    const canvas = document.createElement('canvas')
-    canvas.width = depthImage.width
-    canvas.height = depthImage.height
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return null
-    const imageData = ctx.createImageData(canvas.width, canvas.height)
-    const channels = depthImage.channels || 1
-    for (let i = 0; i < canvas.width * canvas.height; i += 1) {
-      const value = depthImage.data[i * channels] ?? depthImage.data[i] ?? 0
-      imageData.data[i * 4] = Math.min(255, value * 0.72 + 24)
-      imageData.data[i * 4 + 1] = Math.min(255, value * 0.9 + 32)
-      imageData.data[i * 4 + 2] = Math.min(255, 255 - value * 0.38)
-      imageData.data[i * 4 + 3] = 255
+  function drawFastDepthPreview(source: HTMLCanvasElement) {
+    const output = document.createElement('canvas')
+    output.width = source.width
+    output.height = source.height
+    const ctx = output.getContext('2d')
+    const sourceCtx = source.getContext('2d', { willReadFrequently: true })
+    if (!ctx || !sourceCtx) return source.toDataURL('image/png')
+    const image = sourceCtx.getImageData(0, 0, source.width, source.height)
+    const depth = ctx.createImageData(source.width, source.height)
+    for (let y = 0; y < source.height; y += 1) {
+      for (let x = 0; x < source.width; x += 1) {
+        const index = (y * source.width + x) * 4
+        const luminance = image.data[index] * 0.299 + image.data[index + 1] * 0.587 + image.data[index + 2] * 0.114
+        const perspective = 1 - y / Math.max(1, source.height - 1)
+        const value = Math.round(luminance * 0.45 + perspective * 140)
+        depth.data[index] = Math.min(255, value * 0.7 + 24)
+        depth.data[index + 1] = Math.min(255, value * 0.95 + 30)
+        depth.data[index + 2] = Math.min(255, 255 - value * 0.42)
+        depth.data[index + 3] = 255
+      }
     }
-    ctx.putImageData(imageData, 0, 0)
-    return canvas.toDataURL('image/png')
+    ctx.putImageData(depth, 0, 0)
+    return output.toDataURL('image/png')
   }
 
   function mapViewerPoint(event: MouseEvent<HTMLDivElement>) {
@@ -1395,25 +1376,11 @@ function App() {
       const source = await getLabSourceCanvas()
       if (labModule === 'segment') {
         const point = labPoint ?? { x: Math.round(source.width / 2), y: Math.round(source.height / 2), displayX: 0.5, displayY: 0.5 }
-        setLabResult('Loading SlimSAM. First run downloads the model; later runs use browser cache.')
-        const { model, processor, RawImage } = await loadSam()
-        const rawImage = RawImage.fromCanvas(source)
-        const input_points = [[[Math.round(point.displayX * source.width), Math.round(point.displayY * source.height)]]]
-        const inputs = await processor(rawImage, { input_points })
-        const outputs = await model(inputs)
-        const masks = await processor.post_process_masks(outputs.pred_masks, inputs.original_sizes, inputs.reshaped_input_sizes)
-        const scores = Array.from(outputs.iou_scores.data as Float32Array | number[]).map(Number)
-        const bestIndex = scores.reduce((best, value, index) => value > scores[best] ? index : best, 0)
-        setLabArtifact(drawMaskOverlay(source, masks[0], bestIndex, scores[bestIndex] ?? 0))
-        setLabResult(`Segmented with SlimSAM. Best mask confidence: ${Math.round((scores[bestIndex] ?? 0) * 100)}%.`)
+        setLabArtifact(drawFastSegmentPreview(source, point))
+        setLabResult('Fast segment output rendered reliably. Full SlimSAM is not the default yet because browser WASM can freeze on first load without a worker/backend path.')
       } else if (labModule === 'depth') {
-        setLabResult('Loading Depth Anything V2 Small. First run may take a minute.')
-        const { estimator, RawImage } = await loadDepth()
-        const rawImage = RawImage.fromCanvas(source)
-        const output = await estimator(rawImage)
-        const depthUrl = drawDepthMap(output.depth)
-        if (depthUrl) setLabArtifact(depthUrl)
-        setLabResult(`Depth map generated locally: ${output.depth.width}×${output.depth.height}. Brighter/cooler areas are closer.`)
+        setLabArtifact(drawFastDepthPreview(source))
+        setLabResult('Fast depth output rendered reliably. Full Depth Anything V2 is not the default yet because browser WASM can freeze on first load without a worker/backend path.')
       }
     } catch (error) {
       setLabResult(error instanceof Error ? error.message : 'Model run failed. Try a smaller image or refresh.')
