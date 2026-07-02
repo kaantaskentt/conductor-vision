@@ -41,6 +41,7 @@ type GestureMode = 'none' | 'volume' | 'filter' | 'reverb' | 'mute' | 'swipe'
 type DeckControl = 'none' | 'volume' | 'filter' | 'reverb' | 'mute' | 'cue'
 type LabModuleId = 'segment' | 'depth' | 'hands' | 'music'
 type LabPoint = { x: number; y: number; displayX: number; displayY: number }
+type LabSourceSize = { width: number; height: number }
 
 type HandSummary = {
   id: string
@@ -365,6 +366,7 @@ function App() {
   const [labUpload, setLabUpload] = useState<string | null>(null)
   const [labArtifact, setLabArtifact] = useState<string | null>(null)
   const [labPoint, setLabPoint] = useState<LabPoint | null>(null)
+  const [labSourceSize, setLabSourceSize] = useState<LabSourceSize | null>(null)
   const [labResult, setLabResult] = useState('Two real model demos: Segment Anything and Depth Anything. Upload/capture a frame to start.')
   const [labBusy, setLabBusy] = useState(false)
   const [message, setMessage] = useState('Start camera. Hands and face can run together.')
@@ -1330,6 +1332,27 @@ function App() {
     return canvas.toDataURL('image/png')
   }
 
+  function mapViewerPoint(event: MouseEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect()
+    const source = labUpload
+      ? labSourceSize
+      : videoRef.current?.videoWidth && videoRef.current.videoHeight
+        ? { width: videoRef.current.videoWidth, height: videoRef.current.videoHeight }
+        : labSourceSize
+    const aspect = source ? source.width / source.height : rect.width / rect.height
+    let contentWidth = rect.width
+    let contentHeight = rect.width / aspect
+    if (contentHeight > rect.height) {
+      contentHeight = rect.height
+      contentWidth = rect.height * aspect
+    }
+    const left = (rect.width - contentWidth) / 2
+    const top = (rect.height - contentHeight) / 2
+    const displayX = clamp((event.clientX - rect.left - left) / contentWidth)
+    const displayY = clamp((event.clientY - rect.top - top) / contentHeight)
+    return { displayX, displayY }
+  }
+
   function handleLabUpload(file: File | undefined) {
     if (!file) return
     if (!file.type.startsWith('image/')) {
@@ -1337,17 +1360,20 @@ function App() {
       return
     }
     if (labUpload) URL.revokeObjectURL(labUpload)
-    setLabUpload(URL.createObjectURL(file))
+    const url = URL.createObjectURL(file)
+    setLabUpload(url)
     setLabArtifact(null)
     setLabPoint(null)
+    setLabSourceSize(null)
+    const image = new Image()
+    image.onload = () => setLabSourceSize({ width: image.naturalWidth, height: image.naturalHeight })
+    image.src = url
     setLabResult(labModule === 'segment' ? 'Image ready. Click the object you want to segment.' : 'Image ready. Run the model when you are ready.')
   }
 
   function handleLabViewerClick(event: MouseEvent<HTMLDivElement>) {
     if (labModule !== 'segment') return
-    const rect = event.currentTarget.getBoundingClientRect()
-    const displayX = clamp((event.clientX - rect.left) / rect.width)
-    const displayY = clamp((event.clientY - rect.top) / rect.height)
+    const { displayX, displayY } = mapViewerPoint(event)
     setLabArtifact(null)
     setLabPoint({ x: Math.round(displayX * 960), y: Math.round(displayY * 960), displayX, displayY })
     setLabResult('Point selected. Run Segment to create the mask.')
@@ -1431,7 +1457,7 @@ function App() {
                 {(labNeedsCamera || !labUpload) && <button type="button" onClick={startCamera} disabled={status === 'loading' || status === 'running'}>{status === 'loading' ? 'Loading…' : 'Start Camera'}</button>}
                 <label className="lab-upload">Upload<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => handleLabUpload(event.target.files?.[0])} /></label>
                 <button type="button" onClick={runLabModel} disabled={labBusy}>{labBusy ? 'Running…' : labModule === 'segment' ? 'Run Segment' : labModule === 'depth' ? 'Run Depth' : 'Run'}</button>
-                <button type="button" className="secondary" onClick={() => { setLabResult('Cleared. Choose input and run again.'); if (labUpload) URL.revokeObjectURL(labUpload); setLabUpload(null); setLabArtifact(null); setLabPoint(null); }}>Clear</button>
+                <button type="button" className="secondary" onClick={() => { setLabResult('Cleared. Choose input and run again.'); if (labUpload) URL.revokeObjectURL(labUpload); setLabUpload(null); setLabArtifact(null); setLabPoint(null); setLabSourceSize(null); }}>Clear</button>
               </div>
               <div className="lab-result"><span>Output</span><strong>{labResult}</strong></div>
               <div className="lab-examples"><span>Examples</span>{activeLab.examples.map((example) => <button type="button" key={example} onClick={() => setLabPrompt(example)}>{example}</button>)}</div>
