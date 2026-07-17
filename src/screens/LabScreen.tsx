@@ -49,7 +49,7 @@ export function LabScreen({ vision }: { vision: ReturnType<typeof useVisionRunti
       objectUrlRef.current = url
       setSource(url)
       setResult(null)
-      setSourceName(file.name)
+      setSourceName('Uploaded image')
       setMessage('Image ready. Run an honest local preview.')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'The image could not be loaded.')
@@ -164,7 +164,10 @@ export function LabScreen({ vision }: { vision: ReturnType<typeof useVisionRunti
         <div className="lab-workspace">
           <div className="lab-canvas">
             {result || source ? (
-              <img src={result ?? source ?? ''} alt={result ? `${study} preview` : sourceName} />
+              <img
+                src={result ?? source ?? ''}
+                alt={result ? `${study} preview` : 'Uploaded source'}
+              />
             ) : (
               <CameraStage
                 compact
