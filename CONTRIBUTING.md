@@ -22,7 +22,7 @@ npm run build
 npm audit --omit=dev --audit-level=high
 ```
 
-For interface changes, verify Conductor, Vision, and Lab at desktop and mobile widths. Do not commit camera captures, audio files, generated build output, secrets, or local environment files.
+For interface changes, verify Vision and DJ Room at desktop and mobile widths. Do not commit camera captures, audio files, generated build output, secrets, or local environment files.
 
 ## Product principles
 

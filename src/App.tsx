@@ -5,25 +5,25 @@ import {
   PrivacyFooter,
   type Screen,
 } from './components/AppShell'
-import { useConductorAudio } from './hooks/useConductorAudio'
+import { useDjMixer } from './hooks/useDjMixer'
 import { useVisionRuntime } from './hooks/useVisionRuntime'
 import type { TargetColor } from './lib/vision'
-import { ConductorScreen } from './screens/ConductorScreen'
-import { LabScreen } from './screens/LabScreen'
+import { DjRoomScreen } from './screens/DjRoomScreen'
 import { VisionScreen } from './screens/VisionScreen'
 
 function App() {
-  const [screen, setScreen] = useState<Screen>('conductor')
+  const [screen, setScreen] = useState<Screen>('dj-room')
   const [targetColor, setTargetColor] = useState<TargetColor>('purple')
-  const audio = useConductorAudio()
+  const mixer = useDjMixer()
   const vision = useVisionRuntime({
     targetColor,
-    onGestureFrame: audio.handleGestureFrame,
+    onGestureFrame: mixer.handleGestureFrame,
   })
 
   return (
     <div className="app">
-      <audio ref={audio.setAudioElement} preload="metadata" />
+      <audio ref={(element) => mixer.setAudioElement('a', element)} preload="metadata" />
+      <audio ref={(element) => mixer.setAudioElement('b', element)} preload="metadata" />
       <AppHeader screen={screen} onScreenChange={setScreen} />
       <main id="main-content" className="app-main">
         {screen === 'vision' && (
@@ -33,8 +33,7 @@ function App() {
             onTargetColorChange={setTargetColor}
           />
         )}
-        {screen === 'lab' && <LabScreen vision={vision} />}
-        {screen === 'conductor' && <ConductorScreen vision={vision} audio={audio} />}
+        {screen === 'dj-room' && <DjRoomScreen vision={vision} mixer={mixer} />}
       </main>
       <PrivacyFooter />
       <div className="sr-only" aria-live="polite">

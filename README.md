@@ -16,14 +16,16 @@
 
 ![Ultra Vision interface](./docs/design/ultra-vision-app.png)
 
-Ultra Vision turns a webcam and an audio file into a private, interactive instrument. It tracks hands and faces in real time, samples motion and color, and maps deliberate hand movement to focused audio controls—all inside the browser tab.
+Ultra Vision turns a webcam and two audio files into a private, interactive visual instrument and DJ mixer. It tracks hands and faces, studies pixels, detects track tempo, and maps deliberate movement to focused mix controls—all inside the browser tab.
 
 ## What it can do
 
-- **Conductor** — control volume, filter, atmosphere, and eight real cue positions with one selected gesture at a time.
+- **DJ Room** — mix two local tracks with independent transports, channel levels, filters, pitch-preserving tempo trim, phrase jumps, meters, and an equal-power crossfader.
+- **BPM tools** — estimate BPM locally, tap a tempo when analysis needs help, and match either deck to the other.
 - **Vision** — inspect hand landmarks, raised fingers, face signals, motion direction, and color coverage.
-- **Lab** — run transparent color-mask and luminance studies on an upload or captured frame.
-- **Local media** — camera frames and uploaded tracks are not sent to an application backend.
+- **Pixel Studio** — run transparent color-similarity and luminance studies on an upload or captured frame inside Vision.
+- **Gesture routing** — choose the crossfader or one deck's channel, filter, or tempo as the active hand-controlled parameter.
+- **Local media** — camera frames, images, and uploaded tracks are not sent to an application backend.
 - **Responsive interface** — the complete workflow works from a phone-sized viewport through desktop.
 
 ## Quick start
@@ -41,16 +43,15 @@ Open the local Vite URL, choose **Start camera**, and allow camera access. Camer
 
 No API keys, database, or backend service are required.
 
-## Conductor controls
+## DJ Room workflow
 
-| Control | Hand movement | Result |
-| --- | --- | --- |
-| Volume | Move vertically | Changes the master gain |
-| Filter | Rotate your wrist | Sweeps a low-pass filter |
-| Atmosphere | Move vertically | Blends a feedback delay |
-| Cue | Swipe left or right | Seeks to one of eight positions |
+1. Load a local track into each deck. Ultra Vision analyzes up to the first 90 seconds to estimate BPM.
+2. If a tempo is missing or incorrect, use **Tap BPM** a few times on the beat.
+3. Choose **Sync to A** or **Sync to B** to match effective tempo within the ±20% deck range, including sensible half-time and double-time matches. Sync preserves pitch where the browser supports it.
+4. Use the phrase pads to align the downbeat, then mix with the channel controls and equal-power crossfader.
+5. Start the camera and route hand movement to the crossfader, channel level, filter, or tempo trim.
 
-Only the selected control responds, which prevents one movement from changing the entire mix.
+BPM Sync matches tempo; it does not claim automatic beat-grid or phase alignment.
 
 ## Runtime architecture
 
@@ -60,9 +61,12 @@ flowchart LR
   Vision --> Signals["Hand, face, and gesture signals"]
   Camera --> Pixels["Canvas pixel sampling"]
   Pixels --> Signals
-  Track["Local audio file"] --> Audio["Web Audio graph"]
-  Signals --> Audio
-  Audio --> Output["Browser audio output"]
+  DeckA["Local track A"] --> TempoA["BPM analysis + deck A graph"]
+  DeckB["Local track B"] --> TempoB["BPM analysis + deck B graph"]
+  TempoA --> Mixer["Equal-power mixer"]
+  TempoB --> Mixer
+  Signals --> Mixer
+  Mixer --> Output["Browser audio output"]
 ```
 
 The current runtime uses:
@@ -70,7 +74,7 @@ The current runtime uses:
 - React 19, TypeScript, and Vite
 - MediaPipe Tasks Vision for hand and face landmarks
 - Canvas sampling for motion and color analysis
-- Web Audio for gain, filter, delay, analysis, and seeking
+- Web Audio for per-deck filters, channel gain, meters, tempo control, and equal-power mixing
 - Lucide for accessible interface icons
 
 ## Honest model scope
@@ -102,7 +106,7 @@ See [SECURITY.md](./SECURITY.md) for responsible disclosure.
 
 ## Project status
 
-Ultra Vision is an active experimental project. The browser experience is functional; future research includes optional open-vocabulary grounding, calibration profiles, richer audio effects, and device-level performance testing.
+Ultra Vision is an active experimental project. Vision and two-deck mixing are functional; future research includes optional open-vocabulary grounding, saved calibration profiles, waveform beat grids, richer effects, and device-level performance testing.
 
 ## Contributing
 

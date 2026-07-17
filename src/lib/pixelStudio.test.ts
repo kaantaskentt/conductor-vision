@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { validateLabImage } from './lab'
+import { validatePixelStudioImage } from './pixelStudio'
 
-describe('lab image safeguards', () => {
+describe('Pixel Studio image safeguards', () => {
   it('accepts supported browser image formats', () => {
-    expect(() => validateLabImage(new File(['image'], 'frame.webp', { type: 'image/webp' }))).not.toThrow()
+    expect(() => validatePixelStudioImage(new File(['image'], 'frame.webp', { type: 'image/webp' }))).not.toThrow()
   })
 
   it('rejects unsupported types and oversized files', () => {
     expect(() =>
-      validateLabImage(new File(['svg'], 'frame.svg', { type: 'image/svg+xml' })),
+      validatePixelStudioImage(new File(['svg'], 'frame.svg', { type: 'image/svg+xml' })),
     ).toThrow('Choose a PNG, JPEG, or WebP image.')
 
     expect(() =>
-      validateLabImage({
+      validatePixelStudioImage({
         name: 'large.png',
         type: 'image/png',
         size: 12 * 1024 * 1024 + 1,

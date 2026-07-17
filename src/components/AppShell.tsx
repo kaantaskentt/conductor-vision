@@ -2,24 +2,21 @@ import {
   AudioLines,
   Camera,
   Eye,
-  FlaskConical,
   Hand,
   ShieldCheck,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { CameraStatus } from '../hooks/useVisionRuntime'
 
-export type Screen = 'vision' | 'lab' | 'conductor'
+export type Screen = 'vision' | 'dj-room'
 
 const SCREEN_LABELS: Record<Screen, string> = {
   vision: 'Vision',
-  lab: 'Lab',
-  conductor: 'Conductor',
+  'dj-room': 'DJ Room',
 }
 
 function ScreenIcon({ screen }: { screen: Screen }) {
   if (screen === 'vision') return <Eye aria-hidden="true" />
-  if (screen === 'lab') return <FlaskConical aria-hidden="true" />
   return <AudioLines aria-hidden="true" />
 }
 

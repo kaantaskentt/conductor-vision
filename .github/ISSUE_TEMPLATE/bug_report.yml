@@ -28,9 +28,8 @@ body:
     attributes:
       label: Area
       options:
-        - Conductor
         - Vision
-        - Lab
+        - DJ Room
         - Camera or model loading
         - Build or tooling
     validations:

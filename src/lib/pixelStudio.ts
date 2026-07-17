@@ -1,11 +1,11 @@
-const MAX_LAB_IMAGE_BYTES = 12 * 1024 * 1024
+const MAX_PIXEL_STUDIO_IMAGE_BYTES = 12 * 1024 * 1024
 const ACCEPTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 
-export function validateLabImage(file: File) {
+export function validatePixelStudioImage(file: File) {
   if (!ACCEPTED_IMAGE_TYPES.has(file.type)) {
     throw new Error('Choose a PNG, JPEG, or WebP image.')
   }
-  if (file.size > MAX_LAB_IMAGE_BYTES) {
+  if (file.size > MAX_PIXEL_STUDIO_IMAGE_BYTES) {
     throw new Error('Choose an image smaller than 12 MB.')
   }
 }
@@ -19,7 +19,7 @@ function loadImage(source: string) {
   })
 }
 
-export async function drawLabPreview(source: string, canvas: HTMLCanvasElement) {
+export async function drawPixelStudioPreview(source: string, canvas: HTMLCanvasElement) {
   const image = await loadImage(source)
   const scale = Math.min(1, 1280 / Math.max(image.naturalWidth, image.naturalHeight))
   canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))

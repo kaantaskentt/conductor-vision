@@ -1,18 +1,240 @@
 import {
   Activity,
+  Camera,
   CircleUserRound,
   Hand,
+  Image as ImageIcon,
+  Layers3,
+  LockKeyhole,
   Move,
   ScanFace,
+  Upload,
 } from 'lucide-react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { CameraActions, CameraStage, PageIntro } from '../components/AppShell'
 import type { useVisionRuntime } from '../hooks/useVisionRuntime'
+import {
+  createColorMaskPreview,
+  createDepthStudyPreview,
+  drawPixelStudioPreview,
+  validatePixelStudioImage,
+} from '../lib/pixelStudio'
 import {
   TARGET_COLORS,
   describeRaised,
   type TargetColor,
   type VisionAnalysis,
 } from '../lib/vision'
+
+type PixelStudy = 'mask' | 'depth'
+
+function PixelPreview({ source, label }: { source: string; label: string }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    void drawPixelStudioPreview(source, canvas)
+  }, [source])
+
+  return (
+    <figure className="pixel-preview">
+      <canvas ref={canvasRef}>{label}</canvas>
+      <figcaption className="sr-only">{label}</figcaption>
+    </figure>
+  )
+}
+
+function PixelStudio({ vision }: { vision: ReturnType<typeof useVisionRuntime> }) {
+  const [study, setStudy] = useState<PixelStudy>('mask')
+  const [source, setSource] = useState<string | null>(null)
+  const [result, setResult] = useState<string | null>(null)
+  const [sourceName, setSourceName] = useState('No image selected')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState(
+    'Transparent local pixel studies—not segmentation or depth models.',
+  )
+  const objectUrlRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+    }
+  }, [])
+
+  function clearSource() {
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+    objectUrlRef.current = null
+    setSource(null)
+    setResult(null)
+    setSourceName('No image selected')
+    setMessage('Upload an image or capture the live camera frame.')
+  }
+
+  function handleUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.currentTarget.value = ''
+    if (!file) return
+    try {
+      validatePixelStudioImage(file)
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+      const url = URL.createObjectURL(file)
+      objectUrlRef.current = url
+      setSource(url)
+      setResult(null)
+      setSourceName('Uploaded image')
+      setMessage('Image ready. Choose a study and run it locally.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The image could not be loaded.')
+    }
+  }
+
+  function capture() {
+    try {
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+      objectUrlRef.current = null
+      const dataUrl = vision.captureFrame()
+      setSource(dataUrl)
+      setResult(null)
+      setSourceName('Camera capture')
+      setMessage('Frame captured locally. Choose a study and run it.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The frame could not be captured.')
+    }
+  }
+
+  async function runStudy() {
+    if (!source) {
+      setMessage('Upload an image or capture a camera frame first.')
+      return
+    }
+    setBusy(true)
+    setMessage(study === 'mask' ? 'Building a color similarity mask…' : 'Building a luminance study…')
+    try {
+      const preview =
+        study === 'mask'
+          ? await createColorMaskPreview(source)
+          : await createDepthStudyPreview(source)
+      setResult(preview)
+      setMessage(
+        study === 'mask'
+          ? 'Purple marks pixels similar to the center sample.'
+          : 'Color maps luminance—not physical distance.',
+      )
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The preview could not be created.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="pixel-studio">
+      <div className="pixel-studio-header">
+        <div>
+          <p className="eyebrow">Pixel Studio</p>
+          <h2>Take a closer look.</h2>
+          <p>Upload a still or capture the live camera, then inspect color similarity or luminance.</p>
+        </div>
+        <div>
+          <label className="button secondary file-button">
+            <Upload aria-hidden="true" />
+            Upload image
+            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleUpload} />
+          </label>
+          <button
+            type="button"
+            className="button secondary"
+            onClick={capture}
+            disabled={vision.status !== 'running'}
+          >
+            <Camera aria-hidden="true" />
+            Capture frame
+          </button>
+        </div>
+      </div>
+
+      <div className="pixel-layout">
+        <aside className="pixel-study-list" aria-label="Pixel studies">
+          <button
+            type="button"
+            className={study === 'mask' ? 'active' : ''}
+            onClick={() => {
+              setStudy('mask')
+              setResult(null)
+            }}
+          >
+            <span>
+              <Layers3 aria-hidden="true" />
+            </span>
+            <strong>Color similarity</strong>
+            <small>Threshold pixels around the center sample.</small>
+          </button>
+          <button
+            type="button"
+            className={study === 'depth' ? 'active' : ''}
+            onClick={() => {
+              setStudy('depth')
+              setResult(null)
+            }}
+          >
+            <span>
+              <ImageIcon aria-hidden="true" />
+            </span>
+            <strong>Luminance map</strong>
+            <small>Map brightness into a near/far-style palette.</small>
+          </button>
+          <div className="honesty-card">
+            <LockKeyhole aria-hidden="true" />
+            <strong>Honest runtime</strong>
+            <p>No cloud upload and no neural-model claim. Every preview runs in this tab.</p>
+          </div>
+        </aside>
+
+        <div className="pixel-workspace">
+          <div className="pixel-canvas">
+            {result || source ? (
+              <PixelPreview
+                source={result ?? source ?? ''}
+                label={result ? `${study} preview` : sourceName}
+              />
+            ) : (
+              <div className="pixel-empty">
+                <ImageIcon aria-hidden="true" />
+                <strong>Bring a frame into focus</strong>
+                <p>Upload an image or start the camera and capture the live view above.</p>
+              </div>
+            )}
+            {(source || result) && (
+              <span className="pixel-source-chip">{result ? 'Processed locally' : sourceName}</span>
+            )}
+          </div>
+          <div className="pixel-toolbar">
+            <div aria-live="polite">
+              <span>{study === 'mask' ? 'Color similarity' : 'Luminance map'}</span>
+              <strong>{message}</strong>
+            </div>
+            <div>
+              {(source || result) && (
+                <button type="button" className="button text" onClick={clearSource}>
+                  Clear
+                </button>
+              )}
+              <button
+                type="button"
+                className="button primary"
+                onClick={() => void runStudy()}
+                disabled={!source || busy}
+              >
+                {busy ? 'Processing…' : 'Run study'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
 
 function DetectionInspector({ analysis }: { analysis: VisionAnalysis }) {
   const metrics = [
@@ -207,6 +429,7 @@ export function VisionScreen({
           onTargetColorChange={onTargetColorChange}
         />
       </section>
+      <PixelStudio vision={vision} />
     </>
   )
 }
