@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   bpmFromTapTimes,
+  chooseSyncMaster,
   equalPowerCrossfade,
   estimateBpmFromSamples,
   matchedTempoPercent,
   phraseTimeForIndex,
+  smoothControlValue,
   validateAudioFile,
 } from './useDjMixer'
 
@@ -31,6 +33,19 @@ describe('DJ mixer audio safeguards and math', () => {
     expect(matchedTempoPercent(90, 170)).toBe(-5.6)
     expect(matchedTempoPercent(70, 100)).toBeNull()
     expect(matchedTempoPercent(0, 120)).toBeNull()
+  })
+
+  it('uses the playing deck as the BPM Sync master and otherwise defaults to Deck A', () => {
+    expect(chooseSyncMaster(false, true)).toBe('b')
+    expect(chooseSyncMaster(true, false)).toBe('a')
+    expect(chooseSyncMaster(false, false)).toBe('a')
+    expect(chooseSyncMaster(true, true)).toBe('a')
+  })
+
+  it('smooths gesture values without overshooting the target', () => {
+    expect(smoothControlValue(0, 100)).toBe(32)
+    expect(smoothControlValue(80, 20, 0.5)).toBe(50)
+    expect(smoothControlValue(10, 20, 2)).toBe(20)
   })
 
   it('derives a stable BPM from manual taps', () => {

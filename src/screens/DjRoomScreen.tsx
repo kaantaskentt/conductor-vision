@@ -5,6 +5,8 @@ import {
   Music2,
   Pause,
   Play,
+  RefreshCw,
+  RotateCcw,
   SlidersHorizontal,
   Upload,
   Volume2,
@@ -70,7 +72,6 @@ function DeckPanel({
   onUpload: () => void
 }) {
   const deck = mixer.decks[id]
-  const otherId: DeckId = id === 'a' ? 'b' : 'a'
   const effectiveBpm = deck.bpm ? deck.bpm * (1 + deck.tempo / 100) : null
 
   return (
@@ -137,42 +138,76 @@ function DeckPanel({
       </div>
 
       <div className="deck-controls">
-        <label>
+        <div className="deck-control-row">
           <span>
             <Volume2 aria-hidden="true" />
             Channel
           </span>
-          <strong>{deck.volume}%</strong>
+          <div className="deck-control-value">
+            <strong>{deck.volume}%</strong>
+            <button
+              type="button"
+              onClick={() => mixer.resetControl('volume', id)}
+              aria-label={`Reset ${deckLabel(id)} channel`}
+              title="Reset channel"
+            >
+              <RotateCcw aria-hidden="true" />
+            </button>
+          </div>
           <input
             type="range"
             min="0"
             max="100"
             value={deck.volume}
             onChange={(event) => mixer.setDeckVolume(id, Number(event.target.value))}
+            onDoubleClick={() => mixer.resetControl('volume', id)}
             aria-label={`${deckLabel(id)} volume`}
+            title="Double-click to reset"
           />
-        </label>
-        <label>
+        </div>
+        <div className="deck-control-row">
           <span>
             <SlidersHorizontal aria-hidden="true" />
             Filter
           </span>
-          <strong>{deck.filter}%</strong>
+          <div className="deck-control-value">
+            <strong>{deck.filter}%</strong>
+            <button
+              type="button"
+              onClick={() => mixer.resetControl('filter', id)}
+              aria-label={`Reset ${deckLabel(id)} filter`}
+              title="Open filter"
+            >
+              <RotateCcw aria-hidden="true" />
+            </button>
+          </div>
           <input
             type="range"
             min="0"
             max="100"
             value={deck.filter}
             onChange={(event) => mixer.setDeckFilter(id, Number(event.target.value))}
+            onDoubleClick={() => mixer.resetControl('filter', id)}
             aria-label={`${deckLabel(id)} filter`}
+            title="Double-click to reset"
           />
-        </label>
-        <label>
+        </div>
+        <div className="deck-control-row">
           <span>
             <Gauge aria-hidden="true" />
             Tempo
           </span>
-          <strong>{deck.tempo > 0 ? '+' : ''}{deck.tempo.toFixed(1)}%</strong>
+          <div className="deck-control-value">
+            <strong>{deck.tempo > 0 ? '+' : ''}{deck.tempo.toFixed(1)}%</strong>
+            <button
+              type="button"
+              onClick={() => mixer.resetControl('tempo', id)}
+              aria-label={`Reset ${deckLabel(id)} tempo`}
+              title="Restore original tempo"
+            >
+              <RotateCcw aria-hidden="true" />
+            </button>
+          </div>
           <input
             type="range"
             min="-20"
@@ -180,9 +215,11 @@ function DeckPanel({
             step="0.1"
             value={deck.tempo}
             onChange={(event) => mixer.setDeckTempo(id, Number(event.target.value))}
+            onDoubleClick={() => mixer.resetControl('tempo', id)}
             aria-label={`${deckLabel(id)} tempo`}
+            title="Double-click to reset"
           />
-        </label>
+        </div>
       </div>
 
       <div className="deck-actions">
@@ -197,14 +234,6 @@ function DeckPanel({
           disabled={!deck.loaded}
         >
           Tap BPM
-        </button>
-        <button
-          type="button"
-          className="button text"
-          onClick={() => mixer.syncDeck(id, otherId)}
-          disabled={!deck.loaded || !mixer.decks[otherId].loaded}
-        >
-          Sync to {otherId.toUpperCase()}
         </button>
       </div>
 
@@ -252,6 +281,25 @@ function MixerConsole({ mixer }: { mixer: ReturnType<typeof useDjMixer> }) {
         ))}
       </div>
 
+      <button
+        type="button"
+        className={`bpm-sync-toggle ${mixer.bpmSyncActive ? 'active' : ''}`}
+        onClick={mixer.toggleBpmSync}
+        disabled={!bothLoaded}
+        aria-pressed={mixer.bpmSyncActive}
+      >
+        <RefreshCw aria-hidden="true" />
+        <span>
+          <strong>BPM Sync</strong>
+          <small>
+            {mixer.bpmSyncActive
+              ? `${mixer.bpmSyncMessage} · click to restore`
+              : mixer.bpmSyncMessage}
+          </small>
+        </span>
+        <b>{mixer.bpmSyncActive ? 'ON' : 'OFF'}</b>
+      </button>
+
       <div className="crossfader-control">
         <div>
           <span>A</span>
@@ -264,7 +312,9 @@ function MixerConsole({ mixer }: { mixer: ReturnType<typeof useDjMixer> }) {
           max="100"
           value={mixer.crossfader}
           onChange={(event) => mixer.setCrossfader(Number(event.target.value))}
+          onDoubleClick={() => mixer.resetControl('crossfader')}
           aria-label="Master crossfader"
+          title="Double-click to center"
         />
         <output>
           {mixer.crossfader === 0
@@ -278,19 +328,20 @@ function MixerConsole({ mixer }: { mixer: ReturnType<typeof useDjMixer> }) {
         </button>
       </div>
 
-      <button
-        type="button"
-        className="button primary start-mix"
-        onClick={() => void mixer.toggleBoth()}
-        disabled={!bothLoaded}
-      >
-        {anyPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
-        {anyPlaying ? 'Pause both' : 'Start both'}
-      </button>
-
-      <div className="sync-note">
-        <strong>BPM Sync</strong>
-        <p>Sync matches tempo and preserves pitch. Use the phrase pads to align the downbeat.</p>
+      <div className="master-actions">
+        <button
+          type="button"
+          className="button primary start-mix"
+          onClick={() => void mixer.toggleBoth()}
+          disabled={!bothLoaded}
+        >
+          {anyPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
+          {anyPlaying ? 'Pause both' : 'Start both'}
+        </button>
+        <button type="button" className="button secondary" onClick={mixer.resetMix}>
+          <RotateCcw aria-hidden="true" />
+          Reset mix
+        </button>
       </div>
     </aside>
   )
@@ -310,7 +361,18 @@ function GestureConsole({
           <span>Gesture routing</span>
           <strong>{vision.analysis.hands.length ? 'Hand connected' : 'Waiting for a hand'}</strong>
         </div>
-        <span className={`status-dot ${vision.analysis.hands.length ? 'active' : ''}`} />
+        <div className="gesture-heading-actions">
+          <span className={`status-dot ${vision.analysis.hands.length ? 'active' : ''}`} />
+          <button
+            type="button"
+            onClick={() => mixer.resetControl()}
+            aria-label="Reset selected gesture control"
+            title="Reset selected control"
+          >
+            <RotateCcw aria-hidden="true" />
+            Reset
+          </button>
+        </div>
       </div>
 
       <div className="deck-target" aria-label="Gesture deck target">
@@ -334,7 +396,9 @@ function GestureConsole({
             type="button"
             className={mixer.selectedControl === control ? 'active' : ''}
             onClick={() => mixer.selectControl(control, mixer.activeDeck)}
+            onDoubleClick={() => mixer.resetControl(control, mixer.activeDeck)}
             aria-pressed={mixer.selectedControl === control}
+            title="Double-click to reset this control"
           >
             <Icon aria-hidden="true" />
             <span>
@@ -344,6 +408,7 @@ function GestureConsole({
           </button>
         ))}
       </div>
+      <p className="gesture-reset-hint">Double-click any mode or slider to reset it.</p>
 
       <div className="gesture-status">
         <Hand aria-hidden="true" />
@@ -416,12 +481,6 @@ export function DjRoomScreen({
         }
       />
 
-      <section className="dj-console">
-        <DeckPanel id="a" mixer={mixer} onUpload={() => deckAInputRef.current?.click()} />
-        <MixerConsole mixer={mixer} />
-        <DeckPanel id="b" mixer={mixer} onUpload={() => deckBInputRef.current?.click()} />
-      </section>
-
       <section className="dj-vision-layout">
         <CameraStage
           status={vision.status}
@@ -443,6 +502,12 @@ export function DjRoomScreen({
           }
         />
         <GestureConsole mixer={mixer} vision={vision} />
+      </section>
+
+      <section className="dj-console">
+        <DeckPanel id="a" mixer={mixer} onUpload={() => deckAInputRef.current?.click()} />
+        <MixerConsole mixer={mixer} />
+        <DeckPanel id="b" mixer={mixer} onUpload={() => deckBInputRef.current?.click()} />
       </section>
     </>
   )

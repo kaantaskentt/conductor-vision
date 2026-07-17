@@ -4,6 +4,13 @@ import { clamp, type GestureFrame } from '../lib/vision'
 export type DeckId = 'a' | 'b'
 export type DjControl = 'crossfader' | 'volume' | 'filter' | 'tempo'
 
+export const DJ_NEUTRAL_VALUES = {
+  crossfader: 0,
+  volume: 82,
+  filter: 100,
+  tempo: 0,
+} as const
+
 export type DeckState = {
   name: string
   loaded: boolean
@@ -26,6 +33,13 @@ type DeckNodes = {
   volume: GainNode
   crossfade: GainNode
   bins: Uint8Array<ArrayBuffer>
+}
+
+type BpmSyncSnapshot = {
+  masterId: DeckId
+  targetId: DeckId
+  originalTempos: Record<DeckId, number>
+  originalStatuses: Record<DeckId, string>
 }
 
 const DECK_IDS: DeckId[] = ['a', 'b']
@@ -93,6 +107,16 @@ export function bpmFromTapTimes(times: number[]) {
   if (!intervals.length) return null
   const average = intervals.reduce((sum, interval) => sum + interval, 0) / intervals.length
   return normalizeBpm(60_000 / average)
+}
+
+export function chooseSyncMaster(aPlaying: boolean, bPlaying: boolean): DeckId {
+  if (bPlaying && !aPlaying) return 'b'
+  return 'a'
+}
+
+export function smoothControlValue(current: number, target: number, strength = 0.32) {
+  const amount = clamp(strength, 0, 1)
+  return current + (target - current) * amount
 }
 
 export function estimateBpmFromSamples(samples: Float32Array, sampleRate: number) {
@@ -178,9 +202,9 @@ function initialDeckState(): DeckState {
     playing: false,
     duration: 0,
     currentTime: 0,
-    volume: 82,
-    filter: 100,
-    tempo: 0,
+    volume: DJ_NEUTRAL_VALUES.volume,
+    filter: DJ_NEUTRAL_VALUES.filter,
+    tempo: DJ_NEUTRAL_VALUES.tempo,
     bpm: null,
     bpmStatus: 'Load a track',
     audioLevel: 0,
@@ -206,8 +230,13 @@ export function useDjMixer() {
   const [activeDeck, setActiveDeck] = useState<DeckId>('a')
   const [selectedControl, setSelectedControl] = useState<DjControl>('crossfader')
   const [gestureStatus, setGestureStatus] = useState('Waiting for a hand')
+  const [bpmSync, setBpmSync] = useState<BpmSyncSnapshot | null>(null)
+  const [bpmSyncMessage, setBpmSyncMessage] = useState(
+    'The playing deck leads. Click again to restore both original tempos.',
+  )
   const decksRef = useRef(decks)
   const crossfaderRef = useRef(crossfader)
+  const bpmSyncRef = useRef<BpmSyncSnapshot | null>(null)
   const audioElementsRef = useRef<Record<DeckId, HTMLAudioElement | null>>({ a: null, b: null })
   const objectUrlsRef = useRef<Record<DeckId, string | null>>({ a: null, b: null })
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -216,6 +245,11 @@ export function useDjMixer() {
   const bpmRequestRef = useRef<Record<DeckId, number>>({ a: 0, b: 0 })
   const tapTimesRef = useRef<Record<DeckId, number[]>>({ a: [], b: [] })
   const lastGestureUpdateAtRef = useRef(0)
+  const smoothedGestureRef = useRef<{
+    control: DjControl
+    deck: DeckId | 'master'
+    value: number
+  } | null>(null)
 
   useEffect(() => {
     decksRef.current = decks
@@ -243,7 +277,7 @@ export function useDjMixer() {
     if (!context) return
     const gains = equalPowerCrossfade(value)
     for (const id of DECK_IDS) {
-      nodesRef.current[id]?.crossfade.gain.setTargetAtTime(gains[id], context.currentTime, 0.025)
+      nodesRef.current[id]?.crossfade.gain.setTargetAtTime(gains[id], context.currentTime, 0.065)
     }
   }, [])
 
@@ -320,6 +354,25 @@ export function useDjMixer() {
         validateAudioFile(file)
         const audio = audioElementsRef.current[id]
         if (!audio) throw new Error(`${deckLabel(id)} is not ready.`)
+        const syncSnapshot = bpmSyncRef.current
+        if (syncSnapshot) {
+          bpmSyncRef.current = null
+          setBpmSync(null)
+          for (const deckId of DECK_IDS) {
+            const deckAudio = audioElementsRef.current[deckId]
+            const originalTempo = syncSnapshot.originalTempos[deckId]
+            if (deckAudio) {
+              deckAudio.playbackRate = 1 + originalTempo / 100
+              deckAudio.preservesPitch = true
+            }
+            patchDeck(deckId, {
+              tempo: originalTempo,
+              bpmStatus: syncSnapshot.originalStatuses[deckId],
+              error: null,
+            })
+          }
+          setBpmSyncMessage('New track loaded · BPM Sync reset')
+        }
         if (objectUrlsRef.current[id]) URL.revokeObjectURL(objectUrlsRef.current[id] ?? '')
         const nextUrl = URL.createObjectURL(file)
         objectUrlsRef.current[id] = nextUrl
@@ -415,7 +468,7 @@ export function useDjMixer() {
       const volume = Math.round(clamp(value, 0, 100))
       const context = audioContextRef.current
       if (context && nodesRef.current[id]) {
-        nodesRef.current[id].volume.gain.setTargetAtTime(volume / 100, context.currentTime, 0.035)
+        nodesRef.current[id].volume.gain.setTargetAtTime(volume / 100, context.currentTime, 0.06)
       }
       patchDeck(id, { volume })
     },
@@ -430,7 +483,7 @@ export function useDjMixer() {
         nodesRef.current[id].filter.frequency.setTargetAtTime(
           normalizedFilterFrequency(filter),
           context.currentTime,
-          0.045,
+          0.08,
         )
       }
       patchDeck(id, { filter })
@@ -438,7 +491,7 @@ export function useDjMixer() {
     [patchDeck],
   )
 
-  const setDeckTempo = useCallback(
+  const applyDeckTempo = useCallback(
     (id: DeckId, value: number) => {
       const tempo = Math.round(clamp(value, -20, 20) * 10) / 10
       const audio = audioElementsRef.current[id]
@@ -451,6 +504,33 @@ export function useDjMixer() {
     [patchDeck],
   )
 
+  const releaseBpmSync = useCallback(
+    (message = 'Original BPMs restored') => {
+      const snapshot = bpmSyncRef.current
+      if (!snapshot) return false
+      bpmSyncRef.current = null
+      setBpmSync(null)
+      for (const id of DECK_IDS) {
+        applyDeckTempo(id, snapshot.originalTempos[id])
+        patchDeck(id, {
+          bpmStatus: snapshot.originalStatuses[id],
+          error: null,
+        })
+      }
+      setBpmSyncMessage(message)
+      return true
+    },
+    [applyDeckTempo, patchDeck],
+  )
+
+  const setDeckTempo = useCallback(
+    (id: DeckId, value: number) => {
+      releaseBpmSync('Manual tempo control released BPM Sync')
+      applyDeckTempo(id, value)
+    },
+    [applyDeckTempo, releaseBpmSync],
+  )
+
   const setCrossfader = useCallback(
     (value: number) => {
       const next = Math.round(clamp(value, -100, 100))
@@ -461,38 +541,115 @@ export function useDjMixer() {
     [updateCrossfadeNodes],
   )
 
-  const syncDeck = useCallback(
-    (id: DeckId, targetId: DeckId) => {
-      const source = decksRef.current[id]
-      const target = decksRef.current[targetId]
-      if (!source.bpm || !target.bpm) {
-        patchDeck(id, { error: 'Both decks need a detected or tapped BPM before sync.' })
+  const toggleBpmSync = useCallback(() => {
+    if (bpmSyncRef.current) {
+      releaseBpmSync()
+      setGestureStatus('BPM Sync off · original tempos restored')
+      return
+    }
+
+    const current = decksRef.current
+    if (!current.a.bpm || !current.b.bpm) {
+      const error = 'Both decks need a detected or tapped BPM before sync.'
+      patchDeck('a', { error })
+      patchDeck('b', { error })
+      setBpmSyncMessage('Set both BPMs first')
+      return
+    }
+
+    const masterId = chooseSyncMaster(current.a.playing, current.b.playing)
+    const targetId: DeckId = masterId === 'a' ? 'b' : 'a'
+    const master = current[masterId]
+    const target = current[targetId]
+    const masterBpm = master.bpm
+    const targetBpm = target.bpm
+    if (!masterBpm || !targetBpm) return
+    const targetEffectiveBpm = masterBpm * (1 + master.tempo / 100)
+    const targetTempo = matchedTempoPercent(targetBpm, targetEffectiveBpm)
+    if (targetTempo === null) {
+      const error = 'The BPM difference exceeds the ±20% tempo range.'
+      patchDeck('a', { error })
+      patchDeck('b', { error })
+      setBpmSyncMessage('These tracks are outside the safe sync range')
+      return
+    }
+
+    const snapshot: BpmSyncSnapshot = {
+      masterId,
+      targetId,
+      originalTempos: {
+        a: current.a.tempo,
+        b: current.b.tempo,
+      },
+      originalStatuses: {
+        a: current.a.bpmStatus,
+        b: current.b.bpmStatus,
+      },
+    }
+    bpmSyncRef.current = snapshot
+    setBpmSync(snapshot)
+    applyDeckTempo(targetId, targetTempo)
+    patchDeck(masterId, { error: null })
+    patchDeck(targetId, {
+      error: null,
+      bpmStatus: `Synced to ${targetEffectiveBpm.toFixed(1)} BPM · align the downbeat manually`,
+    })
+    const message = `${deckLabel(targetId)} follows ${deckLabel(masterId)} at ${targetEffectiveBpm.toFixed(1)} BPM`
+    setBpmSyncMessage(message)
+    setGestureStatus(`${message} · click BPM Sync again to restore`)
+  }, [applyDeckTempo, patchDeck, releaseBpmSync])
+
+  const resetControl = useCallback(
+    (control: DjControl = selectedControl, deck: DeckId = activeDeck) => {
+      smoothedGestureRef.current = null
+      if (control === 'crossfader') {
+        setCrossfader(DJ_NEUTRAL_VALUES.crossfader)
+        setGestureStatus('Crossfader centered')
         return
       }
-      const targetEffectiveBpm = target.bpm * (1 + target.tempo / 100)
-      const tempo = matchedTempoPercent(source.bpm, targetEffectiveBpm)
-      if (tempo === null) {
-        patchDeck(id, { error: 'The BPM difference exceeds the ±20% tempo range.' })
-        return
+      if (control === 'volume') {
+        setDeckVolume(deck, DJ_NEUTRAL_VALUES.volume)
+      } else if (control === 'filter') {
+        setDeckFilter(deck, DJ_NEUTRAL_VALUES.filter)
+      } else {
+        setDeckTempo(deck, DJ_NEUTRAL_VALUES.tempo)
       }
-      setDeckTempo(id, tempo)
-      const matchedBpm = source.bpm * (1 + tempo / 100)
-      const relationship =
-        Math.abs(matchedBpm - targetEffectiveBpm) < 1
-          ? 'Matched'
-          : matchedBpm < targetEffectiveBpm
-            ? 'Half-time match'
-            : 'Double-time match'
+      const label = control === 'volume' ? 'channel' : control
+      setGestureStatus(`${deckLabel(deck)} ${label} reset`)
+    },
+    [
+      activeDeck,
+      selectedControl,
+      setCrossfader,
+      setDeckFilter,
+      setDeckTempo,
+      setDeckVolume,
+    ],
+  )
+
+  const resetMix = useCallback(() => {
+    bpmSyncRef.current = null
+    setBpmSync(null)
+    setCrossfader(DJ_NEUTRAL_VALUES.crossfader)
+    for (const id of DECK_IDS) {
+      setDeckVolume(id, DJ_NEUTRAL_VALUES.volume)
+      setDeckFilter(id, DJ_NEUTRAL_VALUES.filter)
+      applyDeckTempo(id, DJ_NEUTRAL_VALUES.tempo)
       patchDeck(id, {
         error: null,
-        bpmStatus: `${relationship} to ${targetEffectiveBpm.toFixed(1)} BPM · align the downbeat manually`,
+        bpmStatus: decksRef.current[id].bpm
+          ? `${decksRef.current[id].bpm} BPM ready`
+          : decksRef.current[id].bpmStatus,
       })
-    },
-    [patchDeck, setDeckTempo],
-  )
+    }
+    smoothedGestureRef.current = null
+    setBpmSyncMessage('Mix reset · both decks are back at their own BPMs')
+    setGestureStatus('Mix reset to neutral')
+  }, [applyDeckTempo, patchDeck, setCrossfader, setDeckFilter, setDeckVolume])
 
   const tapTempo = useCallback(
     (id: DeckId) => {
+      releaseBpmSync('Tap BPM released BPM Sync')
       const now = performance.now()
       const recent = tapTimesRef.current[id].filter((time) => now - time < 2_500)
       recent.push(now)
@@ -503,10 +660,11 @@ export function useDjMixer() {
         bpmStatus: bpm ? `${bpm} BPM tapped` : 'Keep tapping on the beat',
       })
     },
-    [patchDeck],
+    [patchDeck, releaseBpmSync],
   )
 
   const selectControl = useCallback((control: DjControl, deck: DeckId = activeDeck) => {
+    smoothedGestureRef.current = null
     setSelectedControl(control)
     setActiveDeck(deck)
     setGestureStatus(
@@ -534,7 +692,14 @@ export function useDjMixer() {
       lastGestureUpdateAtRef.current = now
 
       if (selectedControl === 'crossfader') {
-        setCrossfader(frame.x * 200 - 100)
+        const target = frame.x * 200 - 100
+        const previous =
+          smoothedGestureRef.current?.control === 'crossfader'
+            ? smoothedGestureRef.current.value
+            : crossfaderRef.current
+        const value = smoothControlValue(previous, target, 0.36)
+        smoothedGestureRef.current = { control: 'crossfader', deck: 'master', value }
+        setCrossfader(value)
         setGestureStatus('Crossfader follows hand position')
         return
       }
@@ -543,14 +708,38 @@ export function useDjMixer() {
         return
       }
       if (selectedControl === 'volume') {
-        setDeckVolume(activeDeck, (1 - frame.y) * 100)
+        const target = (1 - frame.y) * 100
+        const previous =
+          smoothedGestureRef.current?.control === 'volume' &&
+          smoothedGestureRef.current.deck === activeDeck
+            ? smoothedGestureRef.current.value
+            : decksRef.current[activeDeck].volume
+        const value = smoothControlValue(previous, target, 0.32)
+        smoothedGestureRef.current = { control: 'volume', deck: activeDeck, value }
+        setDeckVolume(activeDeck, value)
         setGestureStatus(`${deckLabel(activeDeck)} volume follows hand height`)
       } else if (selectedControl === 'filter') {
         const normalizedAngle = clamp((frame.wristAngle + Math.PI) / (Math.PI * 2))
-        setDeckFilter(activeDeck, normalizedAngle * 100)
+        const target = normalizedAngle * 100
+        const previous =
+          smoothedGestureRef.current?.control === 'filter' &&
+          smoothedGestureRef.current.deck === activeDeck
+            ? smoothedGestureRef.current.value
+            : decksRef.current[activeDeck].filter
+        const value = smoothControlValue(previous, target, 0.28)
+        smoothedGestureRef.current = { control: 'filter', deck: activeDeck, value }
+        setDeckFilter(activeDeck, value)
         setGestureStatus(`${deckLabel(activeDeck)} filter follows wrist angle`)
       } else if (selectedControl === 'tempo') {
-        setDeckTempo(activeDeck, frame.x * 16 - 8)
+        const target = frame.x * 16 - 8
+        const previous =
+          smoothedGestureRef.current?.control === 'tempo' &&
+          smoothedGestureRef.current.deck === activeDeck
+            ? smoothedGestureRef.current.value
+            : decksRef.current[activeDeck].tempo
+        const value = smoothControlValue(previous, target, 0.25)
+        smoothedGestureRef.current = { control: 'tempo', deck: activeDeck, value }
+        setDeckTempo(activeDeck, value)
         setGestureStatus(`${deckLabel(activeDeck)} tempo follows horizontal position`)
       }
     },
@@ -619,6 +808,10 @@ export function useDjMixer() {
     activeDeck,
     selectedControl,
     gestureStatus,
+    bpmSyncActive: Boolean(bpmSync),
+    bpmSyncMessage,
+    bpmSyncMaster: bpmSync?.masterId ?? null,
+    bpmSyncTarget: bpmSync?.targetId ?? null,
     setAudioElement,
     loadFile,
     togglePlayback,
@@ -629,9 +822,11 @@ export function useDjMixer() {
     setDeckFilter,
     setDeckTempo,
     setCrossfader,
-    syncDeck,
+    toggleBpmSync,
     tapTempo,
     selectControl,
+    resetControl,
+    resetMix,
     handleGestureFrame,
   }
 }

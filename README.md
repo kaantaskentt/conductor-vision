@@ -21,10 +21,10 @@ Ultra Vision turns a webcam and two audio files into a private, interactive visu
 ## What it can do
 
 - **DJ Room** — mix two local tracks with independent transports, channel levels, filters, pitch-preserving tempo trim, phrase jumps, meters, and an equal-power crossfader.
-- **BPM tools** — estimate BPM locally, tap a tempo when analysis needs help, and match either deck to the other.
+- **BPM tools** — estimate BPM locally, tap a tempo when analysis needs help, and use one reversible BPM Sync control to match the idle deck to the playing deck.
 - **Vision** — inspect hand landmarks, raised fingers, face signals, motion direction, and color coverage.
 - **Pixel Studio** — run transparent color-similarity and luminance studies on an upload or captured frame inside Vision.
-- **Gesture routing** — choose the crossfader or one deck's channel, filter, or tempo as the active hand-controlled parameter.
+- **Gesture routing** — choose the crossfader or one deck's channel, filter, or tempo as the active hand-controlled parameter, with one-click and double-click resets.
 - **Local media** — camera frames, images, and uploaded tracks are not sent to an application backend.
 - **Responsive interface** — the complete workflow works from a phone-sized viewport through desktop.
 
@@ -47,9 +47,9 @@ No API keys, database, or backend service are required.
 
 1. Load a local track into each deck. Ultra Vision analyzes up to the first 90 seconds to estimate BPM.
 2. If a tempo is missing or incorrect, use **Tap BPM** a few times on the beat.
-3. Choose **Sync to A** or **Sync to B** to match effective tempo within the ±20% deck range, including sensible half-time and double-time matches. Sync preserves pitch where the browser supports it.
+3. Press the center **BPM Sync** control. The playing deck becomes the master; if neither or both are playing, Deck A leads. Press it again to restore both original tempos. Sync works within the ±20% deck range, including sensible half-time and double-time matches, and preserves pitch where the browser supports it.
 4. Use the phrase pads to align the downbeat, then mix with the channel controls and equal-power crossfader.
-5. Start the camera and route hand movement to the crossfader, channel level, filter, or tempo trim.
+5. Start the camera and route hand movement to the crossfader, channel level, filter, or tempo trim. Use **Reset**, **Reset mix**, or double-click a mode or slider to return it to neutral.
 
 BPM Sync matches tempo; it does not claim automatic beat-grid or phase alignment.
 
