@@ -2,9 +2,25 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss: blob: https://cdn.jsdelivr.net https://storage.googleapis.com; worker-src 'self' blob:; manifest-src 'self'; form-action 'self'"
+    />
+    <link rel="icon" type="image/png" href="/conductor-vision-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Vision Playground</title>
+    <meta
+      name="description"
+      content="Local-first hand tracking, computer vision studies, and gesture-controlled audio in the browser."
+    />
+    <meta name="theme-color" content="#07101c" />
+    <meta property="og:title" content="Conductor Vision" />
+    <meta
+      property="og:description"
+      content="Use hand movement to explore vision signals and control sound—without uploading camera frames."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/conductor-vision-icon.png" />
+    <title>Conductor Vision · Local vision instruments</title>
   </head>
   <body>
     <div id="root"></div>

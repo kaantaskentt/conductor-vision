@@ -1,63 +1,113 @@
-# Vision Playground
+<p align="center">
+  <img src="./public/conductor-vision-icon.png" alt="Conductor Vision" width="88" />
+</p>
 
-A deployable browser vision playground for testing live camera interaction.
+<h1 align="center">Conductor Vision</h1>
 
-## What it does
+<p align="center">
+  A local-first browser instrument for real-time vision and gesture-controlled audio.
+</p>
 
-- **Count fingers** — MediaPipe hand landmarks + local geometry.
-- **Find color** — choose a target color and see live coverage on the webcam feed.
-- **Speed / motion** — local frame-difference motion meter.
-- **Everything scan** — combined hand, color, and motion readout.
-- **Live HUD** — top-left describes what the app sees; top-right shows cloud token usage.
+<p align="center">
+  <a href="https://github.com/kaantaskentt/conductor-vision/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/kaantaskentt/conductor-vision/ci.yml?branch=main&label=CI&style=flat-square"></a>
+  <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-8255ff?style=flat-square"></a>
+  <img alt="No backend required" src="https://img.shields.io/badge/backend-none-69d4ea?style=flat-square">
+</p>
 
-## Privacy / tokens
+![Conductor Vision interface](./docs/design/conductor-vision-app.jpg)
 
-This v1 runs entirely in the browser:
+Conductor Vision turns a webcam and an audio file into a private, interactive instrument. It tracks hands and faces in real time, samples motion and color, and maps deliberate hand movement to focused audio controls—all inside the browser tab.
 
-- Camera frames stay on-device.
-- No backend required.
-- No Gemini/OpenAI/NVIDIA API key required.
-- Token usage is `0 cloud / local only`.
+## What it can do
 
-## Tech stack
+- **Conductor** — control volume, filter, atmosphere, and eight real cue positions with one selected gesture at a time.
+- **Vision** — inspect hand landmarks, raised fingers, face signals, motion direction, and color coverage.
+- **Lab** — run transparent color-mask and luminance studies on an upload or captured frame.
+- **Local media** — camera frames and uploaded tracks are not sent to an application backend.
+- **Responsive interface** — the complete workflow works from a phone-sized viewport through desktop.
 
-- Vite
-- React
-- TypeScript
-- MediaPipe Tasks Vision (`@mediapipe/tasks-vision`)
-- Canvas pixel analysis
+## Quick start
 
-## Run locally
+Requirements: Node.js 20.19+ or 22.12+ and a modern Chromium, Firefox, or Safari browser.
 
 ```bash
-npm install
+git clone https://github.com/kaantaskentt/conductor-vision.git
+cd conductor-vision
+npm ci
 npm run dev
 ```
 
-Open the local Vite URL, press **Start camera**, and allow webcam permission.
+Open the local Vite URL, choose **Start camera**, and allow camera access. Camera access requires `localhost` or HTTPS.
 
-> Camera access requires a secure context. `localhost` works locally; Vercel HTTPS works when deployed.
+No API keys, database, or backend service are required.
 
-## Build
+## Conductor controls
 
-```bash
-npm run build
-npm run lint
+| Control | Hand movement | Result |
+| --- | --- | --- |
+| Volume | Move vertically | Changes the master gain |
+| Filter | Rotate your wrist | Sweeps a low-pass filter |
+| Atmosphere | Move vertically | Blends a feedback delay |
+| Cue | Swipe left or right | Seeks to one of eight positions |
+
+Only the selected control responds, which prevents one movement from changing the entire mix.
+
+## Runtime architecture
+
+```mermaid
+flowchart LR
+  Camera["Webcam"] --> Vision["MediaPipe Tasks Vision"]
+  Vision --> Signals["Hand, face, and gesture signals"]
+  Camera --> Pixels["Canvas pixel sampling"]
+  Pixels --> Signals
+  Track["Local audio file"] --> Audio["Web Audio graph"]
+  Signals --> Audio
+  Audio --> Output["Browser audio output"]
 ```
 
-## NVIDIA Eagle / LocateAnything note
+The current runtime uses:
 
-NVIDIA Eagle / LocateAnything-3B is documented in `docs/EAGLE_NEXT.md` as a future backend for prompted object grounding such as:
+- React 19, TypeScript, and Vite
+- MediaPipe Tasks Vision for hand and face landmarks
+- Canvas sampling for motion and color analysis
+- Web Audio for gain, filter, delay, analysis, and seeking
+- Lucide for accessible interface icons
 
-- “Find the red mug.”
-- “Draw a box around the keyboard.”
-- “Which object is closest to my hand?”
+## Honest model scope
 
-It is **not used in v1** because it is a heavy server/GPU model and its model license is non-commercial/research-oriented. This first app is built to be reliable on Vercel as a client-only browser demo.
+NVIDIA Eagle / LocateAnything is **not** part of the current browser runtime. It is a researched next step for open-vocabulary grounding such as “find the red mug” or “locate the object closest to my hand.”
 
-## Future modes
+The integration plan and model-license warning live in [docs/EAGLE_NEXT.md](./docs/EAGLE_NEXT.md). Keeping this boundary explicit prevents pixel heuristics from being presented as neural-model output.
 
-- Fingertip color picker / color trail game
-- Pose mirror with MediaPipe PoseLandmarker
-- Face expression triggers with MediaPipe FaceLandmarker
-- Optional Gemini narrator through a serverless proxy, only after explicit consent because frames leave the browser and token costs apply
+## Quality checks
+
+```bash
+npm test
+npm run lint
+npm run build
+npm audit
+```
+
+The CI workflow runs tests, lint, the production build, and a production-dependency audit on every push and pull request.
+
+## Privacy and security
+
+- Camera and uploaded media are processed in the active browser tab.
+- File types and sizes are checked before object URLs are created.
+- MediaPipe runtime and model origins are explicitly allow-listed by the content security policy.
+- GPU initialization falls back to CPU when needed.
+- The project has no secrets, accounts, analytics, or application backend.
+
+See [SECURITY.md](./SECURITY.md) for responsible disclosure.
+
+## Project status
+
+Conductor Vision is an active experimental project. The browser experience is functional; future research includes optional open-vocabulary grounding, calibration profiles, richer audio effects, and device-level performance testing.
+
+## Contributing
+
+Issues and focused pull requests are welcome. Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a change.
+
+## License
+
+The application code is available under the [MIT License](./LICENSE). Third-party models and libraries retain their own licenses. In particular, review the LocateAnything model license before any future integration or commercial use.
