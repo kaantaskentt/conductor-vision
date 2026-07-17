@@ -25,3 +25,7 @@ Conductor Vision is currently a client-only application:
 - there are no accounts, secrets, databases, or application APIs;
 - MediaPipe runtime files and model weights are fetched from the origins listed in the content security policy;
 - a future server or model backend requires a new threat review before release.
+
+## Automated checks
+
+Every pull request runs dependency installation, tests, linting, a production build, and CodeQL analysis. Dependabot monitors both npm and GitHub Actions dependencies.
