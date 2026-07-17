@@ -19,6 +19,17 @@ function loadImage(source: string) {
   })
 }
 
+export async function drawLabPreview(source: string, canvas: HTMLCanvasElement) {
+  const image = await loadImage(source)
+  const scale = Math.min(1, 1280 / Math.max(image.naturalWidth, image.naturalHeight))
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('Canvas preview is not available in this browser.')
+  context.clearRect(0, 0, canvas.width, canvas.height)
+  context.drawImage(image, 0, 0, canvas.width, canvas.height)
+}
+
 function sourceCanvas(image: HTMLImageElement) {
   const maxDimension = 1280
   const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight))

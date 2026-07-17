@@ -8,9 +8,31 @@ import {
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { CameraActions, CameraStage, PageIntro } from '../components/AppShell'
 import type { useVisionRuntime } from '../hooks/useVisionRuntime'
-import { createColorMaskPreview, createDepthStudyPreview, validateLabImage } from '../lib/lab'
+import {
+  createColorMaskPreview,
+  createDepthStudyPreview,
+  drawLabPreview,
+  validateLabImage,
+} from '../lib/lab'
 
 type LabStudy = 'mask' | 'depth'
+
+function LabPreview({ source, label }: { source: string; label: string }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    void drawLabPreview(source, canvas)
+  }, [source])
+
+  return (
+    <figure className="lab-preview">
+      <canvas ref={canvasRef}>{label}</canvas>
+      <figcaption className="sr-only">{label}</figcaption>
+    </figure>
+  )
+}
 
 export function LabScreen({ vision }: { vision: ReturnType<typeof useVisionRuntime> }) {
   const [study, setStudy] = useState<LabStudy>('mask')
@@ -164,9 +186,9 @@ export function LabScreen({ vision }: { vision: ReturnType<typeof useVisionRunti
         <div className="lab-workspace">
           <div className="lab-canvas">
             {result || source ? (
-              <img
-                src={result ?? source ?? ''}
-                alt={result ? `${study} preview` : 'Uploaded source'}
+              <LabPreview
+                source={result ?? source ?? ''}
+                label={result ? `${study} preview` : 'Uploaded source'}
               />
             ) : (
               <CameraStage
