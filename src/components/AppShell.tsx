@@ -32,10 +32,10 @@ export function AppHeader({
 }) {
   return (
     <header className="app-header">
-      <a className="brand" href="#main-content" aria-label="Conductor Vision home">
-        <img className="brand-mark" src="/conductor-vision-icon.png" alt="" />
+      <a className="brand" href="#main-content" aria-label="Ultra Vision home">
+        <img className="brand-mark" src="/ultra-vision-icon.png" alt="" />
         <span>
-          <strong>Conductor Vision</strong>
+          <strong>Ultra Vision</strong>
           <small>Local vision instruments</small>
         </span>
       </a>
@@ -158,7 +158,7 @@ export function PrivacyFooter() {
         <ShieldCheck aria-hidden="true" />
         Local first. Camera frames and media stay in this browser tab.
       </span>
-      <a href="https://github.com/kaantaskentt/conductor-vision">View source</a>
+      <a href="https://github.com/kaantaskentt/ultra-vision">View source</a>
     </footer>
   )
 }

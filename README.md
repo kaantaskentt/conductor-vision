@@ -1,22 +1,22 @@
 <p align="center">
-  <img src="./public/conductor-vision-icon.png" alt="Conductor Vision" width="88" />
+  <img src="./public/ultra-vision-icon.png" alt="Ultra Vision" width="88" />
 </p>
 
-<h1 align="center">Conductor Vision</h1>
+<h1 align="center">Ultra Vision</h1>
 
 <p align="center">
   A local-first browser instrument for real-time vision and gesture-controlled audio.
 </p>
 
 <p align="center">
-  <a href="https://github.com/kaantaskentt/conductor-vision/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/kaantaskentt/conductor-vision/ci.yml?branch=main&label=CI&style=flat-square"></a>
+  <a href="https://github.com/kaantaskentt/ultra-vision/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/kaantaskentt/ultra-vision/ci.yml?branch=main&label=CI&style=flat-square"></a>
   <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-8255ff?style=flat-square"></a>
   <img alt="No backend required" src="https://img.shields.io/badge/backend-none-69d4ea?style=flat-square">
 </p>
 
-![Conductor Vision interface](./docs/design/conductor-vision-app.jpg)
+![Ultra Vision interface](./docs/design/ultra-vision-app.png)
 
-Conductor Vision turns a webcam and an audio file into a private, interactive instrument. It tracks hands and faces in real time, samples motion and color, and maps deliberate hand movement to focused audio controls—all inside the browser tab.
+Ultra Vision turns a webcam and an audio file into a private, interactive instrument. It tracks hands and faces in real time, samples motion and color, and maps deliberate hand movement to focused audio controls—all inside the browser tab.
 
 ## What it can do
 
@@ -31,8 +31,8 @@ Conductor Vision turns a webcam and an audio file into a private, interactive in
 Requirements: Node.js 20.19+ or 22.12+ and a modern Chromium, Firefox, or Safari browser.
 
 ```bash
-git clone https://github.com/kaantaskentt/conductor-vision.git
-cd conductor-vision
+git clone https://github.com/kaantaskentt/ultra-vision.git
+cd ultra-vision
 npm ci
 npm run dev
 ```
@@ -102,7 +102,7 @@ See [SECURITY.md](./SECURITY.md) for responsible disclosure.
 
 ## Project status
 
-Conductor Vision is an active experimental project. The browser experience is functional; future research includes optional open-vocabulary grounding, calibration profiles, richer audio effects, and device-level performance testing.
+Ultra Vision is an active experimental project. The browser experience is functional; future research includes optional open-vocabulary grounding, calibration profiles, richer audio effects, and device-level performance testing.
 
 ## Contributing
 

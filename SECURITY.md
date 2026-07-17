@@ -19,7 +19,7 @@ You can expect an initial acknowledgement within seven days. Please allow time f
 
 ## Security boundaries
 
-Conductor Vision is currently a client-only application:
+Ultra Vision is currently a client-only application:
 
 - camera frames and uploaded media remain in the browser tab;
 - there are no accounts, secrets, databases, or application APIs;
@@ -28,4 +28,4 @@ Conductor Vision is currently a client-only application:
 
 ## Automated checks
 
-Every pull request runs dependency installation, tests, linting, a production build, and CodeQL analysis. Dependabot monitors both npm and GitHub Actions dependencies.
+Every pull request runs dependency installation, tests, linting, a production build, and CodeQL analysis. GitHub dependency alerts remain enabled, while dependency updates are reviewed and applied manually.

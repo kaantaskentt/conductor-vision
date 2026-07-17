@@ -1,6 +1,6 @@
-# Contributing to Conductor Vision
+# Contributing to Ultra Vision
 
-Thanks for helping improve Conductor Vision. Small, focused changes are easiest to review and test.
+Thanks for helping improve Ultra Vision. Small, focused changes are easiest to review and test.
 
 ## Development setup
 

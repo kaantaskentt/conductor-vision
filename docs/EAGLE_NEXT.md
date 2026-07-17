@@ -1,6 +1,6 @@
 # NVIDIA Eagle / LocateAnything integration path
 
-Conductor Vision currently uses MediaPipe in the browser for live hand and face landmarks. That is the right runtime for interactive gesture control: it returns joint geometry directly, stays on-device, and runs at webcam frame rates on ordinary laptops.
+Ultra Vision currently uses MediaPipe in the browser for live hand and face landmarks. That is the right runtime for interactive gesture control: it returns joint geometry directly, stays on-device, and runs at webcam frame rates on ordinary laptops.
 
 NVIDIA's LocateAnything-3B is the researched next backend for **prompted visual grounding**, not a dependency hidden inside the current application.
 
@@ -29,7 +29,7 @@ Sources and license terms were rechecked in July 2026.
 
 The Eagle code repository is Apache-2.0, but the LocateAnything-3B model weights use a separate NVIDIA license. The model license limits the model and derivatives to non-commercial research or evaluation use.
 
-Do not bundle the weights into Conductor Vision or present the model as commercially usable without a new license review.
+Do not bundle the weights into Ultra Vision or present the model as commercially usable without a new license review.
 
 ## Proposed architecture
 
