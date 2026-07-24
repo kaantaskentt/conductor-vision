@@ -19,6 +19,21 @@ type FakeFilter = {
   connect: ReturnType<typeof vi.fn>
 }
 
+type FakeCompressor = {
+  threshold: FakeAudioParam
+  knee: FakeAudioParam
+  ratio: FakeAudioParam
+  attack: FakeAudioParam
+  release: FakeAudioParam
+  connect: ReturnType<typeof vi.fn>
+  disconnect: ReturnType<typeof vi.fn>
+}
+
+type FakeMediaDestination = {
+  stream: MediaStream
+  track: MediaStreamTrack & { stop: ReturnType<typeof vi.fn> }
+}
+
 function createAudioParam(value = 0): FakeAudioParam {
   return { value, setTargetAtTime: vi.fn() }
 }
@@ -30,20 +45,41 @@ class FakeAudioContext {
   state: AudioContextState = 'running'
   destination = {} as AudioDestinationNode
   filters: FakeFilter[] = []
+  compressors: FakeCompressor[] = []
+  mediaDestinations: FakeMediaDestination[] = []
 
   constructor() {
     FakeAudioContext.instances.push(this)
   }
 
   createDynamicsCompressor() {
-    return {
+    const compressor: FakeCompressor = {
       threshold: createAudioParam(),
       knee: createAudioParam(),
       ratio: createAudioParam(),
       attack: createAudioParam(),
       release: createAudioParam(),
       connect: vi.fn(),
-    } as unknown as DynamicsCompressorNode
+      disconnect: vi.fn(),
+    }
+    this.compressors.push(compressor)
+    return compressor as unknown as DynamicsCompressorNode
+  }
+
+  createMediaStreamDestination() {
+    const track = {
+      kind: 'audio',
+      readyState: 'live',
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack & { stop: ReturnType<typeof vi.fn> }
+    const stream = {
+      getTracks: () => [track],
+      getAudioTracks: () => [track],
+      getVideoTracks: () => [],
+    } as unknown as MediaStream
+    const destination = { stream, track }
+    this.mediaDestinations.push(destination)
+    return destination as unknown as MediaStreamAudioDestinationNode
   }
 
   createMediaElementSource() {
@@ -129,6 +165,7 @@ describe('DJ mixer filter gesture integration', () => {
   let root: Root
   let container: HTMLDivElement
   let current: Mixer
+  let mounted: boolean
 
   beforeEach(async () => {
     vi.useFakeTimers()
@@ -153,6 +190,7 @@ describe('DJ mixer filter gesture integration', () => {
 
     container = document.createElement('div')
     root = createRoot(container)
+    mounted = true
     await act(async () => {
       root.render(<Harness onUpdate={(mixer) => (current = mixer)} />)
     })
@@ -177,7 +215,7 @@ describe('DJ mixer filter gesture integration', () => {
   })
 
   afterEach(async () => {
-    await act(async () => root.unmount())
+    if (mounted) await act(async () => root.unmount())
     vi.useRealTimers()
     vi.unstubAllGlobals()
   })
@@ -268,5 +306,84 @@ describe('DJ mixer filter gesture integration', () => {
     await act(async () => vi.advanceTimersByTime(400))
     expect(current.selectedControl).toBe('crossfader')
     expect(current.gestureStatus).not.toContain('returned to neutral')
+  })
+
+  it('creates an isolated post-master capture tap without disturbing speaker output', async () => {
+    const context = FakeAudioContext.instances[0]
+    const compressor = context.compressors[0]
+    context.state = 'suspended'
+
+    let capture: Awaited<ReturnType<Mixer['createMasterCapture']>>
+    await act(async () => {
+      capture = await current.createMasterCapture()
+    })
+
+    const destination = context.mediaDestinations[0]
+    expect(context.resume).toHaveBeenCalledOnce()
+    expect(compressor.connect).toHaveBeenNthCalledWith(1, context.destination)
+    expect(compressor.connect).toHaveBeenNthCalledWith(2, destination)
+    expect(capture!.stream).toBe(destination.stream)
+
+    capture!.release()
+    capture!.release()
+
+    expect(compressor.disconnect).toHaveBeenCalledOnce()
+    expect(compressor.disconnect).toHaveBeenCalledWith(destination)
+    expect(destination.track.stop).toHaveBeenCalledOnce()
+    expect(context.close).not.toHaveBeenCalled()
+  })
+
+  it('stops a capture destination when the post-master connection fails', async () => {
+    const context = FakeAudioContext.instances[0]
+    const compressor = context.compressors[0]
+    compressor.connect.mockImplementationOnce(() => {
+      throw new Error('Audio graph rejected')
+    })
+
+    await expect(current.createMasterCapture()).rejects.toThrow(
+      'The browser could not connect the replay audio tap.',
+    )
+
+    const destination = context.mediaDestinations[0]
+    expect(destination.track.stop).toHaveBeenCalledOnce()
+    expect(compressor.disconnect).not.toHaveBeenCalled()
+    expect(context.close).not.toHaveBeenCalled()
+  })
+
+  it('releases an active capture tap when the mixer unmounts', async () => {
+    const context = FakeAudioContext.instances[0]
+    const compressor = context.compressors[0]
+    await current.createMasterCapture()
+    const destination = context.mediaDestinations[0]
+
+    await act(async () => root.unmount())
+    mounted = false
+
+    expect(compressor.disconnect).toHaveBeenCalledOnce()
+    expect(compressor.disconnect).toHaveBeenCalledWith(destination)
+    expect(destination.track.stop).toHaveBeenCalledOnce()
+    expect(context.close).toHaveBeenCalledOnce()
+  })
+
+  it('does not create a capture destination after unmount wins a deferred resume race', async () => {
+    const context = FakeAudioContext.instances[0]
+    context.state = 'suspended'
+    let resolveResume: (() => void) | undefined
+    context.resume.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveResume = resolve
+        }),
+    )
+
+    const pendingCapture = current.createMasterCapture()
+    await act(async () => Promise.resolve())
+    await act(async () => root.unmount())
+    mounted = false
+    resolveResume?.()
+
+    await expect(pendingCapture).rejects.toThrow('The master mix is no longer available.')
+    expect(context.mediaDestinations).toHaveLength(0)
+    expect(context.close).toHaveBeenCalledOnce()
   })
 })

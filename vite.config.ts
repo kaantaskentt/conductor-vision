@@ -6,6 +6,10 @@ export default defineConfig({
   plugins: [react()],
   test: {
     coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/**/*.test.{ts,tsx}', 'src/test/**'],
+      reporter: ['text', 'json-summary'],
       thresholds: {
         statements: 50,
         branches: 35,

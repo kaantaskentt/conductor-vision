@@ -16,7 +16,7 @@ The roadmap is organized around product outcomes, not feature volume.
 - Phase-aware sync against one shared transport clock.
 - Local calibration profiles and dominant-hand selection.
 - Keyboard performance shortcuts and a compact mobile master strip.
-- Privacy-safe local recording of short performance clips.
+- Replay Studio UI for the completed privacy-safe post-master recording foundation.
 
 ## Later — expand the vision instrument
 

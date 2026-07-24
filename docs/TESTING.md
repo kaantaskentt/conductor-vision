@@ -13,7 +13,7 @@ npm audit --audit-level=high
 
 ## Deterministic tests
 
-Unit tests cover vision math, pixel studies, gesture pickup/release, camera-overlay remounts, audio curves, BPM math, file validation, and generated demo tracks. React integration tests mount the real mixer and camera hooks to verify timed Filter release, Web Audio parameters, live-stream handoff, overlay remounts, and camera restart. Prefer generated signals and landmark traces over copyrighted or personally identifying fixtures.
+Unit tests cover vision math, pixel studies, gesture pickup/release, camera-overlay remounts, audio curves, BPM math, file validation, generated demo tracks, and the bounded Air Mix Replay recorder lifecycle. React integration tests mount the real mixer and camera hooks to verify timed Filter release, Web Audio parameters, the isolated post-master recording tap, live-stream handoff, overlay remounts, and camera restart. Prefer generated signals and landmark traces over copyrighted or personally identifying fixtures.
 
 Coverage cannot fall below the checked-in project floor: 50% statements and lines, 40% functions, and 35% branches.
 

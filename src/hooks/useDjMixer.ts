@@ -11,6 +11,11 @@ import { clamp, type GestureFrame } from '../lib/vision'
 export type DeckId = 'a' | 'b'
 export type DjControl = 'crossfader' | 'volume' | 'filter'
 
+export type MasterCaptureHandle = {
+  stream: MediaStream
+  release: () => void
+}
+
 export const DJ_NEUTRAL_VALUES = {
   crossfader: 0,
   volume: 82,
@@ -317,6 +322,8 @@ export function useDjMixer() {
   const objectUrlsRef = useRef<Record<DeckId, string | null>>({ a: null, b: null })
   const audioContextRef = useRef<AudioContext | null>(null)
   const masterNodeRef = useRef<DynamicsCompressorNode | null>(null)
+  const masterCaptureReleasesRef = useRef(new Set<() => void>())
+  const captureGenerationRef = useRef(0)
   const nodesRef = useRef<Partial<Record<DeckId, DeckNodes>>>({})
   const meterAnimationRef = useRef<number | null>(null)
   const bpmRequestRef = useRef<Record<DeckId, number>>({ a: 0, b: 0 })
@@ -466,6 +473,45 @@ export function useDjMixer() {
     },
     [startMeter],
   )
+
+  const createMasterCapture = useCallback(async (): Promise<MasterCaptureHandle> => {
+    const captureGeneration = captureGenerationRef.current
+    const loadedDeckIds = DECK_IDS.filter((id) => decksRef.current[id].loaded)
+    if (!loadedDeckIds.length) throw new Error('Load a track before recording a replay.')
+
+    await Promise.all(loadedDeckIds.map(ensureDeckGraph))
+    if (captureGeneration !== captureGenerationRef.current) {
+      throw new Error('The master mix is no longer available.')
+    }
+    const context = audioContextRef.current
+    const master = masterNodeRef.current
+    if (!context || !master) throw new Error('The master mix is not ready yet.')
+    if (typeof context.createMediaStreamDestination !== 'function') {
+      throw new Error('This browser cannot record the master mix.')
+    }
+
+    const destination = context.createMediaStreamDestination()
+    try {
+      master.connect(destination)
+    } catch {
+      for (const track of destination.stream.getTracks()) track.stop()
+      throw new Error('The browser could not connect the replay audio tap.')
+    }
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      masterCaptureReleasesRef.current.delete(release)
+      try {
+        master.disconnect(destination)
+      } catch {
+        // The audio context may already be closing during app teardown.
+      }
+      for (const track of destination.stream.getTracks()) track.stop()
+    }
+    masterCaptureReleasesRef.current.add(release)
+    return { stream: destination.stream, release }
+  }, [ensureDeckGraph])
 
   const resetDeckAudioParameters = useCallback((id: DeckId) => {
     const audio = audioElementsRef.current[id]
@@ -1204,12 +1250,16 @@ export function useDjMixer() {
 
   useEffect(() => {
     const objectUrls = objectUrlsRef.current
+    const captureReleases = masterCaptureReleasesRef.current
+    const captureGeneration = captureGenerationRef
     return () => {
+      captureGeneration.current += 1
       if (meterAnimationRef.current !== null) cancelAnimationFrame(meterAnimationRef.current)
       if (filterReleaseTimerRef.current !== null) clearTimeout(filterReleaseTimerRef.current)
       for (const id of DECK_IDS) {
         if (objectUrls[id]) URL.revokeObjectURL(objectUrls[id] ?? '')
       }
+      for (const release of [...captureReleases]) release()
       const context = audioContextRef.current
       if (context && context.state !== 'closed') void context.close()
       masterNodeRef.current = null
@@ -1229,6 +1279,7 @@ export function useDjMixer() {
     bpmSyncMessage,
     bpmSyncMaster: bpmSync?.masterId ?? null,
     bpmSyncTarget: bpmSync?.targetId ?? null,
+    createMasterCapture,
     setAudioElement,
     loadFile,
     loadDemoMix,

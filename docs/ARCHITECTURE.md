@@ -15,6 +15,7 @@ flowchart LR
   Files[Local audio files] --> Mixer
   Mixer --> Master[Master limiter]
   Master --> Output[Device output]
+  Master -. On-demand local tap .-> Replay[Bounded replay recorder]
 ```
 
 ## Vision runtime
@@ -32,6 +33,12 @@ media source → high-pass → low-pass → channel gain → crossfade gain → 
 ```
 
 React state mirrors user-facing deck status. Refs own high-frequency or imperative audio state. Gesture takeover calibrates relative to the current value so the first hand frame cannot jump a control.
+
+## Air Mix Replay foundation
+
+`createMasterCapture` creates an isolated, releasable `MediaStreamAudioDestinationNode` after the master dynamics stage. Releasing that tap disconnects only the recorder branch, so it cannot mute the speaker path or stop either deck.
+
+`airMixReplay` owns the local recorder state machine, codec negotiation, duration and memory ceilings, final-chunk ordering, object URL cleanup, and stale-session protection. It accepts a dedicated canvas plus the post-master audio handle; it does not request the camera, microphone, network, or screen. The recording engine is intentionally not connected to a visible product control until a Replay Studio visual direction is selected and browser-verified.
 
 ## Trust boundaries
 
