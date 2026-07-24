@@ -14,6 +14,14 @@
   <img alt="No backend required" src="https://img.shields.io/badge/backend-none-69d4ea?style=flat-square">
 </p>
 
+<p align="center">
+  <a href="https://ultra-vision.vercel.app"><strong>Try Ultra Vision live</strong></a>
+  ·
+  <a href="./ROADMAP.md">Roadmap</a>
+  ·
+  <a href="./CONTRIBUTING.md">Contribute</a>
+</p>
+
 ### Vision workspace
 
 ![Ultra Vision real-time vision analysis](./docs/design/ultra-vision-analysis.jpg)
@@ -24,19 +32,20 @@
 
 ### DJ Room
 
-![Ultra Vision camera and gesture routing](./docs/design/ultra-vision-camera.jpg)
+![Ultra Vision camera and gesture clutch](./docs/design/ultra-vision-gesture-clutch.png)
 
-![Ultra Vision two-deck DJ mixer](./docs/design/ultra-vision-dj-mixer.jpg)
+![Ultra Vision generated demo set and two-deck DJ mixer](./docs/design/ultra-vision-demo-mixer.png)
 
 Ultra Vision turns a webcam and two audio files into a private, interactive visual instrument and DJ mixer. It tracks hands and faces, studies pixels, detects track tempo, and maps deliberate movement to focused mix controls—all inside the browser tab.
 
 ## What it can do
 
-- **DJ Room** — mix two local tracks with independent transports, hardware-style level and bipolar filter knobs, phrase jumps, meters, and an equal-power crossfader.
+- **Instant demo set** — generate two original rhythmic loops locally and reach a playable two-deck mix without finding audio files.
+- **DJ Room** — mix two local tracks with independent transports, hardware-style level and bipolar filter knobs, track-quarter jumps, post-fader meters, a master limiter, and an equal-power crossfader.
 - **BPM tools** — estimate BPM locally, tap a tempo when analysis needs help, and use one reversible BPM Sync control to match the idle deck to the playing deck.
 - **Vision** — inspect hand landmarks, raised fingers, face signals, motion direction, and color coverage.
 - **Pixel Studio** — run transparent color-similarity and luminance studies on an upload or captured frame inside Vision.
-- **Gesture routing** — choose the crossfader or one deck's channel or filter as the active hand-controlled parameter, with one-click and double-click resets.
+- **Intentional gesture routing** — choose the crossfader or one deck's channel or filter, open your hand to engage, and close it to lock. Relative pickup prevents the first frame from jumping a control.
 - **Local media** — camera frames, images, and uploaded tracks are not sent to an application backend.
 - **Responsive interface** — the complete workflow works from a phone-sized viewport through desktop.
 
@@ -57,11 +66,11 @@ No API keys, database, or backend service are required.
 
 ## DJ Room workflow
 
-1. Load a local track into each deck. Ultra Vision analyzes up to the first 90 seconds to estimate BPM.
+1. Choose **Try demo set** for two generated local loops, or load one of your own tracks into each deck. For files up to 12 MB, Ultra Vision examines up to the first 90 seconds locally to estimate BPM. Larger files skip the memory-heavy analysis and remain ready for **Tap BPM**.
 2. If a tempo is missing or incorrect, use **Tap BPM** a few times on the beat.
 3. Press the center **BPM Sync** control. The playing deck becomes the master; if neither or both are playing, Deck A leads. Press it again to restore both original tempos. Sync works within the ±20% deck range, including sensible half-time and double-time matches, and preserves pitch where the browser supports it.
-4. Use the phrase pads to align the downbeat, then mix with the channel controls and equal-power crossfader.
-5. Start the camera and route hand movement to the crossfader, channel level, or filter. The filter calibrates before it moves and returns to its 50% neutral position when your hand leaves. Use **Reset**, **Reset mix**, or double-click a mode or knob to return it to neutral.
+4. Use the track-quarter pads as coarse navigation, align the downbeat manually, then mix with the channel controls and equal-power crossfader.
+5. Start the camera and route hand movement to the crossfader, channel level, or filter. Hold an open hand steady to calibrate without a jump, then move. Close your hand to lock; Filter returns to its 50% neutral position after release. Use **Reset**, **Reset mix**, or double-click a mode or knob at any time.
 
 BPM Sync matches tempo; it does not claim automatic beat-grid or phase alignment.
 
@@ -75,6 +84,8 @@ flowchart LR
   Pixels --> Signals
   DeckA["Local track A"] --> TempoA["BPM analysis + deck A graph"]
   DeckB["Local track B"] --> TempoB["BPM analysis + deck B graph"]
+  Demo["Generated demo set"] --> TempoA
+  Demo --> TempoB
   TempoA --> Mixer["Equal-power mixer"]
   TempoB --> Mixer
   Signals --> Mixer
@@ -101,16 +112,16 @@ The integration plan and model-license warning live in [docs/EAGLE_NEXT.md](./do
 npm test
 npm run lint
 npm run build
-npm audit
+npm audit --audit-level=high
 ```
 
-The CI workflow runs tests, lint, the production build, and a production-dependency audit on every push and pull request.
+The CI workflow runs tests with coverage thresholds, lint, the production build, and a full dependency audit on every push and pull request.
 
 ## Privacy and security
 
 - Camera and uploaded media are processed in the active browser tab.
 - File types and sizes are checked before object URLs are created.
-- MediaPipe runtime and model origins are explicitly allow-listed by the content security policy.
+- MediaPipe's pinned browser runtime and the models required at startup are fetched from explicitly allow-listed jsDelivr and Google origins before the camera opens. If you switch a running DJ camera into Vision, the optional face model can load afterward. These origins are not sent camera frames, but they remain an external runtime trust boundary until the assets are self-hosted.
 - GPU initialization falls back to CPU when needed.
 - The project has no secrets, accounts, analytics, or application backend.
 
@@ -118,7 +129,9 @@ See [SECURITY.md](./SECURITY.md) for responsible disclosure.
 
 ## Project status
 
-Ultra Vision is an active experimental project. Vision and two-deck mixing are functional; future research includes optional open-vocabulary grounding, saved calibration profiles, waveform beat grids, richer effects, and device-level performance testing.
+Ultra Vision is an active experimental project. Vision and two-deck mixing are functional; BPM Sync currently matches tempo rather than phase. The public roadmap covers deterministic camera tests, waveform beat grids, local performance clips, saved calibration profiles, and optional open-vocabulary grounding.
+
+Read the [roadmap](./ROADMAP.md), [architecture](./docs/ARCHITECTURE.md), [testing strategy](./docs/TESTING.md), and [third-party notices](./THIRD_PARTY_NOTICES.md).
 
 ## Contributing
 

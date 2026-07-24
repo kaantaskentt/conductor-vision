@@ -8,7 +8,7 @@
   --border-strong: #32435f;
   --text: #f5f7fb;
   --muted: #9aa7ba;
-  --subtle: #6f7e92;
+  --subtle: #8290a3;
   --violet: #8255ff;
   --violet-bright: #9d78ff;
   --violet-soft: rgba(130, 85, 255, 0.14);
@@ -355,6 +355,38 @@
 .live-pill.running span {
   background: var(--green);
   box-shadow: 0 0 0 4px rgba(115, 223, 184, 0.11);
+}
+
+.live-pill.loading {
+  color: var(--cyan);
+}
+
+.live-pill.loading span {
+  background: var(--cyan);
+  box-shadow: 0 0 0 4px rgba(120, 217, 242, 0.11);
+}
+
+.camera-loading {
+  position: absolute;
+  z-index: 4;
+  right: 18px;
+  bottom: 18px;
+  display: grid;
+  max-width: min(430px, calc(100% - 36px));
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid rgba(120, 217, 242, 0.28);
+  border-radius: 10px;
+  background: rgba(6, 14, 25, 0.82);
+  color: var(--text);
+  font-size: 11px;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+.camera-loading span {
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .camera-empty {
@@ -890,6 +922,7 @@ input[type='range'] {
   gap: 14px;
   align-items: stretch;
   margin-top: 14px;
+  scroll-margin-top: 92px;
 }
 
 .deck-panel,
@@ -1149,6 +1182,7 @@ input[type='range'] {
 .rotary-control {
   display: grid;
   min-width: 0;
+  margin: 0;
   justify-items: center;
   gap: 7px;
   padding: 9px 10px 8px;
@@ -1170,7 +1204,7 @@ input[type='range'] {
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 720;
   letter-spacing: 0.03em;
 }
@@ -1304,7 +1338,7 @@ input[type='range'] {
 
 .rotary-control output {
   color: var(--text);
-  font-size: 9px;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
   font-weight: 720;
 }
@@ -1314,7 +1348,7 @@ input[type='range'] {
   width: min(112px, 100%);
   justify-content: space-between;
   color: var(--subtle);
-  font-size: 7px;
+  font-size: 8.5px;
   font-weight: 760;
   letter-spacing: 0.05em;
 }
@@ -1328,7 +1362,7 @@ input[type='range'] {
 .deck-actions .button {
   min-height: 36px;
   padding: 0 8px;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .deck-footer {
@@ -1358,7 +1392,7 @@ input[type='range'] {
 .deck-footer > span {
   min-height: 14px;
   color: var(--subtle);
-  font-size: 8px;
+  font-size: 9.5px;
   line-height: 1.4;
 }
 
@@ -1384,7 +1418,7 @@ input[type='range'] {
 
 .mixer-heading span {
   color: var(--green);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1414,7 +1448,7 @@ input[type='range'] {
 
 .master-levels span {
   color: var(--subtle);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 800;
 }
 
@@ -1458,12 +1492,12 @@ input[type='range'] {
   justify-content: space-between;
   gap: 8px;
   color: var(--cyan);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .crossfader-control > div strong {
   color: var(--muted);
-  font-size: 8px;
+  font-size: 9.5px;
   font-weight: 650;
   text-align: center;
 }
@@ -1475,13 +1509,13 @@ input[type='range'] {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 8px;
+  font-size: 9.5px;
   cursor: pointer;
 }
 
 .crossfader-control output {
   color: var(--text);
-  font-size: 9px;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
@@ -1521,12 +1555,12 @@ input[type='range'] {
 
 .bpm-sync-toggle strong {
   color: var(--text);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .bpm-sync-toggle small {
   color: var(--muted);
-  font-size: 8px;
+  font-size: 9.5px;
   line-height: 1.35;
 }
 
@@ -1535,7 +1569,7 @@ input[type='range'] {
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--subtle);
-  font-size: 7px;
+  font-size: 9px;
   letter-spacing: 0.08em;
 }
 
@@ -1605,6 +1639,35 @@ input[type='range'] {
   gap: 8px !important;
 }
 
+.gesture-state-pill {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(7, 16, 28, 0.56);
+  color: var(--subtle);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.gesture-state-pill.armed {
+  border-color: rgba(115, 223, 184, 0.42);
+  background: rgba(115, 223, 184, 0.1);
+  color: var(--green);
+  box-shadow: 0 0 0 4px rgba(115, 223, 184, 0.05);
+}
+
+.gesture-state-pill.calibrating {
+  border-color: rgba(105, 212, 234, 0.4);
+  background: rgba(105, 212, 234, 0.1);
+  color: var(--cyan);
+  box-shadow: 0 0 0 4px rgba(105, 212, 234, 0.05);
+}
+
 .gesture-heading-actions button {
   display: inline-flex;
   min-height: 28px;
@@ -1616,7 +1679,7 @@ input[type='range'] {
   background: rgba(7, 16, 28, 0.56);
   color: var(--muted);
   font: inherit;
-  font-size: 8px;
+  font-size: 9px;
   cursor: pointer;
 }
 
@@ -1647,7 +1710,7 @@ input[type='range'] {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 740;
   cursor: pointer;
 }
@@ -1693,13 +1756,13 @@ input[type='range'] {
 
 .gesture-modes strong {
   color: var(--text);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .gesture-modes small {
   color: var(--subtle);
-  font-size: 7px;
-  line-height: 1.25;
+  font-size: 9.5px;
+  line-height: 1.35;
 }
 
 .gesture-modes button.active {
@@ -1715,7 +1778,7 @@ input[type='range'] {
 .gesture-reset-hint {
   margin: -5px 0 0;
   color: var(--subtle);
-  font-size: 8px;
+  font-size: 9.5px;
   line-height: 1.4;
   text-align: center;
 }
@@ -1746,7 +1809,7 @@ input[type='range'] {
 
 .gesture-status span {
   color: var(--subtle);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 760;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1754,7 +1817,7 @@ input[type='range'] {
 
 .gesture-status strong {
   color: var(--text);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.4;
 }
 
@@ -1973,6 +2036,18 @@ input[type='range'] {
   .mixer-console {
     grid-column: auto;
     grid-row: auto;
+  }
+
+  .deck-a {
+    order: 1;
+  }
+
+  .deck-b {
+    order: 2;
+  }
+
+  .mixer-console {
+    order: 3;
   }
 
   .mixer-console {

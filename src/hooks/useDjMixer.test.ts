@@ -6,8 +6,11 @@ import {
   equalPowerCrossfade,
   estimateBpmFromSamples,
   filterValueFromGesture,
+  isGestureFrameEngaged,
   matchedTempoPercent,
   phraseTimeForIndex,
+  relativeGestureValue,
+  smoothBoundedControlValue,
   smoothControlValue,
   shouldReleaseFilterGesture,
   shortestAngleDelta,
@@ -50,6 +53,31 @@ describe('DJ mixer audio safeguards and math', () => {
     expect(smoothControlValue(0, 100)).toBe(32)
     expect(smoothControlValue(80, 20, 0.5)).toBe(50)
     expect(smoothControlValue(10, 20, 2)).toBe(20)
+  })
+
+  it('clamps the hidden gesture accumulator so reversing from an end stop responds immediately', () => {
+    expect(smoothBoundedControlValue(140, 160, -100, 100, 0.5)).toBe(100)
+    expect(smoothBoundedControlValue(100, -100, -100, 100, 0.32)).toBe(36)
+    expect(smoothBoundedControlValue(-20, -40, 0, 100, 0.5)).toBe(0)
+  })
+
+  it('keeps the mixer locked until an intentional open-hand clutch is present', () => {
+    expect(
+      isGestureFrameEngaged({ detected: true, x: 0.9, y: 0.2, wristAngle: 0, openFingers: 0 }),
+    ).toBe(false)
+    expect(
+      isGestureFrameEngaged({ detected: true, x: 0.9, y: 0.2, wristAngle: 0, openFingers: 2 }),
+    ).toBe(true)
+    expect(
+      isGestureFrameEngaged({ detected: false, x: 0.5, y: 0.5, wristAngle: 0, openFingers: 5 }),
+    ).toBe(false)
+  })
+
+  it('uses relative pickup so a newly seen hand cannot jump a control', () => {
+    expect(relativeGestureValue(0, 0.9, 0.9, 200)).toBe(0)
+    expect(relativeGestureValue(82, 0.5, 0.51, 120)).toBe(82)
+    expect(relativeGestureValue(0, 0.5, 0.75, 200)).toBeCloseTo(45)
+    expect(relativeGestureValue(82, 0.6, 0.3, 120)).toBeCloseTo(49)
   })
 
   it('uses a center-neutral bipolar DJ filter', () => {

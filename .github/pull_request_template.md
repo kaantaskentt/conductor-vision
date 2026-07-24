@@ -5,9 +5,12 @@
 ## Verification
 
 - [ ] `npm test`
+- [ ] `npm run test:coverage`
 - [ ] `npm run lint`
 - [ ] `npm run build`
+- [ ] `npm audit --audit-level=high`
 - [ ] Desktop and mobile UI checked when applicable
+- [ ] Real camera startup, cancellation, and stop checked when camera code changes
 
 ## Privacy, security, and model scope
 

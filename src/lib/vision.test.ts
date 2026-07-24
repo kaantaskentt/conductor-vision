@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { analyzePixels, clamp, createEmptyAnalysis, rgbToHex, rgbToHsv } from './vision'
+import {
+  analyzePixels,
+  clamp,
+  createEmptyAnalysis,
+  rgbToHex,
+  rgbToHsv,
+  selectPrimaryHand,
+  type HandSummary,
+} from './vision'
 
 function imageData(width: number, height: number, pixels: number[]) {
   return {
@@ -46,5 +54,24 @@ describe('vision utilities', () => {
     expect(state.targetHex).toBe('#2dbedc')
     expect(state.motionHistory).toHaveLength(40)
     expect(state.hands).toEqual([])
+  })
+
+  it('keeps control on the nearest hand when detector ordering changes', () => {
+    const hand = (label: string, x: number, y: number): HandSummary => ({
+      id: `${label}-${x}`,
+      label,
+      x,
+      y,
+      count: 5,
+      wristAngle: 0,
+      raised: { thumb: true, index: true, middle: true, ring: true, pinky: true },
+    })
+    const previous = hand('Right', 0.2, 0.4)
+    const reordered = [hand('Left', 0.22, 0.4), hand('Right', 0.25, 0.42)]
+
+    expect(selectPrimaryHand(reordered, previous)?.label).toBe('Right')
+    expect(selectPrimaryHand([], previous)).toBeNull()
+    expect(selectPrimaryHand([hand('Left', 0.21, 0.4)], previous)).toBeNull()
+    expect(selectPrimaryHand([hand('Right', 0.8, 0.9)], previous)).toBeNull()
   })
 })

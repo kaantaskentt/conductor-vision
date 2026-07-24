@@ -47,6 +47,8 @@ export type GestureFrame = {
   openFingers: number
 }
 
+export type HandAnchor = Pick<HandSummary, 'label' | 'x' | 'y'>
+
 export type VisionAnalysis = {
   hands: HandSummary[]
   fingerCount: number | null
@@ -196,7 +198,7 @@ export function summarizeHands(result: HandLandmarkerResult): HandSummary[] {
     const fingers = countRaisedFingers(landmarks, label)
     const wrist = landmarks[0]
     const middle = landmarks[9]
-    const wristAngle = Math.atan2(middle.y - wrist.y, middle.x - wrist.x)
+    const wristAngle = Math.atan2(middle.y - wrist.y, wrist.x - middle.x)
 
     return {
       id: `${label}-${index}`,
@@ -208,6 +210,31 @@ export function summarizeHands(result: HandLandmarkerResult): HandSummary[] {
       wristAngle,
     }
   })
+}
+
+export function selectPrimaryHand(
+  hands: HandSummary[],
+  previous: HandAnchor | null,
+): HandSummary | null {
+  if (!hands.length) return null
+  if (!previous) return hands[0]
+
+  const sameHandedness = hands.filter((hand) => hand.label === previous.label)
+  if (!sameHandedness.length) return null
+
+  let closest = sameHandedness[0]
+  let closestDistance = Math.hypot(closest.x - previous.x, closest.y - previous.y)
+
+  for (let index = 1; index < sameHandedness.length; index += 1) {
+    const candidate = sameHandedness[index]
+    const candidateDistance = Math.hypot(candidate.x - previous.x, candidate.y - previous.y)
+    if (candidateDistance < closestDistance) {
+      closest = candidate
+      closestDistance = candidateDistance
+    }
+  }
+
+  return closestDistance <= 0.35 ? closest : null
 }
 
 export function summarizeFace(result: FaceLandmarkerResult) {

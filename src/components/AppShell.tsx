@@ -99,26 +99,46 @@ export function CameraStage({
   overlay?: ReactNode
 }) {
   const isRunning = status === 'running'
+  const isLoading = status === 'loading'
 
   return (
     <div className={`camera-stage ${compact ? 'compact' : ''}`}>
-      <video ref={setVideoElement} className="camera-feed" playsInline muted />
-      <canvas ref={setCanvasElement} className="camera-overlay" />
+      <video
+        ref={setVideoElement}
+        className="camera-feed"
+        playsInline
+        muted
+        aria-hidden="true"
+        tabIndex={-1}
+      />
+      <canvas ref={setCanvasElement} className="camera-overlay" aria-hidden="true" />
       <div className="stage-corners" aria-hidden="true" />
-      <div className={`live-pill ${isRunning ? 'running' : ''}`}>
+      <div className={`live-pill ${isRunning ? 'running' : isLoading ? 'loading' : ''}`}>
         <span />
-        {isRunning ? 'Live on device' : status === 'loading' ? 'Loading models' : 'Camera off'}
+        {isRunning
+          ? 'Live on device'
+          : isLoading
+            ? 'Preparing on device'
+            : status === 'error'
+              ? 'Camera error'
+              : 'Camera off'}
       </div>
-      {!isRunning && (
+      {status === 'idle' || status === 'error' ? (
         <div className="camera-empty">
           <Camera aria-hidden="true" />
-          <strong>{status === 'loading' ? 'Preparing local vision' : 'Camera off'}</strong>
+          <strong>{status === 'error' ? 'Camera needs attention' : 'Camera off'}</strong>
           <p>{message}</p>
           <span>
             <Hand aria-hidden="true" />
             Hand tracking inactive
           </span>
         </div>
+      ) : null}
+      {isLoading && (
+        <output className="camera-loading" aria-live="polite">
+          <strong>Preparing local vision</strong>
+          <span>{message}</span>
+        </output>
       )}
       {isRunning && overlay}
     </div>
@@ -129,21 +149,24 @@ export function CameraActions({
   status,
   start,
   stop,
+  variant = 'primary',
 }: {
   status: CameraStatus
   start: () => void
   stop: () => void
+  variant?: 'primary' | 'secondary'
 }) {
   const running = status === 'running'
+  const loading = status === 'loading'
+  const active = running || loading
   return (
     <button
       type="button"
-      className="button primary"
-      onClick={running ? stop : start}
-      disabled={status === 'loading'}
+      className={`button ${variant}`}
+      onClick={active ? stop : start}
     >
       <Camera aria-hidden="true" />
-      {status === 'loading' ? 'Loading…' : running ? 'Stop camera' : 'Start camera'}
+      {loading ? 'Cancel camera' : running ? 'Stop camera' : 'Start camera'}
     </button>
   )
 }

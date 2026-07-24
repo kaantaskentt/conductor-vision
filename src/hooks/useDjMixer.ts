@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createDemoTracks } from '../lib/demoAudio'
 import { clamp, type GestureFrame } from '../lib/vision'
 
 export type DeckId = 'a' | 'b'
@@ -43,8 +44,24 @@ type BpmSyncSnapshot = {
   originalStatuses: Record<DeckId, string>
 }
 
+type LoadFileOptions = {
+  knownBpm?: number
+  title?: string
+}
+
+type PositionGesture = {
+  control: 'crossfader' | 'volume'
+  deck: DeckId | 'master'
+  baselineInput: number
+  baselineValue: number
+  samples: number
+  startedAt: number
+  engaged: boolean
+}
+
 const DECK_IDS: DeckId[] = ['a', 'b']
 const MAX_AUDIO_BYTES = 100 * 1024 * 1024
+const MAX_BPM_ANALYSIS_BYTES = 12 * 1024 * 1024
 const ACCEPTED_AUDIO_TYPES = new Set([
   'audio/mpeg',
   'audio/mp3',
@@ -63,6 +80,11 @@ const FILTER_HIGH_MAX_HZ = 12_000
 const FILTER_GESTURE_DEAD_ZONE = (7 * Math.PI) / 180
 const FILTER_GESTURE_SWEEP = (60 * Math.PI) / 180
 const FILTER_RELEASE_MS = 300
+const POSITION_GESTURE_DEAD_ZONE = 0.025
+const GESTURE_CALIBRATION_MS = 420
+const POSITION_CALIBRATION_TOLERANCE = 0.04
+const FILTER_CALIBRATION_TOLERANCE = (8 * Math.PI) / 180
+export const GESTURE_ENGAGE_FINGERS = 2
 
 export function validateAudioFile(file: File) {
   const hasSupportedType = ACCEPTED_AUDIO_TYPES.has(file.type)
@@ -125,6 +147,31 @@ export function chooseSyncMaster(aPlaying: boolean, bPlaying: boolean): DeckId {
 export function smoothControlValue(current: number, target: number, strength = 0.32) {
   const amount = clamp(strength, 0, 1)
   return current + (target - current) * amount
+}
+
+export function smoothBoundedControlValue(
+  current: number,
+  target: number,
+  min: number,
+  max: number,
+  strength = 0.32,
+) {
+  return clamp(smoothControlValue(current, target, strength), min, max)
+}
+
+export function isGestureFrameEngaged(frame: GestureFrame) {
+  return frame.detected && frame.openFingers >= GESTURE_ENGAGE_FINGERS
+}
+
+export function relativeGestureValue(
+  baselineValue: number,
+  baselineInput: number,
+  currentInput: number,
+  sensitivity: number,
+) {
+  const delta = currentInput - baselineInput
+  const adjusted = Math.sign(delta) * Math.max(0, Math.abs(delta) - POSITION_GESTURE_DEAD_ZONE)
+  return baselineValue + adjusted * sensitivity
 }
 
 export function bipolarFilterFrequencies(amount: number) {
@@ -271,6 +318,10 @@ export function useDjMixer() {
   const [activeDeck, setActiveDeck] = useState<DeckId>('a')
   const [selectedControl, setSelectedControl] = useState<DjControl>('crossfader')
   const [gestureStatus, setGestureStatus] = useState('Waiting for a hand')
+  const [gesturePhase, setGesturePhase] = useState<'locked' | 'calibrating' | 'armed'>(
+    'locked',
+  )
+  const [demoLoading, setDemoLoading] = useState(false)
   const [bpmSync, setBpmSync] = useState<BpmSyncSnapshot | null>(null)
   const [bpmSyncMessage, setBpmSyncMessage] = useState(
     'The playing deck leads. Click again to restore both original tempos.',
@@ -281,11 +332,14 @@ export function useDjMixer() {
   const audioElementsRef = useRef<Record<DeckId, HTMLAudioElement | null>>({ a: null, b: null })
   const objectUrlsRef = useRef<Record<DeckId, string | null>>({ a: null, b: null })
   const audioContextRef = useRef<AudioContext | null>(null)
+  const masterNodeRef = useRef<DynamicsCompressorNode | null>(null)
   const nodesRef = useRef<Partial<Record<DeckId, DeckNodes>>>({})
   const meterAnimationRef = useRef<number | null>(null)
   const bpmRequestRef = useRef<Record<DeckId, number>>({ a: 0, b: 0 })
   const tapTimesRef = useRef<Record<DeckId, number[]>>({ a: [], b: [] })
   const lastGestureUpdateAtRef = useRef(0)
+  const gestureEngagedRef = useRef(false)
+  const gestureRequiresReleaseRef = useRef(false)
   const smoothedGestureRef = useRef<{
     control: DjControl
     deck: DeckId | 'master'
@@ -296,9 +350,12 @@ export function useDjMixer() {
     baselineAngle: number
     baselineValue: number
     samples: number
+    startedAt: number
     lastSeenAt: number
     engaged: boolean
   } | null>(null)
+  const positionGestureRef = useRef<PositionGesture | null>(null)
+  const filterReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     decksRef.current = decks
@@ -320,6 +377,28 @@ export function useDjMixer() {
     if (element) element.preservesPitch = true
     audioElementsRef.current[id] = element
   }, [])
+
+  const cancelFilterRelease = useCallback(() => {
+    if (filterReleaseTimerRef.current !== null) {
+      clearTimeout(filterReleaseTimerRef.current)
+      filterReleaseTimerRef.current = null
+    }
+  }, [])
+
+  const disarmGesture = useCallback(
+    (message?: string) => {
+      const wasEngaged = gestureEngagedRef.current
+      cancelFilterRelease()
+      gestureEngagedRef.current = false
+      if (wasEngaged) gestureRequiresReleaseRef.current = true
+      positionGestureRef.current = null
+      filterGestureRef.current = null
+      smoothedGestureRef.current = null
+      setGesturePhase('locked')
+      if (message) setGestureStatus(message)
+    },
+    [cancelFilterRelease],
+  )
 
   const updateCrossfadeNodes = useCallback((value: number) => {
     const context = audioContextRef.current
@@ -361,6 +440,17 @@ export function useDjMixer() {
         context = new AudioContext()
         audioContextRef.current = context
       }
+      let master = masterNodeRef.current
+      if (!master) {
+        master = context.createDynamicsCompressor()
+        master.threshold.value = -6
+        master.knee.value = 8
+        master.ratio.value = 10
+        master.attack.value = 0.003
+        master.release.value = 0.18
+        master.connect(context.destination)
+        masterNodeRef.current = master
+      }
       if (!nodesRef.current[id]) {
         const source = context.createMediaElementSource(audio)
         const highpass = context.createBiquadFilter()
@@ -381,10 +471,10 @@ export function useDjMixer() {
         crossfade.gain.value = equalPowerCrossfade(crossfaderRef.current)[id]
         source.connect(highpass)
         highpass.connect(lowpass)
-        lowpass.connect(analyser)
-        analyser.connect(volume)
+        lowpass.connect(volume)
         volume.connect(crossfade)
-        crossfade.connect(context.destination)
+        crossfade.connect(analyser)
+        analyser.connect(master)
         nodesRef.current[id] = {
           source,
           highpass,
@@ -401,15 +491,35 @@ export function useDjMixer() {
     [startMeter],
   )
 
+  const resetDeckAudioParameters = useCallback((id: DeckId) => {
+    const audio = audioElementsRef.current[id]
+    if (audio) {
+      audio.playbackRate = 1
+      audio.preservesPitch = true
+    }
+    const context = audioContextRef.current
+    const nodes = nodesRef.current[id]
+    if (!context || !nodes) return
+    const frequencies = bipolarFilterFrequencies(DJ_NEUTRAL_VALUES.filter)
+    nodes.volume.gain.setTargetAtTime(
+      DJ_NEUTRAL_VALUES.volume / 100,
+      context.currentTime,
+      0.035,
+    )
+    nodes.highpass.frequency.setTargetAtTime(frequencies.highpass, context.currentTime, 0.035)
+    nodes.lowpass.frequency.setTargetAtTime(frequencies.lowpass, context.currentTime, 0.035)
+  }, [])
+
   const loadFile = useCallback(
-    async (id: DeckId, file?: File) => {
-      if (!file) return
+    async (id: DeckId, file?: File, options: LoadFileOptions = {}) => {
+      if (!file) return false
       const requestId = bpmRequestRef.current[id] + 1
       bpmRequestRef.current[id] = requestId
       try {
         validateAudioFile(file)
         const audio = audioElementsRef.current[id]
         if (!audio) throw new Error(`${deckLabel(id)} is not ready.`)
+        disarmGesture(`${deckLabel(id)} changed · gesture pickup reset`)
         const syncSnapshot = bpmSyncRef.current
         if (syncSnapshot) {
           bpmSyncRef.current = null
@@ -434,19 +544,28 @@ export function useDjMixer() {
         objectUrlsRef.current[id] = nextUrl
         audio.pause()
         audio.src = nextUrl
-        audio.playbackRate = 1
-        audio.preservesPitch = true
+        resetDeckAudioParameters(id)
         audio.load()
         tapTimesRef.current[id] = []
+        const knownBpm = options.knownBpm ? normalizeBpm(options.knownBpm) : null
         patchDeck(id, {
           ...initialDeckState(),
-          name: file.name.replace(/\.[^.]+$/, ''),
+          name: options.title ?? file.name.replace(/\.[^.]+$/, ''),
           loaded: true,
-          bpmStatus: 'Analyzing BPM…',
+          bpm: knownBpm,
+          bpmStatus: knownBpm ? `${knownBpm} BPM demo` : 'Analyzing BPM…',
         })
+        if (knownBpm) return true
+        if (file.size > MAX_BPM_ANALYSIS_BYTES) {
+          patchDeck(id, {
+            bpm: null,
+            bpmStatus: 'Track ready · tap BPM (automatic analysis skipped for large files)',
+          })
+          return true
+        }
         try {
           const bpm = await detectBpm(file)
-          if (bpmRequestRef.current[id] !== requestId) return
+          if (bpmRequestRef.current[id] !== requestId) return false
           patchDeck(id, {
             bpm,
             bpmStatus: bpm ? `${bpm} BPM detected` : 'Tap BPM to set tempo',
@@ -456,13 +575,15 @@ export function useDjMixer() {
             patchDeck(id, { bpm: null, bpmStatus: 'Tap BPM to set tempo' })
           }
         }
+        return true
       } catch (error) {
         patchDeck(id, {
           error: error instanceof Error ? error.message : 'The track could not be loaded.',
         })
+        return false
       }
     },
-    [patchDeck],
+    [disarmGesture, patchDeck, resetDeckAudioParameters],
   )
 
   const togglePlayback = useCallback(
@@ -495,11 +616,24 @@ export function useDjMixer() {
     }
     try {
       await Promise.all(readyIds.map(ensureDeckGraph))
-      await Promise.all(readyIds.map((id) => audioElementsRef.current[id]?.play()))
+      const results = await Promise.allSettled(
+        readyIds.map((id) => {
+          const audio = audioElementsRef.current[id]
+          if (!audio) throw new Error(`${deckLabel(id)} is not ready.`)
+          return audio.play()
+        }),
+      )
+      if (results.some((result) => result.status === 'rejected')) {
+        throw new Error('One deck could not start.')
+      }
     } catch {
+      for (const id of readyIds) {
+        audioElementsRef.current[id]?.pause()
+        patchDeck(id, { playing: false })
+      }
       setGestureStatus('The browser blocked one deck. Press play on each deck once.')
     }
-  }, [ensureDeckGraph])
+  }, [ensureDeckGraph, patchDeck])
 
   const seek = useCallback(
     (id: DeckId, time: number) => {
@@ -552,6 +686,19 @@ export function useDjMixer() {
     },
     [patchDeck],
   )
+
+  const scheduleFilterRelease = useCallback(() => {
+    const filterGesture = filterGestureRef.current
+    if (!filterGesture || filterReleaseTimerRef.current !== null) return
+    const deck = filterGesture.deck
+    filterReleaseTimerRef.current = setTimeout(() => {
+      setDeckFilter(deck, DJ_NEUTRAL_VALUES.filter)
+      filterGestureRef.current = null
+      smoothedGestureRef.current = null
+      filterReleaseTimerRef.current = null
+      setGestureStatus(`${deckLabel(deck)} filter returned to neutral`)
+    }, FILTER_RELEASE_MS)
+  }, [setDeckFilter])
 
   const applyDeckTempo = useCallback(
     (id: DeckId, value: number) => {
@@ -655,8 +802,7 @@ export function useDjMixer() {
 
   const resetControl = useCallback(
     (control: DjControl = selectedControl, deck: DeckId = activeDeck) => {
-      smoothedGestureRef.current = null
-      filterGestureRef.current = null
+      disarmGesture()
       if (control === 'crossfader') {
         setCrossfader(DJ_NEUTRAL_VALUES.crossfader)
         setGestureStatus('Crossfader centered')
@@ -673,6 +819,7 @@ export function useDjMixer() {
     [
       activeDeck,
       selectedControl,
+      disarmGesture,
       setCrossfader,
       setDeckFilter,
       setDeckVolume,
@@ -680,6 +827,8 @@ export function useDjMixer() {
   )
 
   const resetMix = useCallback(() => {
+    disarmGesture()
+    const syncSnapshot = bpmSyncRef.current
     bpmSyncRef.current = null
     setBpmSync(null)
     setCrossfader(DJ_NEUTRAL_VALUES.crossfader)
@@ -689,16 +838,48 @@ export function useDjMixer() {
       applyDeckTempo(id, DJ_NEUTRAL_VALUES.tempo)
       patchDeck(id, {
         error: null,
-        bpmStatus: decksRef.current[id].bpm
-          ? `${decksRef.current[id].bpm} BPM ready`
-          : decksRef.current[id].bpmStatus,
+        ...(syncSnapshot ? { bpmStatus: syncSnapshot.originalStatuses[id] } : {}),
       })
     }
-    smoothedGestureRef.current = null
-    filterGestureRef.current = null
     setBpmSyncMessage('Mix reset · both decks are back at their own BPMs')
     setGestureStatus('Mix reset to neutral')
-  }, [applyDeckTempo, patchDeck, setCrossfader, setDeckFilter, setDeckVolume])
+  }, [
+    applyDeckTempo,
+    disarmGesture,
+    patchDeck,
+    setCrossfader,
+    setDeckFilter,
+    setDeckVolume,
+  ])
+
+  const loadDemoMix = useCallback(async () => {
+    if (demoLoading) return false
+    setDemoLoading(true)
+    setGestureStatus('Building the local demo set…')
+    try {
+      await Promise.race([
+        new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+        new Promise<void>((resolve) => setTimeout(resolve, 100)),
+      ])
+      const [deckA, deckB] = createDemoTracks()
+      const loaded = await Promise.all([
+        loadFile('a', deckA.file, { knownBpm: deckA.bpm, title: deckA.title }),
+        loadFile('b', deckB.file, { knownBpm: deckB.bpm, title: deckB.title }),
+      ])
+      if (!loaded.every(Boolean)) {
+        setGestureStatus('The demo set could not load · try again')
+        return false
+      }
+      resetMix()
+      setGestureStatus('Demo set loaded · press Start both, then open your hand')
+      return true
+    } catch {
+      setGestureStatus('The demo set could not be built · try again')
+      return false
+    } finally {
+      setDemoLoading(false)
+    }
+  }, [demoLoading, loadFile, resetMix])
 
   const tapTempo = useCallback(
     (id: DeckId) => {
@@ -716,70 +897,181 @@ export function useDjMixer() {
     [patchDeck, releaseBpmSync],
   )
 
-  const selectControl = useCallback((control: DjControl, deck: DeckId = activeDeck) => {
-    smoothedGestureRef.current = null
-    filterGestureRef.current = null
-    setSelectedControl(control)
-    setActiveDeck(deck)
-    setGestureStatus(
-      control === 'crossfader'
-        ? 'Move your hand left or right'
-        : control === 'filter'
-          ? `Hold steady, then rotate your wrist for ${deckLabel(deck)}`
-          : `Move up or down for ${deckLabel(deck)}`,
-    )
-  }, [activeDeck])
+  const selectControl = useCallback(
+    (control: DjControl, deck: DeckId = activeDeck) => {
+      disarmGesture()
+      if (
+        selectedControl === 'filter' &&
+        (control !== 'filter' || deck !== activeDeck)
+      ) {
+        setDeckFilter(activeDeck, DJ_NEUTRAL_VALUES.filter)
+      }
+      setSelectedControl(control)
+      setActiveDeck(deck)
+      setGestureStatus(
+        control === 'crossfader'
+          ? 'Open your hand, hold steady, then move left or right'
+          : control === 'filter'
+            ? `Open your hand, hold steady, then rotate for ${deckLabel(deck)}`
+            : `Open your hand, hold steady, then move up or down for ${deckLabel(deck)}`,
+      )
+    },
+    [activeDeck, disarmGesture, selectedControl, setDeckFilter],
+  )
 
   const handleGestureFrame = useCallback(
     (frame: GestureFrame) => {
       const now = performance.now()
-      if (!frame.detected) {
-        const filterGesture = filterGestureRef.current
-        if (
-          selectedControl === 'filter' &&
-          filterGesture &&
-          shouldReleaseFilterGesture(filterGesture.lastSeenAt, now)
-        ) {
-          setDeckFilter(filterGesture.deck, DJ_NEUTRAL_VALUES.filter)
-          filterGestureRef.current = null
-          smoothedGestureRef.current = null
+      if (!isGestureFrameEngaged(frame)) {
+        gestureEngagedRef.current = false
+        gestureRequiresReleaseRef.current = false
+        setGesturePhase('locked')
+        positionGestureRef.current = null
+        smoothedGestureRef.current = null
+        if (selectedControl === 'filter') scheduleFilterRelease()
+        else filterGestureRef.current = null
+        if (now - lastGestureUpdateAtRef.current > 280) {
           lastGestureUpdateAtRef.current = now
-          setGestureStatus(`${deckLabel(filterGesture.deck)} filter returned to neutral`)
-          return
+          setGestureStatus(
+            frame.detected
+              ? 'Mixer locked · open your hand to engage'
+              : 'Waiting for a hand',
+          )
         }
-        if (now - lastGestureUpdateAtRef.current > 350) {
-          lastGestureUpdateAtRef.current = now
-          setGestureStatus('Waiting for a hand')
-        }
+        return
+      }
+
+      cancelFilterRelease()
+      if (gestureRequiresReleaseRef.current) {
+        gestureEngagedRef.current = false
+        setGesturePhase('locked')
+        setGestureStatus('Close your hand once, then open it to re-arm the mixer')
         return
       }
       if (now - lastGestureUpdateAtRef.current < 70) return
       lastGestureUpdateAtRef.current = now
 
       if (selectedControl === 'crossfader') {
-        const target = frame.x * 200 - 100
+        let gesture = positionGestureRef.current
+        if (!gesture || gesture.control !== 'crossfader') {
+          gesture = {
+            control: 'crossfader',
+            deck: 'master',
+            baselineInput: frame.x,
+            baselineValue: crossfaderRef.current,
+            samples: 1,
+            startedAt: now,
+            engaged: false,
+          }
+          positionGestureRef.current = gesture
+          setGesturePhase('calibrating')
+          setGestureStatus('Hand seen · hold steady to arm the crossfader')
+          return
+        }
+        if (!gesture.engaged) {
+          if (Math.abs(frame.x - gesture.baselineInput) > POSITION_CALIBRATION_TOLERANCE) {
+            gesture.baselineInput = frame.x
+            gesture.samples = 1
+            gesture.startedAt = now
+            setGesturePhase('calibrating')
+            setGestureStatus('Keep your hand still for a moment to arm the crossfader')
+            return
+          }
+          gesture.samples += 1
+          gesture.baselineInput += (frame.x - gesture.baselineInput) / gesture.samples
+          if (now - gesture.startedAt < GESTURE_CALIBRATION_MS) {
+            setGesturePhase('calibrating')
+            setGestureStatus('Hold steady · calibrating the crossfader pickup')
+            return
+          }
+          gesture.engaged = true
+          gestureEngagedRef.current = true
+          setGesturePhase('armed')
+        }
+        if (Math.abs(frame.x - gesture.baselineInput) <= POSITION_GESTURE_DEAD_ZONE) {
+          setGestureStatus('Crossfader armed · move left or right')
+          return
+        }
+        const target = relativeGestureValue(
+          gesture.baselineValue,
+          gesture.baselineInput,
+          frame.x,
+          200,
+        )
         const previous =
           smoothedGestureRef.current?.control === 'crossfader'
             ? smoothedGestureRef.current.value
             : crossfaderRef.current
-        const value = smoothControlValue(previous, target, 0.36)
+        const value = smoothBoundedControlValue(previous, target, -100, 100, 0.36)
         smoothedGestureRef.current = { control: 'crossfader', deck: 'master', value }
         setCrossfader(value)
         setGestureStatus('Crossfader follows hand position')
         return
       }
       if (!decksRef.current[activeDeck].loaded) {
+        gestureEngagedRef.current = false
+        setGesturePhase('locked')
         setGestureStatus(`Load ${deckLabel(activeDeck)} to control it`)
         return
       }
       if (selectedControl === 'volume') {
-        const target = (1 - frame.y) * 100
+        const input = 1 - frame.y
+        let gesture = positionGestureRef.current
+        if (
+          !gesture ||
+          gesture.control !== 'volume' ||
+          gesture.deck !== activeDeck
+        ) {
+          gesture = {
+            control: 'volume',
+            deck: activeDeck,
+            baselineInput: input,
+            baselineValue: decksRef.current[activeDeck].volume,
+            samples: 1,
+            startedAt: now,
+            engaged: false,
+          }
+          positionGestureRef.current = gesture
+          setGesturePhase('calibrating')
+          setGestureStatus(`Hand seen · hold steady to arm ${deckLabel(activeDeck)} level`)
+          return
+        }
+        if (!gesture.engaged) {
+          if (Math.abs(input - gesture.baselineInput) > POSITION_CALIBRATION_TOLERANCE) {
+            gesture.baselineInput = input
+            gesture.samples = 1
+            gesture.startedAt = now
+            setGesturePhase('calibrating')
+            setGestureStatus(`Keep still for a moment to arm ${deckLabel(activeDeck)} level`)
+            return
+          }
+          gesture.samples += 1
+          gesture.baselineInput += (input - gesture.baselineInput) / gesture.samples
+          if (now - gesture.startedAt < GESTURE_CALIBRATION_MS) {
+            setGesturePhase('calibrating')
+            setGestureStatus(`Hold steady · calibrating ${deckLabel(activeDeck)} level`)
+            return
+          }
+          gesture.engaged = true
+          gestureEngagedRef.current = true
+          setGesturePhase('armed')
+        }
+        if (Math.abs(input - gesture.baselineInput) <= POSITION_GESTURE_DEAD_ZONE) {
+          setGestureStatus(`${deckLabel(activeDeck)} level armed · move up or down`)
+          return
+        }
+        const target = relativeGestureValue(
+          gesture.baselineValue,
+          gesture.baselineInput,
+          input,
+          120,
+        )
         const previous =
           smoothedGestureRef.current?.control === 'volume' &&
           smoothedGestureRef.current.deck === activeDeck
             ? smoothedGestureRef.current.value
             : decksRef.current[activeDeck].volume
-        const value = smoothControlValue(previous, target, 0.32)
+        const value = smoothBoundedControlValue(previous, target, 0, 100, 0.32)
         smoothedGestureRef.current = { control: 'volume', deck: activeDeck, value }
         setDeckVolume(activeDeck, value)
         setGestureStatus(`${deckLabel(activeDeck)} volume follows hand height`)
@@ -791,36 +1083,53 @@ export function useDjMixer() {
             baselineAngle: frame.wristAngle,
             baselineValue: decksRef.current[activeDeck].filter,
             samples: 1,
+            startedAt: now,
             lastSeenAt: now,
             engaged: false,
           }
           filterGestureRef.current = filterGesture
+          setGesturePhase('calibrating')
           setGestureStatus(`Hold steady to arm ${deckLabel(activeDeck)} filter`)
           return
         }
 
         filterGesture.lastSeenAt = now
-        if (filterGesture.samples < 3) {
+        if (!filterGesture.engaged) {
+          const calibrationDelta = Math.abs(
+            shortestAngleDelta(frame.wristAngle, filterGesture.baselineAngle),
+          )
+          if (calibrationDelta > FILTER_CALIBRATION_TOLERANCE) {
+            filterGesture.baselineAngle = frame.wristAngle
+            filterGesture.samples = 1
+            filterGesture.startedAt = now
+            setGesturePhase('calibrating')
+            setGestureStatus(`Keep your wrist still to arm ${deckLabel(activeDeck)} filter`)
+            return
+          }
           filterGesture.samples += 1
           filterGesture.baselineAngle +=
             shortestAngleDelta(frame.wristAngle, filterGesture.baselineAngle) /
             filterGesture.samples
-          setGestureStatus(
-            filterGesture.samples < 3
-              ? `Hold steady to arm ${deckLabel(activeDeck)} filter`
-              : `${deckLabel(activeDeck)} filter ready · rotate your wrist`,
-          )
-          return
+          if (now - filterGesture.startedAt < GESTURE_CALIBRATION_MS) {
+            setGesturePhase('calibrating')
+            setGestureStatus(`Hold steady · calibrating ${deckLabel(activeDeck)} filter`)
+            return
+          }
+          filterGesture.engaged = true
+          gestureEngagedRef.current = true
+          setGesturePhase('armed')
+        } else {
+          gestureEngagedRef.current = true
+          setGesturePhase('armed')
         }
 
         const angleDelta = Math.abs(
           shortestAngleDelta(frame.wristAngle, filterGesture.baselineAngle),
         )
-        if (!filterGesture.engaged && angleDelta <= FILTER_GESTURE_DEAD_ZONE) {
-          setGestureStatus(`${deckLabel(activeDeck)} filter ready · rotate your wrist`)
+        if (angleDelta <= FILTER_GESTURE_DEAD_ZONE) {
+          setGestureStatus(`${deckLabel(activeDeck)} filter armed · rotate your wrist`)
           return
         }
-        filterGesture.engaged = true
         const target = filterValueFromGesture(
           filterGesture.baselineValue,
           filterGesture.baselineAngle,
@@ -831,7 +1140,7 @@ export function useDjMixer() {
           smoothedGestureRef.current.deck === activeDeck
             ? smoothedGestureRef.current.value
             : decksRef.current[activeDeck].filter
-        const value = smoothControlValue(previous, target, 0.28)
+        const value = smoothBoundedControlValue(previous, target, 0, 100, 0.28)
         smoothedGestureRef.current = { control: 'filter', deck: activeDeck, value }
         setDeckFilter(activeDeck, value)
         setGestureStatus(`${deckLabel(activeDeck)} filter follows wrist movement`)
@@ -839,6 +1148,8 @@ export function useDjMixer() {
     },
     [
       activeDeck,
+      cancelFilterRelease,
+      scheduleFilterRelease,
       selectedControl,
       setCrossfader,
       setDeckFilter,
@@ -860,7 +1171,10 @@ export function useDjMixer() {
         patchDeck(id, { playing: false, currentTime: decksRef.current[id].duration })
       const markError = () =>
         patchDeck(id, {
+          loaded: false,
           playing: false,
+          bpm: null,
+          bpmStatus: 'Replace this track to continue',
           error: 'This browser could not decode the selected audio file.',
         })
       audio.addEventListener('loadedmetadata', updateMetadata)
@@ -887,11 +1201,13 @@ export function useDjMixer() {
     const objectUrls = objectUrlsRef.current
     return () => {
       if (meterAnimationRef.current !== null) cancelAnimationFrame(meterAnimationRef.current)
+      if (filterReleaseTimerRef.current !== null) clearTimeout(filterReleaseTimerRef.current)
       for (const id of DECK_IDS) {
         if (objectUrls[id]) URL.revokeObjectURL(objectUrls[id] ?? '')
       }
       const context = audioContextRef.current
       if (context && context.state !== 'closed') void context.close()
+      masterNodeRef.current = null
     }
   }, [])
 
@@ -901,12 +1217,16 @@ export function useDjMixer() {
     activeDeck,
     selectedControl,
     gestureStatus,
+    gesturePhase,
+    gestureEngaged: gesturePhase === 'armed',
+    demoLoading,
     bpmSyncActive: Boolean(bpmSync),
     bpmSyncMessage,
     bpmSyncMaster: bpmSync?.masterId ?? null,
     bpmSyncTarget: bpmSync?.targetId ?? null,
     setAudioElement,
     loadFile,
+    loadDemoMix,
     togglePlayback,
     toggleBoth,
     seek,

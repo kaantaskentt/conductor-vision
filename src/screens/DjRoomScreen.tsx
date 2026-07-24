@@ -1,17 +1,17 @@
 import {
   Disc3,
   Hand,
-  Music2,
   Pause,
   Play,
   RefreshCw,
   RotateCcw,
   SlidersHorizontal,
+  Sparkles,
   Upload,
   Volume2,
   Waves,
 } from 'lucide-react'
-import { useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { useId, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { CameraActions, CameraStage, PageIntro } from '../components/AppShell'
 import type { DeckId, DjControl, useDjMixer } from '../hooks/useDjMixer'
 import type { useVisionRuntime } from '../hooks/useVisionRuntime'
@@ -27,19 +27,19 @@ const GESTURE_MODES: Array<{
   {
     control: 'crossfader',
     label: 'Crossfader',
-    detail: 'Move left or right',
+    detail: 'Open hand · move left or right',
     icon: Waves,
   },
   {
     control: 'volume',
     label: 'Channel',
-    detail: 'Move up or down',
+    detail: 'Open hand · move up or down',
     icon: Volume2,
   },
   {
     control: 'filter',
     label: 'Filter',
-    detail: 'Rotate · release to center',
+    detail: 'Open hand · rotate · fist to release',
     icon: SlidersHorizontal,
   },
 ]
@@ -74,6 +74,7 @@ function RotaryControl({
   onReset: () => void
   markers: [string, string, string]
 }) {
+  const outputId = useId()
   const angle = -135 + (value / 100) * 270
   const style = { '--knob-angle': `${angle}deg` } as CSSProperties
   const updateFromPointer = (event: ReactPointerEvent<HTMLInputElement>) => {
@@ -85,7 +86,8 @@ function RotaryControl({
   }
 
   return (
-    <div className="rotary-control">
+    <fieldset className="rotary-control">
+      <legend className="sr-only">{ariaLabel}</legend>
       <div className="rotary-heading">
         <span>
           <Icon aria-hidden="true" />
@@ -106,6 +108,22 @@ function RotaryControl({
           max="100"
           value={value}
           onChange={(event) => onChange(Number(event.target.value))}
+          onKeyDown={(event) => {
+            const amount = event.shiftKey ? 5 : 1
+            if (event.key === 'ArrowUp' || event.key === 'ArrowRight') {
+              event.preventDefault()
+              onChange(Math.min(100, value + amount))
+            } else if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') {
+              event.preventDefault()
+              onChange(Math.max(0, value - amount))
+            } else if (event.key === 'Home') {
+              event.preventDefault()
+              onChange(0)
+            } else if (event.key === 'End') {
+              event.preventDefault()
+              onChange(100)
+            }
+          }}
           onPointerDown={(event) => {
             event.currentTarget.setPointerCapture(event.pointerId)
             updateFromPointer(event)
@@ -115,14 +133,16 @@ function RotaryControl({
           }}
           onDoubleClick={onReset}
           aria-label={ariaLabel}
+          aria-valuetext={formattedValue}
+          aria-describedby={outputId}
           title="Drag left or right · double-click to reset"
         />
       </div>
-      <output>{formattedValue}</output>
+      <output id={outputId}>{formattedValue}</output>
       <div className="rotary-markers" aria-hidden="true">
         {markers.map((marker) => <span key={marker}>{marker}</span>)}
       </div>
-    </div>
+    </fieldset>
   )
 }
 
@@ -184,8 +204,8 @@ function DeckPanel({
         </div>
       </div>
 
-      <div className="phrase-pads" aria-label={`${deckLabel(id)} phrase jumps`}>
-        <span>Phrase jump</span>
+      <div className="phrase-pads" aria-label={`${deckLabel(id)} track quarters`}>
+        <span>Track quarter</span>
         <div>
           {[1, 2, 3, 4].map((index) => (
             <button
@@ -193,7 +213,7 @@ function DeckPanel({
               type="button"
               onClick={() => mixer.jumpToPhrase(id, index)}
               disabled={!deck.loaded}
-              aria-label={`${deckLabel(id)} phrase ${index}`}
+              aria-label={`${deckLabel(id)} track quarter ${index}`}
             >
               {index}
             </button>
@@ -367,10 +387,24 @@ function GestureConsole({
       <div className="panel-heading">
         <div>
           <span>Gesture routing</span>
-          <strong>{vision.analysis.hands.length ? 'Hand connected' : 'Waiting for a hand'}</strong>
+          <strong>
+            {mixer.gesturePhase === 'armed'
+              ? 'Mixer armed'
+              : mixer.gesturePhase === 'calibrating'
+                ? 'Hold steady · calibrating'
+                : vision.analysis.hands.length
+                  ? 'Hand seen · mixer locked'
+                  : 'Waiting for a hand'}
+          </strong>
         </div>
         <div className="gesture-heading-actions">
-          <span className={`status-dot ${vision.analysis.hands.length ? 'active' : ''}`} />
+          <span className={`gesture-state-pill ${mixer.gesturePhase}`}>
+            {mixer.gesturePhase === 'calibrating'
+              ? 'Calibrating'
+              : mixer.gesturePhase === 'armed'
+                ? 'Armed'
+                : 'Locked'}
+          </span>
           <button
             type="button"
             onClick={() => mixer.resetControl()}
@@ -416,7 +450,9 @@ function GestureConsole({
           </button>
         ))}
       </div>
-      <p className="gesture-reset-hint">Double-click a mode or knob to reset it.</p>
+      <p className="gesture-reset-hint">
+        Open hand engages · close fist locks · double-click resets.
+      </p>
 
       <div className="gesture-status" aria-live="polite">
         <Hand aria-hidden="true" />
@@ -443,7 +479,7 @@ export function DjRoomScreen({
     <>
       <input
         ref={deckAInputRef}
-        className="sr-only"
+        hidden
         type="file"
         accept={ACCEPTED_AUDIO}
         onChange={(event) => {
@@ -453,7 +489,7 @@ export function DjRoomScreen({
       />
       <input
         ref={deckBInputRef}
-        className="sr-only"
+        hidden
         type="file"
         accept={ACCEPTED_AUDIO}
         onChange={(event) => {
@@ -465,26 +501,33 @@ export function DjRoomScreen({
       <PageIntro
         eyebrow="DJ Room"
         title="Mix two tracks with movement."
-        description="Two local decks, automatic BPM analysis, one-button BPM sync, phrase jumps, and a camera-controlled mixer."
+        description="Two local decks, automatic BPM analysis, reversible BPM sync, track quarters, and a camera-controlled mixer."
         actions={
           <>
             <button
               type="button"
-              className="button secondary"
-              onClick={() => deckAInputRef.current?.click()}
+              className="button primary demo-set-button"
+              onClick={() => {
+                void mixer.loadDemoMix().then((loaded) => {
+                  if (loaded) {
+                    document.getElementById('mixer-decks')?.scrollIntoView({
+                      behavior: 'smooth',
+                      block: 'start',
+                    })
+                  }
+                })
+              }}
+              disabled={mixer.demoLoading}
             >
-              <Music2 aria-hidden="true" />
-              Load deck A
+              <Sparkles aria-hidden="true" />
+              {mixer.demoLoading ? 'Building demo…' : 'Try demo set'}
             </button>
-            <button
-              type="button"
-              className="button secondary"
-              onClick={() => deckBInputRef.current?.click()}
-            >
-              <Disc3 aria-hidden="true" />
-              Load deck B
-            </button>
-            <CameraActions status={vision.status} start={vision.start} stop={vision.stop} />
+            <CameraActions
+              status={vision.status}
+              start={vision.start}
+              stop={vision.stop}
+              variant="secondary"
+            />
           </>
         }
       />
@@ -512,7 +555,7 @@ export function DjRoomScreen({
         <GestureConsole mixer={mixer} vision={vision} />
       </section>
 
-      <section className="dj-console">
+      <section id="mixer-decks" className="dj-console" aria-label="Two-deck mixer">
         <DeckPanel id="a" mixer={mixer} onUpload={() => deckAInputRef.current?.click()} />
         <MixerConsole mixer={mixer} />
         <DeckPanel id="b" mixer={mixer} onUpload={() => deckBInputRef.current?.click()} />

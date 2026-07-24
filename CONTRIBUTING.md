@@ -19,7 +19,7 @@ Run the complete local check:
 npm test
 npm run lint
 npm run build
-npm audit --omit=dev --audit-level=high
+npm audit --audit-level=high
 ```
 
 For interface changes, verify Vision and DJ Room at desktop and mobile widths. Do not commit camera captures, audio files, generated build output, secrets, or local environment files.
@@ -32,6 +32,8 @@ For interface changes, verify Vision and DJ Room at desktop and mobile widths. D
 - Preserve keyboard navigation, visible focus, reduced motion, and readable contrast.
 - Prefer deterministic behavior and useful error messages over decorative states.
 
+See [docs/TESTING.md](./docs/TESTING.md) for the device matrix and camera-fixture strategy, and [AGENTS.md](./AGENTS.md) for the repository's durable engineering invariants.
+
 ## Pull requests
 
 Include:
@@ -42,3 +44,5 @@ Include:
 - privacy, security, or model-license implications.
 
 By contributing, you agree that your contribution is licensed under the MIT License.
+
+Participation is governed by the [Code of Conduct](./CODE_OF_CONDUCT.md). Usage questions and disclosure routes are listed in [SUPPORT.md](./SUPPORT.md).

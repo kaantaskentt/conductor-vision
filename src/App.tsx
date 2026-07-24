@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import './App.css'
 import {
   AppHeader,
@@ -15,10 +15,29 @@ function App() {
   const [screen, setScreen] = useState<Screen>('dj-room')
   const [targetColor, setTargetColor] = useState<TargetColor>('purple')
   const mixer = useDjMixer()
+  const { handleGestureFrame } = mixer
+  const handleVisionGesture = useCallback(
+    (frame: Parameters<typeof handleGestureFrame>[0]) => {
+      if (screen === 'dj-room') handleGestureFrame(frame)
+    },
+    [handleGestureFrame, screen],
+  )
   const vision = useVisionRuntime({
+    enableFace: screen === 'vision',
     targetColor,
-    onGestureFrame: mixer.handleGestureFrame,
+    onGestureFrame: handleVisionGesture,
   })
+
+  useEffect(() => {
+    if (screen === 'dj-room') return
+    handleGestureFrame({
+      detected: false,
+      x: 0.5,
+      y: 0.5,
+      wristAngle: 0,
+      openFingers: 0,
+    })
+  }, [handleGestureFrame, screen])
 
   return (
     <div className="app">
