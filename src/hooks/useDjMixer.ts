@@ -2,12 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { clamp, type GestureFrame } from '../lib/vision'
 
 export type DeckId = 'a' | 'b'
-export type DjControl = 'crossfader' | 'volume' | 'filter' | 'tempo'
+export type DjControl = 'crossfader' | 'volume' | 'filter'
 
 export const DJ_NEUTRAL_VALUES = {
   crossfader: 0,
   volume: 82,
-  filter: 100,
+  filter: 50,
   tempo: 0,
 } as const
 
@@ -28,7 +28,8 @@ export type DeckState = {
 
 type DeckNodes = {
   source: MediaElementAudioSourceNode
-  filter: BiquadFilterNode
+  highpass: BiquadFilterNode
+  lowpass: BiquadFilterNode
   analyser: AnalyserNode
   volume: GainNode
   crossfade: GainNode
@@ -55,6 +56,13 @@ const ACCEPTED_AUDIO_TYPES = new Set([
   'audio/ogg',
 ])
 const AUDIO_EXTENSION = /\.(mp3|wav|flac|ogg)$/i
+const FILTER_LOW_MIN_HZ = 220
+const FILTER_LOW_OPEN_HZ = 20_000
+const FILTER_HIGH_OPEN_HZ = 20
+const FILTER_HIGH_MAX_HZ = 12_000
+const FILTER_GESTURE_DEAD_ZONE = (7 * Math.PI) / 180
+const FILTER_GESTURE_SWEEP = (60 * Math.PI) / 180
+const FILTER_RELEASE_MS = 300
 
 export function validateAudioFile(file: File) {
   const hasSupportedType = ACCEPTED_AUDIO_TYPES.has(file.type)
@@ -117,6 +125,44 @@ export function chooseSyncMaster(aPlaying: boolean, bPlaying: boolean): DeckId {
 export function smoothControlValue(current: number, target: number, strength = 0.32) {
   const amount = clamp(strength, 0, 1)
   return current + (target - current) * amount
+}
+
+export function bipolarFilterFrequencies(amount: number) {
+  const value = clamp(amount, 0, 100)
+  if (value < 50) {
+    const sweep = (50 - value) / 50
+    return {
+      highpass: FILTER_HIGH_OPEN_HZ,
+      lowpass: FILTER_LOW_OPEN_HZ * Math.pow(FILTER_LOW_MIN_HZ / FILTER_LOW_OPEN_HZ, sweep),
+    }
+  }
+  if (value > 50) {
+    const sweep = (value - 50) / 50
+    return {
+      highpass:
+        FILTER_HIGH_OPEN_HZ * Math.pow(FILTER_HIGH_MAX_HZ / FILTER_HIGH_OPEN_HZ, sweep),
+      lowpass: FILTER_LOW_OPEN_HZ,
+    }
+  }
+  return { highpass: FILTER_HIGH_OPEN_HZ, lowpass: FILTER_LOW_OPEN_HZ }
+}
+
+export function shortestAngleDelta(current: number, baseline: number) {
+  return Math.atan2(Math.sin(current - baseline), Math.cos(current - baseline))
+}
+
+export function filterValueFromGesture(
+  baselineValue: number,
+  baselineAngle: number,
+  currentAngle: number,
+) {
+  const delta = shortestAngleDelta(currentAngle, baselineAngle)
+  const adjusted = Math.sign(delta) * Math.max(0, Math.abs(delta) - FILTER_GESTURE_DEAD_ZONE)
+  return clamp(baselineValue + (adjusted / FILTER_GESTURE_SWEEP) * 50, 0, 100)
+}
+
+export function shouldReleaseFilterGesture(lastSeenAt: number, now: number) {
+  return now - lastSeenAt >= FILTER_RELEASE_MS
 }
 
 export function estimateBpmFromSamples(samples: Float32Array, sampleRate: number) {
@@ -212,11 +258,6 @@ function initialDeckState(): DeckState {
   }
 }
 
-function normalizedFilterFrequency(amount: number) {
-  const normalized = clamp(amount / 100)
-  return 240 + Math.pow(normalized, 2.25) * 17_760
-}
-
 function deckLabel(id: DeckId) {
   return id === 'a' ? 'Deck A' : 'Deck B'
 }
@@ -249,6 +290,14 @@ export function useDjMixer() {
     control: DjControl
     deck: DeckId | 'master'
     value: number
+  } | null>(null)
+  const filterGestureRef = useRef<{
+    deck: DeckId
+    baselineAngle: number
+    baselineValue: number
+    samples: number
+    lastSeenAt: number
+    engaged: boolean
   } | null>(null)
 
   useEffect(() => {
@@ -314,25 +363,32 @@ export function useDjMixer() {
       }
       if (!nodesRef.current[id]) {
         const source = context.createMediaElementSource(audio)
-        const filter = context.createBiquadFilter()
+        const highpass = context.createBiquadFilter()
+        const lowpass = context.createBiquadFilter()
         const analyser = context.createAnalyser()
         const volume = context.createGain()
         const crossfade = context.createGain()
-        filter.type = 'lowpass'
-        filter.Q.value = 0.9
-        filter.frequency.value = normalizedFilterFrequency(decksRef.current[id].filter)
+        const filterFrequencies = bipolarFilterFrequencies(decksRef.current[id].filter)
+        highpass.type = 'highpass'
+        highpass.Q.value = 0.82
+        highpass.frequency.value = filterFrequencies.highpass
+        lowpass.type = 'lowpass'
+        lowpass.Q.value = 0.82
+        lowpass.frequency.value = filterFrequencies.lowpass
         analyser.fftSize = 256
         analyser.smoothingTimeConstant = 0.78
         volume.gain.value = decksRef.current[id].volume / 100
         crossfade.gain.value = equalPowerCrossfade(crossfaderRef.current)[id]
-        source.connect(filter)
-        filter.connect(analyser)
+        source.connect(highpass)
+        highpass.connect(lowpass)
+        lowpass.connect(analyser)
         analyser.connect(volume)
         volume.connect(crossfade)
         crossfade.connect(context.destination)
         nodesRef.current[id] = {
           source,
-          filter,
+          highpass,
+          lowpass,
           analyser,
           volume,
           crossfade,
@@ -480,10 +536,16 @@ export function useDjMixer() {
       const filter = Math.round(clamp(value, 0, 100))
       const context = audioContextRef.current
       if (context && nodesRef.current[id]) {
-        nodesRef.current[id].filter.frequency.setTargetAtTime(
-          normalizedFilterFrequency(filter),
+        const frequencies = bipolarFilterFrequencies(filter)
+        nodesRef.current[id].highpass.frequency.setTargetAtTime(
+          frequencies.highpass,
           context.currentTime,
-          0.08,
+          0.06,
+        )
+        nodesRef.current[id].lowpass.frequency.setTargetAtTime(
+          frequencies.lowpass,
+          context.currentTime,
+          0.06,
         )
       }
       patchDeck(id, { filter })
@@ -521,14 +583,6 @@ export function useDjMixer() {
       return true
     },
     [applyDeckTempo, patchDeck],
-  )
-
-  const setDeckTempo = useCallback(
-    (id: DeckId, value: number) => {
-      releaseBpmSync('Manual tempo control released BPM Sync')
-      applyDeckTempo(id, value)
-    },
-    [applyDeckTempo, releaseBpmSync],
   )
 
   const setCrossfader = useCallback(
@@ -602,6 +656,7 @@ export function useDjMixer() {
   const resetControl = useCallback(
     (control: DjControl = selectedControl, deck: DeckId = activeDeck) => {
       smoothedGestureRef.current = null
+      filterGestureRef.current = null
       if (control === 'crossfader') {
         setCrossfader(DJ_NEUTRAL_VALUES.crossfader)
         setGestureStatus('Crossfader centered')
@@ -609,10 +664,8 @@ export function useDjMixer() {
       }
       if (control === 'volume') {
         setDeckVolume(deck, DJ_NEUTRAL_VALUES.volume)
-      } else if (control === 'filter') {
-        setDeckFilter(deck, DJ_NEUTRAL_VALUES.filter)
       } else {
-        setDeckTempo(deck, DJ_NEUTRAL_VALUES.tempo)
+        setDeckFilter(deck, DJ_NEUTRAL_VALUES.filter)
       }
       const label = control === 'volume' ? 'channel' : control
       setGestureStatus(`${deckLabel(deck)} ${label} reset`)
@@ -622,7 +675,6 @@ export function useDjMixer() {
       selectedControl,
       setCrossfader,
       setDeckFilter,
-      setDeckTempo,
       setDeckVolume,
     ],
   )
@@ -643,6 +695,7 @@ export function useDjMixer() {
       })
     }
     smoothedGestureRef.current = null
+    filterGestureRef.current = null
     setBpmSyncMessage('Mix reset · both decks are back at their own BPMs')
     setGestureStatus('Mix reset to neutral')
   }, [applyDeckTempo, patchDeck, setCrossfader, setDeckFilter, setDeckVolume])
@@ -665,16 +718,15 @@ export function useDjMixer() {
 
   const selectControl = useCallback((control: DjControl, deck: DeckId = activeDeck) => {
     smoothedGestureRef.current = null
+    filterGestureRef.current = null
     setSelectedControl(control)
     setActiveDeck(deck)
     setGestureStatus(
       control === 'crossfader'
         ? 'Move your hand left or right'
         : control === 'filter'
-          ? `Rotate your wrist for ${deckLabel(deck)}`
-          : control === 'tempo'
-            ? `Move left or right to trim ${deckLabel(deck)}`
-            : `Move up or down for ${deckLabel(deck)}`,
+          ? `Hold steady, then rotate your wrist for ${deckLabel(deck)}`
+          : `Move up or down for ${deckLabel(deck)}`,
     )
   }, [activeDeck])
 
@@ -682,6 +734,19 @@ export function useDjMixer() {
     (frame: GestureFrame) => {
       const now = performance.now()
       if (!frame.detected) {
+        const filterGesture = filterGestureRef.current
+        if (
+          selectedControl === 'filter' &&
+          filterGesture &&
+          shouldReleaseFilterGesture(filterGesture.lastSeenAt, now)
+        ) {
+          setDeckFilter(filterGesture.deck, DJ_NEUTRAL_VALUES.filter)
+          filterGestureRef.current = null
+          smoothedGestureRef.current = null
+          lastGestureUpdateAtRef.current = now
+          setGestureStatus(`${deckLabel(filterGesture.deck)} filter returned to neutral`)
+          return
+        }
         if (now - lastGestureUpdateAtRef.current > 350) {
           lastGestureUpdateAtRef.current = now
           setGestureStatus('Waiting for a hand')
@@ -719,8 +784,48 @@ export function useDjMixer() {
         setDeckVolume(activeDeck, value)
         setGestureStatus(`${deckLabel(activeDeck)} volume follows hand height`)
       } else if (selectedControl === 'filter') {
-        const normalizedAngle = clamp((frame.wristAngle + Math.PI) / (Math.PI * 2))
-        const target = normalizedAngle * 100
+        let filterGesture = filterGestureRef.current
+        if (!filterGesture || filterGesture.deck !== activeDeck) {
+          filterGesture = {
+            deck: activeDeck,
+            baselineAngle: frame.wristAngle,
+            baselineValue: decksRef.current[activeDeck].filter,
+            samples: 1,
+            lastSeenAt: now,
+            engaged: false,
+          }
+          filterGestureRef.current = filterGesture
+          setGestureStatus(`Hold steady to arm ${deckLabel(activeDeck)} filter`)
+          return
+        }
+
+        filterGesture.lastSeenAt = now
+        if (filterGesture.samples < 3) {
+          filterGesture.samples += 1
+          filterGesture.baselineAngle +=
+            shortestAngleDelta(frame.wristAngle, filterGesture.baselineAngle) /
+            filterGesture.samples
+          setGestureStatus(
+            filterGesture.samples < 3
+              ? `Hold steady to arm ${deckLabel(activeDeck)} filter`
+              : `${deckLabel(activeDeck)} filter ready · rotate your wrist`,
+          )
+          return
+        }
+
+        const angleDelta = Math.abs(
+          shortestAngleDelta(frame.wristAngle, filterGesture.baselineAngle),
+        )
+        if (!filterGesture.engaged && angleDelta <= FILTER_GESTURE_DEAD_ZONE) {
+          setGestureStatus(`${deckLabel(activeDeck)} filter ready · rotate your wrist`)
+          return
+        }
+        filterGesture.engaged = true
+        const target = filterValueFromGesture(
+          filterGesture.baselineValue,
+          filterGesture.baselineAngle,
+          frame.wristAngle,
+        )
         const previous =
           smoothedGestureRef.current?.control === 'filter' &&
           smoothedGestureRef.current.deck === activeDeck
@@ -729,18 +834,7 @@ export function useDjMixer() {
         const value = smoothControlValue(previous, target, 0.28)
         smoothedGestureRef.current = { control: 'filter', deck: activeDeck, value }
         setDeckFilter(activeDeck, value)
-        setGestureStatus(`${deckLabel(activeDeck)} filter follows wrist angle`)
-      } else if (selectedControl === 'tempo') {
-        const target = frame.x * 16 - 8
-        const previous =
-          smoothedGestureRef.current?.control === 'tempo' &&
-          smoothedGestureRef.current.deck === activeDeck
-            ? smoothedGestureRef.current.value
-            : decksRef.current[activeDeck].tempo
-        const value = smoothControlValue(previous, target, 0.25)
-        smoothedGestureRef.current = { control: 'tempo', deck: activeDeck, value }
-        setDeckTempo(activeDeck, value)
-        setGestureStatus(`${deckLabel(activeDeck)} tempo follows horizontal position`)
+        setGestureStatus(`${deckLabel(activeDeck)} filter follows wrist movement`)
       }
     },
     [
@@ -748,7 +842,6 @@ export function useDjMixer() {
       selectedControl,
       setCrossfader,
       setDeckFilter,
-      setDeckTempo,
       setDeckVolume,
     ],
   )
@@ -820,7 +913,6 @@ export function useDjMixer() {
     jumpToPhrase,
     setDeckVolume,
     setDeckFilter,
-    setDeckTempo,
     setCrossfader,
     toggleBpmSync,
     tapTempo,

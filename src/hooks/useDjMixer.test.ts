@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
+  bipolarFilterFrequencies,
   bpmFromTapTimes,
   chooseSyncMaster,
   equalPowerCrossfade,
   estimateBpmFromSamples,
+  filterValueFromGesture,
   matchedTempoPercent,
   phraseTimeForIndex,
   smoothControlValue,
+  shouldReleaseFilterGesture,
+  shortestAngleDelta,
   validateAudioFile,
 } from './useDjMixer'
 
@@ -46,6 +50,29 @@ describe('DJ mixer audio safeguards and math', () => {
     expect(smoothControlValue(0, 100)).toBe(32)
     expect(smoothControlValue(80, 20, 0.5)).toBe(50)
     expect(smoothControlValue(10, 20, 2)).toBe(20)
+  })
+
+  it('uses a center-neutral bipolar DJ filter', () => {
+    expect(bipolarFilterFrequencies(50)).toEqual({ highpass: 20, lowpass: 20_000 })
+    expect(bipolarFilterFrequencies(0).highpass).toBe(20)
+    expect(bipolarFilterFrequencies(0).lowpass).toBeCloseTo(220)
+    expect(bipolarFilterFrequencies(100).highpass).toBeCloseTo(12_000)
+    expect(bipolarFilterFrequencies(100).lowpass).toBe(20_000)
+  })
+
+  it('keeps a newly selected filter still until the wrist moves deliberately', () => {
+    const baseline = 0.4
+    expect(filterValueFromGesture(50, baseline, baseline)).toBe(50)
+    expect(filterValueFromGesture(50, baseline, baseline + (5 * Math.PI) / 180)).toBe(50)
+    expect(filterValueFromGesture(50, baseline, baseline + (37 * Math.PI) / 180)).toBe(75)
+    expect(filterValueFromGesture(50, baseline, baseline - (67 * Math.PI) / 180)).toBe(0)
+  })
+
+  it('handles wrist angles across the negative-pi boundary and releases after a short grace period', () => {
+    const delta = shortestAngleDelta(-Math.PI + 0.05, Math.PI - 0.05)
+    expect(delta).toBeCloseTo(0.1)
+    expect(shouldReleaseFilterGesture(1_000, 1_299)).toBe(false)
+    expect(shouldReleaseFilterGesture(1_000, 1_300)).toBe(true)
   })
 
   it('derives a stable BPM from manual taps', () => {

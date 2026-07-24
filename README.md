@@ -14,17 +14,29 @@
   <img alt="No backend required" src="https://img.shields.io/badge/backend-none-69d4ea?style=flat-square">
 </p>
 
-![Ultra Vision interface](./docs/design/ultra-vision-app.png)
+### Vision workspace
+
+![Ultra Vision real-time vision analysis](./docs/design/ultra-vision-analysis.jpg)
+
+<p align="center">
+  <em>Real-time hand landmarks, face signals, motion, and color sampling—all processed locally.</em>
+</p>
+
+### DJ Room
+
+![Ultra Vision camera and gesture routing](./docs/design/ultra-vision-camera.jpg)
+
+![Ultra Vision two-deck DJ mixer](./docs/design/ultra-vision-dj-mixer.jpg)
 
 Ultra Vision turns a webcam and two audio files into a private, interactive visual instrument and DJ mixer. It tracks hands and faces, studies pixels, detects track tempo, and maps deliberate movement to focused mix controls—all inside the browser tab.
 
 ## What it can do
 
-- **DJ Room** — mix two local tracks with independent transports, channel levels, filters, pitch-preserving tempo trim, phrase jumps, meters, and an equal-power crossfader.
+- **DJ Room** — mix two local tracks with independent transports, hardware-style level and bipolar filter knobs, phrase jumps, meters, and an equal-power crossfader.
 - **BPM tools** — estimate BPM locally, tap a tempo when analysis needs help, and use one reversible BPM Sync control to match the idle deck to the playing deck.
 - **Vision** — inspect hand landmarks, raised fingers, face signals, motion direction, and color coverage.
 - **Pixel Studio** — run transparent color-similarity and luminance studies on an upload or captured frame inside Vision.
-- **Gesture routing** — choose the crossfader or one deck's channel, filter, or tempo as the active hand-controlled parameter, with one-click and double-click resets.
+- **Gesture routing** — choose the crossfader or one deck's channel or filter as the active hand-controlled parameter, with one-click and double-click resets.
 - **Local media** — camera frames, images, and uploaded tracks are not sent to an application backend.
 - **Responsive interface** — the complete workflow works from a phone-sized viewport through desktop.
 
@@ -49,7 +61,7 @@ No API keys, database, or backend service are required.
 2. If a tempo is missing or incorrect, use **Tap BPM** a few times on the beat.
 3. Press the center **BPM Sync** control. The playing deck becomes the master; if neither or both are playing, Deck A leads. Press it again to restore both original tempos. Sync works within the ±20% deck range, including sensible half-time and double-time matches, and preserves pitch where the browser supports it.
 4. Use the phrase pads to align the downbeat, then mix with the channel controls and equal-power crossfader.
-5. Start the camera and route hand movement to the crossfader, channel level, filter, or tempo trim. Use **Reset**, **Reset mix**, or double-click a mode or slider to return it to neutral.
+5. Start the camera and route hand movement to the crossfader, channel level, or filter. The filter calibrates before it moves and returns to its 50% neutral position when your hand leaves. Use **Reset**, **Reset mix**, or double-click a mode or knob to return it to neutral.
 
 BPM Sync matches tempo; it does not claim automatic beat-grid or phase alignment.
 
@@ -74,7 +86,7 @@ The current runtime uses:
 - React 19, TypeScript, and Vite
 - MediaPipe Tasks Vision for hand and face landmarks
 - Canvas sampling for motion and color analysis
-- Web Audio for per-deck filters, channel gain, meters, tempo control, and equal-power mixing
+- Web Audio for per-deck bipolar filters, channel gain, meters, internal BPM matching, and equal-power mixing
 - Lucide for accessible interface icons
 
 ## Honest model scope

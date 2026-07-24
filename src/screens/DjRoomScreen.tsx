@@ -1,6 +1,5 @@
 import {
   Disc3,
-  Gauge,
   Hand,
   Music2,
   Pause,
@@ -12,7 +11,7 @@ import {
   Volume2,
   Waves,
 } from 'lucide-react'
-import { useRef } from 'react'
+import { useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { CameraActions, CameraStage, PageIntro } from '../components/AppShell'
 import type { DeckId, DjControl, useDjMixer } from '../hooks/useDjMixer'
 import type { useVisionRuntime } from '../hooks/useVisionRuntime'
@@ -40,14 +39,8 @@ const GESTURE_MODES: Array<{
   {
     control: 'filter',
     label: 'Filter',
-    detail: 'Rotate your wrist',
+    detail: 'Rotate · release to center',
     icon: SlidersHorizontal,
-  },
-  {
-    control: 'tempo',
-    label: 'Tempo',
-    detail: 'Move left or right',
-    icon: Gauge,
   },
 ]
 
@@ -60,6 +53,77 @@ function formatTime(seconds: number) {
 
 function deckLabel(id: DeckId) {
   return id === 'a' ? 'Deck A' : 'Deck B'
+}
+
+function RotaryControl({
+  label,
+  value,
+  formattedValue,
+  icon: Icon,
+  ariaLabel,
+  onChange,
+  onReset,
+  markers,
+}: {
+  label: string
+  value: number
+  formattedValue: string
+  icon: typeof Volume2
+  ariaLabel: string
+  onChange: (value: number) => void
+  onReset: () => void
+  markers: [string, string, string]
+}) {
+  const angle = -135 + (value / 100) * 270
+  const style = { '--knob-angle': `${angle}deg` } as CSSProperties
+  const updateFromPointer = (event: ReactPointerEvent<HTMLInputElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const nextValue = Math.round(
+      Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)) * 100,
+    )
+    onChange(nextValue)
+  }
+
+  return (
+    <div className="rotary-control">
+      <div className="rotary-heading">
+        <span>
+          <Icon aria-hidden="true" />
+          {label}
+        </span>
+        <button type="button" onClick={onReset} aria-label={`Reset ${ariaLabel}`} title="Reset">
+          <RotateCcw aria-hidden="true" />
+        </button>
+      </div>
+      <div className="rotary-dial" style={style}>
+        <div className="rotary-scale" aria-hidden="true" />
+        <div className="rotary-knob" aria-hidden="true">
+          <i />
+        </div>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          value={value}
+          onChange={(event) => onChange(Number(event.target.value))}
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId)
+            updateFromPointer(event)
+          }}
+          onPointerMove={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) updateFromPointer(event)
+          }}
+          onDoubleClick={onReset}
+          aria-label={ariaLabel}
+          title="Drag left or right · double-click to reset"
+        />
+      </div>
+      <output>{formattedValue}</output>
+      <div className="rotary-markers" aria-hidden="true">
+        {markers.map((marker) => <span key={marker}>{marker}</span>)}
+      </div>
+    </div>
+  )
 }
 
 function DeckPanel({
@@ -138,88 +202,32 @@ function DeckPanel({
       </div>
 
       <div className="deck-controls">
-        <div className="deck-control-row">
-          <span>
-            <Volume2 aria-hidden="true" />
-            Channel
-          </span>
-          <div className="deck-control-value">
-            <strong>{deck.volume}%</strong>
-            <button
-              type="button"
-              onClick={() => mixer.resetControl('volume', id)}
-              aria-label={`Reset ${deckLabel(id)} channel`}
-              title="Reset channel"
-            >
-              <RotateCcw aria-hidden="true" />
-            </button>
-          </div>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={deck.volume}
-            onChange={(event) => mixer.setDeckVolume(id, Number(event.target.value))}
-            onDoubleClick={() => mixer.resetControl('volume', id)}
-            aria-label={`${deckLabel(id)} volume`}
-            title="Double-click to reset"
-          />
-        </div>
-        <div className="deck-control-row">
-          <span>
-            <SlidersHorizontal aria-hidden="true" />
-            Filter
-          </span>
-          <div className="deck-control-value">
-            <strong>{deck.filter}%</strong>
-            <button
-              type="button"
-              onClick={() => mixer.resetControl('filter', id)}
-              aria-label={`Reset ${deckLabel(id)} filter`}
-              title="Open filter"
-            >
-              <RotateCcw aria-hidden="true" />
-            </button>
-          </div>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={deck.filter}
-            onChange={(event) => mixer.setDeckFilter(id, Number(event.target.value))}
-            onDoubleClick={() => mixer.resetControl('filter', id)}
-            aria-label={`${deckLabel(id)} filter`}
-            title="Double-click to reset"
-          />
-        </div>
-        <div className="deck-control-row">
-          <span>
-            <Gauge aria-hidden="true" />
-            Tempo
-          </span>
-          <div className="deck-control-value">
-            <strong>{deck.tempo > 0 ? '+' : ''}{deck.tempo.toFixed(1)}%</strong>
-            <button
-              type="button"
-              onClick={() => mixer.resetControl('tempo', id)}
-              aria-label={`Reset ${deckLabel(id)} tempo`}
-              title="Restore original tempo"
-            >
-              <RotateCcw aria-hidden="true" />
-            </button>
-          </div>
-          <input
-            type="range"
-            min="-20"
-            max="20"
-            step="0.1"
-            value={deck.tempo}
-            onChange={(event) => mixer.setDeckTempo(id, Number(event.target.value))}
-            onDoubleClick={() => mixer.resetControl('tempo', id)}
-            aria-label={`${deckLabel(id)} tempo`}
-            title="Double-click to reset"
-          />
-        </div>
+        <RotaryControl
+          label="Level"
+          value={deck.volume}
+          formattedValue={`${deck.volume}%`}
+          icon={Volume2}
+          ariaLabel={`${deckLabel(id)} channel level`}
+          onChange={(value) => mixer.setDeckVolume(id, value)}
+          onReset={() => mixer.resetControl('volume', id)}
+          markers={['0', '50', '100']}
+        />
+        <RotaryControl
+          label="Filter"
+          value={deck.filter}
+          formattedValue={
+            deck.filter === 50
+              ? '50% · Neutral'
+              : deck.filter < 50
+                ? `${deck.filter}% · LP`
+                : `${deck.filter}% · HP`
+          }
+          icon={SlidersHorizontal}
+          ariaLabel={`${deckLabel(id)} bipolar filter`}
+          onChange={(value) => mixer.setDeckFilter(id, value)}
+          onReset={() => mixer.resetControl('filter', id)}
+          markers={['LP', '50', 'HP']}
+        />
       </div>
 
       <div className="deck-actions">
@@ -408,9 +416,9 @@ function GestureConsole({
           </button>
         ))}
       </div>
-      <p className="gesture-reset-hint">Double-click any mode or slider to reset it.</p>
+      <p className="gesture-reset-hint">Double-click a mode or knob to reset it.</p>
 
-      <div className="gesture-status">
+      <div className="gesture-status" aria-live="polite">
         <Hand aria-hidden="true" />
         <div>
           <span>Live instruction</span>
@@ -457,7 +465,7 @@ export function DjRoomScreen({
       <PageIntro
         eyebrow="DJ Room"
         title="Mix two tracks with movement."
-        description="Two local decks, automatic BPM analysis, tempo sync, phrase jumps, and a camera-controlled mixer."
+        description="Two local decks, automatic BPM analysis, one-button BPM sync, phrase jumps, and a camera-controlled mixer."
         actions={
           <>
             <button
