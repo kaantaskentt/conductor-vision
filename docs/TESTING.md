@@ -5,6 +5,7 @@
 ```bash
 npm ci
 npm test
+npm run test:coverage
 npm run lint
 npm run build
 npm audit --audit-level=high
@@ -12,7 +13,9 @@ npm audit --audit-level=high
 
 ## Deterministic tests
 
-Unit tests cover vision math, pixel studies, gesture pickup/release, audio curves, BPM math, file validation, and generated demo tracks. Prefer generated signals and landmark traces over copyrighted or personally identifying fixtures.
+Unit tests cover vision math, pixel studies, gesture pickup/release, camera-overlay remounts, audio curves, BPM math, file validation, and generated demo tracks. React integration tests mount the real mixer and camera hooks to verify timed Filter release, Web Audio parameters, live-stream handoff, overlay remounts, and camera restart. Prefer generated signals and landmark traces over copyrighted or personally identifying fixtures.
+
+Coverage cannot fall below the checked-in project floor: 50% statements and lines, 40% functions, and 35% branches.
 
 ## Manual browser matrix
 
@@ -25,7 +28,8 @@ For each browser, verify:
 3. First visible hand causes no control jump.
 4. Open hand engages; fist or loss locks; Filter returns to 50%.
 5. BPM Sync toggles and restores original rates.
-6. Keyboard focus, arrow-key range control, reduced motion, and readable zoom.
+6. With the camera live, switch Vision → DJ Room → Vision and confirm landmarks remain on the visible canvas.
+7. Keyboard focus, arrow-key range control, reduced motion, and readable zoom.
 
 ## Camera automation strategy
 

@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createDemoTracks } from '../lib/demoAudio'
+import {
+  createFilterGestureState,
+  transitionFilterGesture,
+  type FilterGestureState,
+  type FilterGestureTransition,
+} from '../lib/gestureController'
 import { clamp, type GestureFrame } from '../lib/vision'
 
 export type DeckId = 'a' | 'b'
@@ -77,13 +83,9 @@ const FILTER_LOW_MIN_HZ = 220
 const FILTER_LOW_OPEN_HZ = 20_000
 const FILTER_HIGH_OPEN_HZ = 20
 const FILTER_HIGH_MAX_HZ = 12_000
-const FILTER_GESTURE_DEAD_ZONE = (7 * Math.PI) / 180
-const FILTER_GESTURE_SWEEP = (60 * Math.PI) / 180
-const FILTER_RELEASE_MS = 300
 const POSITION_GESTURE_DEAD_ZONE = 0.025
 const GESTURE_CALIBRATION_MS = 420
 const POSITION_CALIBRATION_TOLERANCE = 0.04
-const FILTER_CALIBRATION_TOLERANCE = (8 * Math.PI) / 180
 export const GESTURE_ENGAGE_FINGERS = 2
 
 export function validateAudioFile(file: File) {
@@ -192,24 +194,6 @@ export function bipolarFilterFrequencies(amount: number) {
     }
   }
   return { highpass: FILTER_HIGH_OPEN_HZ, lowpass: FILTER_LOW_OPEN_HZ }
-}
-
-export function shortestAngleDelta(current: number, baseline: number) {
-  return Math.atan2(Math.sin(current - baseline), Math.cos(current - baseline))
-}
-
-export function filterValueFromGesture(
-  baselineValue: number,
-  baselineAngle: number,
-  currentAngle: number,
-) {
-  const delta = shortestAngleDelta(currentAngle, baselineAngle)
-  const adjusted = Math.sign(delta) * Math.max(0, Math.abs(delta) - FILTER_GESTURE_DEAD_ZONE)
-  return clamp(baselineValue + (adjusted / FILTER_GESTURE_SWEEP) * 50, 0, 100)
-}
-
-export function shouldReleaseFilterGesture(lastSeenAt: number, now: number) {
-  return now - lastSeenAt >= FILTER_RELEASE_MS
 }
 
 export function estimateBpmFromSamples(samples: Float32Array, sampleRate: number) {
@@ -345,15 +329,7 @@ export function useDjMixer() {
     deck: DeckId | 'master'
     value: number
   } | null>(null)
-  const filterGestureRef = useRef<{
-    deck: DeckId
-    baselineAngle: number
-    baselineValue: number
-    samples: number
-    startedAt: number
-    lastSeenAt: number
-    engaged: boolean
-  } | null>(null)
+  const filterGestureRef = useRef<FilterGestureState>(createFilterGestureState())
   const positionGestureRef = useRef<PositionGesture | null>(null)
   const filterReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -392,7 +368,7 @@ export function useDjMixer() {
       gestureEngagedRef.current = false
       if (wasEngaged) gestureRequiresReleaseRef.current = true
       positionGestureRef.current = null
-      filterGestureRef.current = null
+      filterGestureRef.current = createFilterGestureState()
       smoothedGestureRef.current = null
       setGesturePhase('locked')
       if (message) setGestureStatus(message)
@@ -687,18 +663,40 @@ export function useDjMixer() {
     [patchDeck],
   )
 
-  const scheduleFilterRelease = useCallback(() => {
-    const filterGesture = filterGestureRef.current
-    if (!filterGesture || filterReleaseTimerRef.current !== null) return
-    const deck = filterGesture.deck
-    filterReleaseTimerRef.current = setTimeout(() => {
-      setDeckFilter(deck, DJ_NEUTRAL_VALUES.filter)
-      filterGestureRef.current = null
-      smoothedGestureRef.current = null
-      filterReleaseTimerRef.current = null
-      setGestureStatus(`${deckLabel(deck)} filter returned to neutral`)
-    }, FILTER_RELEASE_MS)
-  }, [setDeckFilter])
+  const scheduleFilterRelease = useCallback(
+    (releaseAt: number) => {
+      cancelFilterRelease()
+      const finishRelease = () => {
+        const now = performance.now()
+        const transition = transitionFilterGesture(filterGestureRef.current, {
+          type: 'release-timeout',
+          now,
+        })
+        filterGestureRef.current = transition.state
+        if (
+          transition.command === 'none' &&
+          transition.state.phase === 'release-grace'
+        ) {
+          filterReleaseTimerRef.current = setTimeout(
+            finishRelease,
+            Math.max(0, transition.state.releaseAt - now),
+          )
+          return
+        }
+        filterReleaseTimerRef.current = null
+        if (transition.command !== 'reset-neutral' || !transition.deck) return
+        setDeckFilter(transition.deck, DJ_NEUTRAL_VALUES.filter)
+        smoothedGestureRef.current = null
+        setGestureStatus(`${deckLabel(transition.deck)} filter returned to neutral`)
+      }
+
+      filterReleaseTimerRef.current = setTimeout(
+        finishRelease,
+        Math.max(0, releaseAt - performance.now()),
+      )
+    },
+    [cancelFilterRelease, setDeckFilter],
+  )
 
   const applyDeckTempo = useCallback(
     (id: DeckId, value: number) => {
@@ -922,14 +920,82 @@ export function useDjMixer() {
   const handleGestureFrame = useCallback(
     (frame: GestureFrame) => {
       const now = performance.now()
+      const applyFilterSample = () => {
+        const transition: FilterGestureTransition = transitionFilterGesture(
+          filterGestureRef.current,
+          {
+            type: 'sample',
+            deck: activeDeck,
+            angle: frame.wristAngle,
+            currentValue: decksRef.current[activeDeck].filter,
+            now,
+          },
+        )
+        filterGestureRef.current = transition.state
+        if (transition.command === 'cancel-neutral') cancelFilterRelease()
+        if (transition.command === 'reset-neutral' && transition.deck) {
+          cancelFilterRelease()
+          gestureEngagedRef.current = false
+          smoothedGestureRef.current = null
+          setGesturePhase('locked')
+          setDeckFilter(transition.deck, DJ_NEUTRAL_VALUES.filter)
+          setGestureStatus(`${deckLabel(transition.deck)} filter returned to neutral`)
+          return
+        }
+
+        const armed = transition.state.phase === 'armed'
+        gestureEngagedRef.current = armed
+        setGesturePhase(armed ? 'armed' : 'calibrating')
+
+        if (transition.feedback === 'calibration-started') {
+          setGestureStatus(`Hold steady to arm ${deckLabel(activeDeck)} filter`)
+          return
+        }
+        if (transition.feedback === 'calibration-restarted') {
+          setGestureStatus(`Keep your wrist still to arm ${deckLabel(activeDeck)} filter`)
+          return
+        }
+        if (transition.feedback === 'calibrating') {
+          setGestureStatus(`Hold steady · calibrating ${deckLabel(activeDeck)} filter`)
+          return
+        }
+        if (transition.feedback === 'armed' || transition.target === undefined) {
+          setGestureStatus(`${deckLabel(activeDeck)} filter armed · rotate your wrist`)
+          return
+        }
+
+        const previous =
+          smoothedGestureRef.current?.control === 'filter' &&
+          smoothedGestureRef.current.deck === activeDeck
+            ? smoothedGestureRef.current.value
+            : decksRef.current[activeDeck].filter
+        const value = smoothBoundedControlValue(previous, transition.target, 0, 100, 0.28)
+        smoothedGestureRef.current = { control: 'filter', deck: activeDeck, value }
+        setDeckFilter(activeDeck, value)
+        setGestureStatus(`${deckLabel(activeDeck)} filter follows wrist movement`)
+      }
+
       if (!isGestureFrameEngaged(frame)) {
         gestureEngagedRef.current = false
         gestureRequiresReleaseRef.current = false
         setGesturePhase('locked')
         positionGestureRef.current = null
         smoothedGestureRef.current = null
-        if (selectedControl === 'filter') scheduleFilterRelease()
-        else filterGestureRef.current = null
+        if (selectedControl === 'filter') {
+          const transition = transitionFilterGesture(filterGestureRef.current, {
+            type: 'lost',
+            now,
+          })
+          filterGestureRef.current = transition.state
+          if (
+            transition.command === 'schedule-neutral' &&
+            transition.state.phase === 'release-grace'
+          ) {
+            scheduleFilterRelease(transition.state.releaseAt)
+          }
+        } else {
+          filterGestureRef.current = createFilterGestureState()
+        }
         if (now - lastGestureUpdateAtRef.current > 280) {
           lastGestureUpdateAtRef.current = now
           setGestureStatus(
@@ -941,11 +1007,19 @@ export function useDjMixer() {
         return
       }
 
-      cancelFilterRelease()
       if (gestureRequiresReleaseRef.current) {
         gestureEngagedRef.current = false
         setGesturePhase('locked')
         setGestureStatus('Close your hand once, then open it to re-arm the mixer')
+        return
+      }
+      if (
+        selectedControl === 'filter' &&
+        decksRef.current[activeDeck].loaded &&
+        filterGestureRef.current.phase === 'release-grace'
+      ) {
+        lastGestureUpdateAtRef.current = now
+        applyFilterSample()
         return
       }
       if (now - lastGestureUpdateAtRef.current < 70) return
@@ -1075,76 +1149,7 @@ export function useDjMixer() {
         smoothedGestureRef.current = { control: 'volume', deck: activeDeck, value }
         setDeckVolume(activeDeck, value)
         setGestureStatus(`${deckLabel(activeDeck)} volume follows hand height`)
-      } else if (selectedControl === 'filter') {
-        let filterGesture = filterGestureRef.current
-        if (!filterGesture || filterGesture.deck !== activeDeck) {
-          filterGesture = {
-            deck: activeDeck,
-            baselineAngle: frame.wristAngle,
-            baselineValue: decksRef.current[activeDeck].filter,
-            samples: 1,
-            startedAt: now,
-            lastSeenAt: now,
-            engaged: false,
-          }
-          filterGestureRef.current = filterGesture
-          setGesturePhase('calibrating')
-          setGestureStatus(`Hold steady to arm ${deckLabel(activeDeck)} filter`)
-          return
-        }
-
-        filterGesture.lastSeenAt = now
-        if (!filterGesture.engaged) {
-          const calibrationDelta = Math.abs(
-            shortestAngleDelta(frame.wristAngle, filterGesture.baselineAngle),
-          )
-          if (calibrationDelta > FILTER_CALIBRATION_TOLERANCE) {
-            filterGesture.baselineAngle = frame.wristAngle
-            filterGesture.samples = 1
-            filterGesture.startedAt = now
-            setGesturePhase('calibrating')
-            setGestureStatus(`Keep your wrist still to arm ${deckLabel(activeDeck)} filter`)
-            return
-          }
-          filterGesture.samples += 1
-          filterGesture.baselineAngle +=
-            shortestAngleDelta(frame.wristAngle, filterGesture.baselineAngle) /
-            filterGesture.samples
-          if (now - filterGesture.startedAt < GESTURE_CALIBRATION_MS) {
-            setGesturePhase('calibrating')
-            setGestureStatus(`Hold steady · calibrating ${deckLabel(activeDeck)} filter`)
-            return
-          }
-          filterGesture.engaged = true
-          gestureEngagedRef.current = true
-          setGesturePhase('armed')
-        } else {
-          gestureEngagedRef.current = true
-          setGesturePhase('armed')
-        }
-
-        const angleDelta = Math.abs(
-          shortestAngleDelta(frame.wristAngle, filterGesture.baselineAngle),
-        )
-        if (angleDelta <= FILTER_GESTURE_DEAD_ZONE) {
-          setGestureStatus(`${deckLabel(activeDeck)} filter armed · rotate your wrist`)
-          return
-        }
-        const target = filterValueFromGesture(
-          filterGesture.baselineValue,
-          filterGesture.baselineAngle,
-          frame.wristAngle,
-        )
-        const previous =
-          smoothedGestureRef.current?.control === 'filter' &&
-          smoothedGestureRef.current.deck === activeDeck
-            ? smoothedGestureRef.current.value
-            : decksRef.current[activeDeck].filter
-        const value = smoothBoundedControlValue(previous, target, 0, 100, 0.28)
-        smoothedGestureRef.current = { control: 'filter', deck: activeDeck, value }
-        setDeckFilter(activeDeck, value)
-        setGestureStatus(`${deckLabel(activeDeck)} filter follows wrist movement`)
-      }
+      } else if (selectedControl === 'filter') applyFilterSample()
     },
     [
       activeDeck,

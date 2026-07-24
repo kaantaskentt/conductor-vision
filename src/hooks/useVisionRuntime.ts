@@ -15,6 +15,17 @@ import {
   type TargetColor,
   type VisionAnalysis,
 } from '../lib/vision'
+import {
+  attachCameraOverlayCanvas,
+  claimCameraVideoFrame,
+  createCameraOverlayLifecycle,
+  getCameraOverlayDrawing,
+  resetCameraOverlayFrame,
+} from '../lib/cameraOverlayLifecycle'
+import {
+  attachVideoElement,
+  createVideoElementLifecycle,
+} from '../lib/videoElementLifecycle'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 export type CameraStatus = 'idle' | 'loading' | 'running' | 'error'
@@ -91,9 +102,10 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
   const [message, setMessage] = useState('Camera is off. Processing begins only when you start it.')
   const [analysis, setAnalysis] = useState<VisionAnalysis>(() => createEmptyAnalysis(targetColor))
 
-  const videoElementRef = useRef<HTMLVideoElement | null>(null)
-  const canvasElementRef = useRef<HTMLCanvasElement | null>(null)
-  const drawingRef = useRef<DrawingUtils | null>(null)
+  const videoLifecycleRef = useRef(createVideoElementLifecycle())
+  const overlayLifecycleRef = useRef(
+    createCameraOverlayLifecycle<HTMLCanvasElement, DrawingUtils>(),
+  )
   const samplerRef = useRef<HTMLCanvasElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const handLandmarkerRef = useRef<HandLandmarker | null>(null)
@@ -103,7 +115,6 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
   const handLoadPromiseRef = useRef<Promise<HandLandmarker> | null>(null)
   const faceLoadPromiseRef = useRef<Promise<FaceLandmarker> | null>(null)
   const animationRef = useRef<number | null>(null)
-  const lastVideoTimeRef = useRef(-1)
   const previousGrayRef = useRef<Uint8ClampedArray | null>(null)
   const lastFrameAtRef = useRef(performance.now())
   const lastUiUpdateRef = useRef(0)
@@ -206,16 +217,8 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
     }
   }, [enableFace, getFaceLandmarker])
 
-  const setVideoElement = useCallback((element: HTMLVideoElement | null) => {
-    videoElementRef.current = element
-    if (element && streamRef.current) {
-      element.srcObject = streamRef.current
-      void element.play().catch(() => undefined)
-    }
-  }, [])
-
   const setCanvasElement = useCallback((element: HTMLCanvasElement | null) => {
-    canvasElementRef.current = element
+    attachCameraOverlayCanvas(overlayLifecycleRef.current, element)
   }, [])
 
   const teardown = useCallback((updateState: boolean) => {
@@ -227,13 +230,12 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
     streamRef.current?.getTracks().forEach((track) => track.stop())
     streamRef.current = null
     previousGrayRef.current = null
-    drawingRef.current = null
+    resetCameraOverlayFrame(overlayLifecycleRef.current)
     primaryHandRef.current = null
-    lastVideoTimeRef.current = -1
     frameCountRef.current = 0
 
-    if (videoElementRef.current) videoElementRef.current.srcObject = null
-    const canvas = canvasElementRef.current
+    if (videoLifecycleRef.current.element) videoLifecycleRef.current.element.srcObject = null
+    const canvas = overlayLifecycleRef.current.canvas
     if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
 
     if (updateState) {
@@ -250,11 +252,38 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
     }
   }, [])
 
+  const setVideoElement = useCallback(
+    (element: HTMLVideoElement | null) => {
+      const stream = streamRef.current
+      attachVideoElement(videoLifecycleRef.current, element, stream, (_error, attempt) => {
+        if (
+          !runningRef.current ||
+          videoLifecycleRef.current.element !== attempt.element ||
+          videoLifecycleRef.current.generation !== attempt.generation ||
+          streamRef.current !== attempt.stream
+        ) {
+          return
+        }
+        teardown(false)
+        gestureCallbackRef.current({
+          detected: false,
+          x: 0.5,
+          y: 0.5,
+          wristAngle: 0,
+          openFingers: 0,
+        })
+        setStatus('error')
+        setMessage('The camera view was interrupted. Start the camera to try again.')
+      })
+    },
+    [teardown],
+  )
+
   const predictLoop = useCallback(() => {
     if (!runningRef.current) return
 
-    const video = videoElementRef.current
-    const canvas = canvasElementRef.current
+    const video = videoLifecycleRef.current.element
+    const canvas = overlayLifecycleRef.current.canvas
     const hands = handLandmarkerRef.current
 
     if (!video || !canvas || !hands || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
@@ -262,11 +291,10 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
       return
     }
 
-    if (video.currentTime === lastVideoTimeRef.current) {
+    if (!claimCameraVideoFrame(overlayLifecycleRef.current, video.currentTime)) {
       animationRef.current = requestAnimationFrame(predictLoop)
       return
     }
-    lastVideoTimeRef.current = video.currentTime
 
     try {
       const now = performance.now()
@@ -291,8 +319,10 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
         ? summarizeFace(faceResult)
         : { faceCount: 0, smileScore: 0, eyeOpenScore: 0, faceLabel: 'Face tracking off' }
 
-      const drawing = drawingRef.current ?? new DrawingUtils(context)
-      drawingRef.current = drawing
+      const drawing = getCameraOverlayDrawing(
+        overlayLifecycleRef.current,
+        () => new DrawingUtils(context),
+      )
       handResult.landmarks.forEach((landmarks) => {
         drawing.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS, {
           color: '#7c4dff',
@@ -429,14 +459,28 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
         return
       }
       streamRef.current = stream
-      const video = videoElementRef.current
-      if (!video) throw new Error('The camera view is not available.')
-      video.srcObject = stream
-      await video.play()
-      if (requestId !== startRequestRef.current || disposedRef.current) {
-        stream.getTracks().forEach((track) => track.stop())
-        if (video.srcObject === stream) video.srcObject = null
-        return
+      let video: HTMLVideoElement | null = null
+      while (true) {
+        video = videoLifecycleRef.current.element
+        if (!video) throw new Error('The camera view is not available.')
+        if (video.srcObject !== stream) video.srcObject = stream
+        try {
+          await video.play()
+        } catch (error) {
+          if (requestId !== startRequestRef.current || disposedRef.current) {
+            stream.getTracks().forEach((track) => track.stop())
+            if (video.srcObject === stream) video.srcObject = null
+            return
+          }
+          if (videoLifecycleRef.current.element !== video) continue
+          throw error
+        }
+        if (requestId !== startRequestRef.current || disposedRef.current) {
+          stream.getTracks().forEach((track) => track.stop())
+          if (video.srcObject === stream) video.srcObject = null
+          return
+        }
+        if (videoLifecycleRef.current.element === video) break
       }
 
       loadingRef.current = false
@@ -464,7 +508,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
       if (requestId !== startRequestRef.current || disposedRef.current) return
       streamRef.current?.getTracks().forEach((track) => track.stop())
       streamRef.current = null
-      if (videoElementRef.current) videoElementRef.current.srcObject = null
+      if (videoLifecycleRef.current.element) videoLifecycleRef.current.element.srcObject = null
       loadingRef.current = false
       runningRef.current = false
       setStatus('error')
@@ -475,7 +519,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
   const stop = useCallback(() => teardown(true), [teardown])
 
   const captureFrame = useCallback(() => {
-    const video = videoElementRef.current
+    const video = videoLifecycleRef.current.element
     if (!video || !runningRef.current || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
       throw new Error('Start the camera before capturing a frame.')
     }

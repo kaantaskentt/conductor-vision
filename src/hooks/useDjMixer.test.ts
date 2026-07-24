@@ -5,15 +5,12 @@ import {
   chooseSyncMaster,
   equalPowerCrossfade,
   estimateBpmFromSamples,
-  filterValueFromGesture,
   isGestureFrameEngaged,
   matchedTempoPercent,
   phraseTimeForIndex,
   relativeGestureValue,
   smoothBoundedControlValue,
   smoothControlValue,
-  shouldReleaseFilterGesture,
-  shortestAngleDelta,
   validateAudioFile,
 } from './useDjMixer'
 
@@ -86,21 +83,6 @@ describe('DJ mixer audio safeguards and math', () => {
     expect(bipolarFilterFrequencies(0).lowpass).toBeCloseTo(220)
     expect(bipolarFilterFrequencies(100).highpass).toBeCloseTo(12_000)
     expect(bipolarFilterFrequencies(100).lowpass).toBe(20_000)
-  })
-
-  it('keeps a newly selected filter still until the wrist moves deliberately', () => {
-    const baseline = 0.4
-    expect(filterValueFromGesture(50, baseline, baseline)).toBe(50)
-    expect(filterValueFromGesture(50, baseline, baseline + (5 * Math.PI) / 180)).toBe(50)
-    expect(filterValueFromGesture(50, baseline, baseline + (37 * Math.PI) / 180)).toBe(75)
-    expect(filterValueFromGesture(50, baseline, baseline - (67 * Math.PI) / 180)).toBe(0)
-  })
-
-  it('handles wrist angles across the negative-pi boundary and releases after a short grace period', () => {
-    const delta = shortestAngleDelta(-Math.PI + 0.05, Math.PI - 0.05)
-    expect(delta).toBeCloseTo(0.1)
-    expect(shouldReleaseFilterGesture(1_000, 1_299)).toBe(false)
-    expect(shouldReleaseFilterGesture(1_000, 1_300)).toBe(true)
   })
 
   it('derives a stable BPM from manual taps', () => {
