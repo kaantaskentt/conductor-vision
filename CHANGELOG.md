@@ -12,6 +12,8 @@ All notable changes to Ultra Vision will be documented here. The project follows
 - Stable primary-hand selection and hand-only processing in DJ Room.
 - Live analyser signal history for each deck and a bounded, post-master local replay engine.
 - Self-hosted, lock-pinned MediaPipe WASM plus byte-length and SHA-256 verification for model downloads.
+- A production-build Chromium camera contract covering real MediaPipe startup, tab handoff, local capture, stop, and restart without personal camera imagery.
+- A dedicated one-worker camera CI job with synthetic-only failure diagnostics.
 - Contributor guidance for Codex and other coding agents.
 
 ### Fixed
@@ -33,6 +35,7 @@ All notable changes to Ultra Vision will be documented here. The project follows
 
 ### Changed
 
+- Pinned CI and CodeQL actions to reviewed immutable release commits.
 - Renamed misleading phrase controls to track quarters until real beat-grid cues exist.
 - Moved deck meters after channel and crossfader gain and added a master limiter.
 - Rebuilt DJ Room around a compact camera-first layout, hardware-style knobs, and a master-first mobile order.

@@ -117,6 +117,15 @@ npm run check
 
 That command runs the test suite with coverage floors, lint, a production build, and a full dependency audit at the high-severity threshold. CI and CodeQL run on every pull request.
 
+Camera-runtime changes also have a hardware-free production-browser contract:
+
+```bash
+npx playwright install chromium
+npm run test:camera
+```
+
+It starts the production build with Chromium's synthetic camera and exercises the real MediaStream, MediaPipe WASM/model, canvas handoff, local capture, stop, and restart paths. It does not record a contributor or claim physical-camera accuracy.
+
 - Camera and uploaded media are processed in the active browser tab.
 - File types and sizes are checked before object URLs are created.
 - Lock-pinned MediaPipe WASM is served from Ultra Vision's own origin. Hand and face model bundles are fetched from their exact Google-hosted upstream URLs, accepted only after byte-length and SHA-256 verification, and then passed to MediaPipe as in-memory bytes. Camera frames are never sent with those requests.
@@ -133,7 +142,7 @@ Read [Building Ultra Vision with Codex](./docs/BUILDING_WITH_CODEX.md) for the d
 
 ## Project status
 
-Ultra Vision is an active experimental project. Vision and two-deck mixing are functional; phase-aware sync, browser-level camera fixtures, measured long-session performance, and the Replay Studio interface remain future work.
+Ultra Vision is an active experimental project. Vision, two-deck mixing, and the real-browser camera lifecycle are functional and automated. Phase-aware sync, a provenance-safe hand-gesture model fixture, measured long-session performance, and the Replay Studio interface remain future work.
 
 Read the [roadmap](./ROADMAP.md), [testing strategy](./docs/TESTING.md), and [contributor guide](./CONTRIBUTING.md). Focused issues and pull requests are welcome.
 

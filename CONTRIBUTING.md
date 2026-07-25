@@ -37,6 +37,15 @@ npm run check
 
 It runs tests with coverage thresholds, lint, the production build, and the high-severity dependency audit.
 
+If your change touches camera startup, MediaPipe assets, video/canvas ownership, capture, or teardown, install Chromium once and run the production-browser contract too:
+
+```bash
+npx playwright install chromium
+npm run test:camera
+```
+
+This uses a synthetic camera and does not need access to your webcam.
+
 ## Where to work
 
 | Area | Starting point | What it owns |
@@ -75,7 +84,7 @@ See [docs/TESTING.md](./docs/TESTING.md) for the browser matrix, deterministic c
 1. Reproduce the problem or state the user outcome.
 2. Add or update a deterministic test before changing camera, gesture, audio, or replay behavior.
 3. Keep the diff focused and update documentation when the shipped behavior or limitation changes.
-4. Run `npm run check`.
+4. Run `npm run check`, plus `npm run test:camera` when the camera/runtime boundary changed.
 5. Open a pull request and point reviewers to the best file to inspect first.
 
 For a visible change, attach current evidence at 1280×720 and 390×844. For camera or audio work, include either deterministic fixture evidence or a short description of the real-device flow tested. Do not upload private frames or copyrighted music as evidence.
