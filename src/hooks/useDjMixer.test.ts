@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  appendWaveformSample,
   bipolarFilterFrequencies,
+  bipolarFilterResonance,
   bpmFromTapTimes,
+  channelGainFromPercent,
   chooseSyncMaster,
   createBpmAnalysisQueue,
   equalPowerCrossfade,
@@ -77,6 +80,12 @@ describe('DJ mixer audio safeguards and math', () => {
     ).toBe(false)
     expect(
       isGestureFrameEngaged({ detected: true, x: 0.9, y: 0.2, wristAngle: 0, openFingers: 2 }),
+    ).toBe(false)
+    expect(
+      isGestureFrameEngaged(
+        { detected: true, x: 0.9, y: 0.2, wristAngle: 0, openFingers: 2 },
+        true,
+      ),
     ).toBe(true)
     expect(
       isGestureFrameEngaged({ detected: false, x: 0.5, y: 0.5, wristAngle: 0, openFingers: 5 }),
@@ -94,8 +103,27 @@ describe('DJ mixer audio safeguards and math', () => {
     expect(bipolarFilterFrequencies(50)).toEqual({ highpass: 20, lowpass: 20_000 })
     expect(bipolarFilterFrequencies(0).highpass).toBe(20)
     expect(bipolarFilterFrequencies(0).lowpass).toBeCloseTo(220)
-    expect(bipolarFilterFrequencies(100).highpass).toBeCloseTo(12_000)
+    expect(bipolarFilterFrequencies(100).highpass).toBeCloseTo(16_000)
     expect(bipolarFilterFrequencies(100).lowpass).toBe(20_000)
+    expect(bipolarFilterFrequencies(40).lowpass).toBeLessThan(5_000)
+    expect(bipolarFilterFrequencies(60).highpass).toBeGreaterThan(150)
+    expect(bipolarFilterResonance(50)).toBeCloseTo(0.82)
+    expect(bipolarFilterResonance(0)).toBeCloseTo(2.1)
+    expect(bipolarFilterResonance(100)).toBeCloseTo(2.1)
+  })
+
+  it('uses a DJ-style channel fader taper with a true mute at zero', () => {
+    expect(channelGainFromPercent(0)).toBe(0)
+    expect(channelGainFromPercent(100)).toBe(1)
+    expect(channelGainFromPercent(82)).toBeGreaterThan(0.8)
+    expect(channelGainFromPercent(50)).toBeCloseTo(0.251, 2)
+    expect(channelGainFromPercent(25)).toBeLessThan(0.05)
+  })
+
+  it('builds a bounded live waveform history from real analyser levels', () => {
+    expect(appendWaveformSample([0, 12, 24], 36, 4)).toEqual([0, 12, 24, 36])
+    expect(appendWaveformSample([0, 12, 24, 36], 140, 4)).toEqual([12, 24, 36, 100])
+    expect(appendWaveformSample([12], 20, 0)).toEqual([])
   })
 
   it('derives a stable BPM from manual taps', () => {

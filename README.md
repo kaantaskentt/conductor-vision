@@ -34,17 +34,17 @@ No account, API key, database, backend, or audio files are required for the firs
 ## Try your first mix in 60 seconds
 
 1. Open the [live app](https://ultra-vision.vercel.app) and choose **DJ Room**.
-2. Select **Try demo set** to generate two short, copyright-safe loops locally.
+2. Select **Try demo set** to generate two short, copyright-safe tracks locally.
 3. Press **Start both** and move the center crossfader.
-4. Select **Start camera**, allow access, then hold an open hand steady to calibrate before moving left or right.
+4. Select **Start camera**, allow access, then open your palm to grab the selected control without moving its current value.
 
-Close your hand to lock the crossfader or channel position; Filter instead returns to its neutral midpoint after release. A newly detected hand never takes over immediately.
+Close your hand to lock the crossfader or volume position; Filter instead returns to its neutral midpoint after release. A newly detected hand grabs the current value without moving it, then responds only to intentional movement.
 
 ## What it can do
 
 - **Instant demo set** — generate two original rhythmic loops locally and reach a playable mix without finding audio files.
-- **Two-deck DJ Room** — control independent transports, hardware-style level and bipolar filter knobs, track-quarter jumps, post-fader meters, a master limiter, and an equal-power crossfader.
-- **Intentional gesture routing** — send an open hand to the crossfader or one deck's channel or filter. Relative pickup prevents first-frame jumps; a closed hand or tracking loss locks the control.
+- **Two-deck DJ Room** — control independent transports, hardware-style level and bipolar filter knobs, live analyser waveforms, track-quarter jumps, post-fader meters, a master limiter, and an equal-power crossfader.
+- **Intentional gesture routing** — send an open palm to the crossfader or one deck's level or filter. Relative pickup prevents first-frame jumps, brief landmark flicker stays latched, and a deliberate fist releases the control.
 - **BPM tools** — estimate BPM locally, tap a correction, and use one reversible BPM Sync control to match playback rates.
 - **Vision workspace** — inspect hand landmarks, raised fingers, face signals, motion direction, and color coverage.
 - **Pixel Studio** — study color similarity and luminance from an upload or captured frame with transparent, deterministic calculations.
@@ -57,7 +57,7 @@ BPM Sync matches tempo; it does not claim automatic beat-grid, downbeat, or phas
 | Vision | DJ Room |
 | --- | --- |
 | ![Ultra Vision real-time vision analysis](./docs/design/ultra-vision-analysis.jpg) | ![Ultra Vision camera and gesture clutch](./docs/design/ultra-vision-gesture-clutch.png) |
-| Inspect live landmarks, motion, face signals, and pixel studies. | Choose one mix control, calibrate deliberately, then perform with movement. |
+| Inspect live landmarks, motion, face signals, and pixel studies. | Choose one mix control, grab it with an open palm, then perform with movement. |
 
 The interface reflows from desktop down to phone-sized viewports. Real camera and audio behavior still depends on the browser and device; the maintained test matrix lives in [docs/TESTING.md](./docs/TESTING.md).
 
@@ -76,10 +76,10 @@ Open the local Vite URL. Camera access requires `localhost` or HTTPS.
 
 ## How gesture mixing feels
 
-1. Pick Deck A or Deck B and choose Crossfader, Channel, or Filter.
-2. Hold an open hand steady while Ultra Vision calibrates against the current control position.
-3. Move only after the control becomes armed.
-4. Close your hand or leave the frame to lock position controls. Filter eases back to its 50% neutral point.
+1. Pick Deck A or Deck B and choose Crossfader, Volume, or Filter.
+2. Open your palm to grab the current value without a jump. The crossfader asks for one brief steady hold before it arms.
+3. Move vertically for level, rotate your wrist for filter, or move sideways for the crossfader.
+4. Close your fist to lock level/crossfader. Filter eases back to its 50% neutral point; brief tracking flicker is ignored.
 
 Use **Reset**, **Reset mix**, or double-click a mode or knob whenever you want a known starting point.
 

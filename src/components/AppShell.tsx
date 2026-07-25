@@ -65,14 +65,16 @@ export function PageIntro({
   title,
   description,
   actions,
+  className,
 }: {
   eyebrow: string
   title: string
   description: string
   actions: ReactNode
+  className?: string
 }) {
   return (
-    <section className="page-intro">
+    <section className={`page-intro ${className ?? ''}`.trim()}>
       <div>
         <p className="eyebrow">{eyebrow}</p>
         <h1>{title}</h1>

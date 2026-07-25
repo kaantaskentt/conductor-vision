@@ -32,7 +32,7 @@ The runtime emits a small `GestureFrame` rather than exposing MediaPipe objects 
 media source → high-pass → low-pass → channel gain → crossfade gain → analyser → master limiter → output
 ```
 
-React state mirrors user-facing deck status. Refs own high-frequency or imperative audio state. Gesture takeover calibrates relative to the current value so the first hand frame cannot jump a control.
+React state mirrors user-facing deck status. Refs own high-frequency or imperative audio state. Gesture takeover grabs relative to the current value so the first hand frame cannot jump a control; a small clutch state machine absorbs landmark flicker and confirms release intent.
 
 ## Air Mix Replay foundation
 

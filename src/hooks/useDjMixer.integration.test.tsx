@@ -3,7 +3,18 @@
 import { act, useLayoutEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { bipolarFilterFrequencies, DJ_NEUTRAL_VALUES, useDjMixer } from './useDjMixer'
+import {
+  bipolarFilterFrequencies,
+  bipolarFilterResonance,
+  channelGainFromPercent,
+  DJ_NEUTRAL_VALUES,
+  useDjMixer,
+} from './useDjMixer'
+import {
+  FILTER_GESTURE_RELEASE_MS,
+  GESTURE_CLUTCH_FIST_RELEASE_MS,
+  GESTURE_CLUTCH_LOST_RELEASE_MS,
+} from '../lib/gestureController'
 
 type Mixer = ReturnType<typeof useDjMixer>
 
@@ -16,6 +27,11 @@ type FakeFilter = {
   type: BiquadFilterType
   Q: FakeAudioParam
   frequency: FakeAudioParam
+  connect: ReturnType<typeof vi.fn>
+}
+
+type FakeGain = {
+  gain: FakeAudioParam
   connect: ReturnType<typeof vi.fn>
 }
 
@@ -45,6 +61,7 @@ class FakeAudioContext {
   state: AudioContextState = 'running'
   destination = {} as AudioDestinationNode
   filters: FakeFilter[] = []
+  gains: FakeGain[] = []
   compressors: FakeCompressor[] = []
   mediaDestinations: FakeMediaDestination[] = []
 
@@ -108,10 +125,12 @@ class FakeAudioContext {
   }
 
   createGain() {
-    return {
+    const gain: FakeGain = {
       gain: createAudioParam(),
       connect: vi.fn(),
-    } as unknown as GainNode
+    }
+    this.gains.push(gain)
+    return gain as unknown as GainNode
   }
 
   resume = vi.fn(() => Promise.resolve())
@@ -143,14 +162,18 @@ function Harness({ onUpdate }: { onUpdate: (mixer: Mixer) => void }) {
   return null
 }
 
-function openHand(wristAngle: number) {
+function openHand(wristAngle: number, options: { fingers?: number; y?: number } = {}) {
   return {
     detected: true,
     x: 0.5,
-    y: 0.5,
+    y: options.y ?? 0.5,
     wristAngle,
-    openFingers: 5,
+    openFingers: options.fingers ?? 5,
   }
+}
+
+function closedHand(wristAngle = 0) {
+  return { ...openHand(wristAngle), openFingers: 0 }
 }
 
 const noHand = {
@@ -220,22 +243,10 @@ describe('DJ mixer filter gesture integration', () => {
     vi.unstubAllGlobals()
   })
 
-  it('keeps a non-neutral knob still until calibrated, follows deliberate rotation, then resets audio and UI after release', async () => {
+  it('grabs a non-neutral filter without jumping, survives finger-count flicker, and resets after a deliberate fist release', async () => {
     await act(async () => current.handleGestureFrame(openHand(0)))
     expect(current.decks.a.filter).toBe(82)
-    expect(current.gestureStatus).toContain('Hold steady')
-
-    await act(async () => {
-      vi.advanceTimersByTime(210)
-      current.handleGestureFrame(openHand((2 * Math.PI) / 180))
-    })
-    expect(current.decks.a.filter).toBe(82)
-
-    await act(async () => {
-      vi.advanceTimersByTime(210)
-      current.handleGestureFrame(openHand(0))
-    })
-    expect(current.decks.a.filter).toBe(82)
+    expect(current.gestureStatus).toContain('grabbed at 82%')
     expect(current.gesturePhase).toBe('armed')
 
     await act(async () => {
@@ -246,66 +257,124 @@ describe('DJ mixer filter gesture integration', () => {
 
     await act(async () => {
       vi.advanceTimersByTime(80)
-      current.handleGestureFrame(openHand((-37 * Math.PI) / 180))
+      current.handleGestureFrame(openHand((-25 * Math.PI) / 180, { fingers: 2 }))
     })
-    expect(current.decks.a.filter).toBe(75)
-    expect(current.gestureStatus).toContain('follows wrist movement')
+    expect(current.decks.a.filter).toBe(70)
+    expect(current.gestureStatus).toContain('close fist to return to 50%')
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleGestureFrame(closedHand((-25 * Math.PI) / 180))
+    })
+    expect(current.decks.a.filter).toBe(70)
+    expect(current.gestureStatus).toBe('Keep your fist closed to release')
+
+    await act(async () => {
+      vi.advanceTimersByTime(GESTURE_CLUTCH_FIST_RELEASE_MS)
+      current.handleGestureFrame(closedHand((-25 * Math.PI) / 180))
+    })
+    expect(current.decks.a.filter).toBe(70)
+    expect(current.gestureStatus).toContain('returning to 50%')
 
     const context = FakeAudioContext.instances[0]
-    const moved = bipolarFilterFrequencies(75)
+    const moved = bipolarFilterFrequencies(70)
+    const movedQ = bipolarFilterResonance(70)
     expect(context.filters[0].frequency.setTargetAtTime).toHaveBeenLastCalledWith(
       moved.highpass,
       4,
-      0.06,
+      0.045,
     )
     expect(context.filters[1].frequency.setTargetAtTime).toHaveBeenLastCalledWith(
       moved.lowpass,
       4,
-      0.06,
+      0.045,
     )
+    expect(context.filters[0].Q.setTargetAtTime).toHaveBeenLastCalledWith(movedQ, 4, 0.045)
 
-    await act(async () => current.handleGestureFrame(noHand))
-    await act(async () => vi.advanceTimersByTime(299))
-    expect(current.decks.a.filter).toBe(75)
+    await act(async () => vi.advanceTimersByTime(FILTER_GESTURE_RELEASE_MS - 1))
+    expect(current.decks.a.filter).toBe(70)
 
     await act(async () => vi.advanceTimersByTime(1))
     expect(current.decks.a.filter).toBe(DJ_NEUTRAL_VALUES.filter)
     expect(current.gestureStatus).toBe('Deck A filter returned to neutral')
 
     expect(context.filters).toHaveLength(2)
-    expect(context.filters[0].frequency.setTargetAtTime).toHaveBeenLastCalledWith(20, 4, 0.06)
+    expect(context.filters[0].frequency.setTargetAtTime).toHaveBeenLastCalledWith(20, 4, 0.12)
     expect(context.filters[1].frequency.setTargetAtTime).toHaveBeenLastCalledWith(
       20_000,
       4,
-      0.06,
+      0.12,
     )
   })
 
-  it('cancels a pending neutral reset when the hand returns or the selected control changes', async () => {
+  it('recovers from brief tracking loss and cancels a pending neutral reset when the hand returns', async () => {
     await act(async () => current.handleGestureFrame(openHand(0.4)))
     await act(async () => {
-      vi.advanceTimersByTime(420)
-      current.handleGestureFrame(openHand(0.4))
-      current.handleGestureFrame(noHand)
+      vi.advanceTimersByTime(80)
+      current.handleGestureFrame(openHand(0.1))
     })
+    const movedValue = current.decks.a.filter
 
     await act(async () => {
-      vi.advanceTimersByTime(299)
+      vi.advanceTimersByTime(80)
+      current.handleGestureFrame(noHand)
+    })
+    expect(current.decks.a.filter).toBe(movedValue)
+    expect(current.gestureStatus).toContain('Tracking paused')
+
+    await act(async () => {
+      vi.advanceTimersByTime(GESTURE_CLUTCH_LOST_RELEASE_MS - 1)
+      current.handleGestureFrame(openHand(0.1))
+    })
+    expect(current.decks.a.filter).not.toBe(DJ_NEUTRAL_VALUES.filter)
+    expect(current.gesturePhase).toBe('armed')
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleGestureFrame(noHand)
+      vi.advanceTimersByTime(GESTURE_CLUTCH_LOST_RELEASE_MS)
+      current.handleGestureFrame(noHand)
+    })
+    expect(current.gestureStatus).toContain('returning to 50%')
+
+    expect(vi.getTimerCount()).toBe(1)
+    const valueBeforeRegrab = current.decks.a.filter
+    await act(async () => {
+      vi.advanceTimersByTime(FILTER_GESTURE_RELEASE_MS - 1)
       current.handleGestureFrame(openHand(-0.7))
     })
-    expect(current.decks.a.filter).toBe(82)
-    expect(current.gesturePhase).toBe('calibrating')
-
-    await act(async () => vi.advanceTimersByTime(400))
-    expect(current.decks.a.filter).toBe(82)
-
-    await act(async () => current.handleGestureFrame(noHand))
-    expect(vi.getTimerCount()).toBe(1)
-    await act(async () => current.selectControl('crossfader'))
     expect(vi.getTimerCount()).toBe(0)
-    await act(async () => vi.advanceTimersByTime(400))
-    expect(current.selectedControl).toBe('crossfader')
-    expect(current.gestureStatus).not.toContain('returned to neutral')
+    expect(current.decks.a.filter).toBe(valueBeforeRegrab)
+    expect(current.gestureStatus).toContain(`grabbed at ${valueBeforeRegrab}%`)
+  })
+
+  it('grabs volume without jumping, responds to hand height, then locks its value on release', async () => {
+    await act(async () => current.selectControl('volume', 'a'))
+    await act(async () => current.handleGestureFrame(openHand(0, { y: 0.5 })))
+    expect(current.decks.a.volume).toBe(82)
+    expect(current.gestureStatus).toContain('grabbed at 82%')
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleGestureFrame(openHand(0, { fingers: 2, y: 0.35 }))
+    })
+    expect(current.decks.a.volume).toBe(92)
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleGestureFrame(closedHand())
+      vi.advanceTimersByTime(GESTURE_CLUTCH_FIST_RELEASE_MS)
+      current.handleGestureFrame(closedHand())
+    })
+    expect(current.decks.a.volume).toBe(92)
+    expect(current.gestureStatus).toBe('Deck A level locked at 92%')
+
+    const context = FakeAudioContext.instances[0]
+    expect(context.gains[0].gain.setTargetAtTime).toHaveBeenLastCalledWith(
+      channelGainFromPercent(92),
+      4,
+      0.045,
+    )
   })
 
   it('creates an isolated post-master capture tap without disturbing speaker output', async () => {

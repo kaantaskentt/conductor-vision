@@ -1,4 +1,5 @@
 import {
+  ChevronDown,
   Disc3,
   Hand,
   Pause,
@@ -15,9 +16,9 @@ import { useId, useRef, type CSSProperties, type PointerEvent as ReactPointerEve
 import { CameraActions, CameraStage, PageIntro } from '../components/AppShell'
 import type { DeckId, DjControl, useDjMixer } from '../hooks/useDjMixer'
 import type { useVisionRuntime } from '../hooks/useVisionRuntime'
+import { rotaryValueFromVerticalDrag } from '../lib/gestureController'
 
 const ACCEPTED_AUDIO = 'audio/mpeg,audio/wav,audio/flac,audio/ogg,.mp3,.wav,.flac,.ogg'
-
 const GESTURE_MODES: Array<{
   control: DjControl
   label: string
@@ -32,14 +33,14 @@ const GESTURE_MODES: Array<{
   },
   {
     control: 'volume',
-    label: 'Channel',
-    detail: 'Open hand · move up or down',
+    label: 'Volume',
+    detail: 'Open palm grabs · move vertically · fist locks',
     icon: Volume2,
   },
   {
     control: 'filter',
     label: 'Filter',
-    detail: 'Open hand · rotate · fist to release',
+    detail: 'Open palm grabs · rotate · fist resets',
     icon: SlidersHorizontal,
   },
 ]
@@ -75,14 +76,19 @@ function RotaryControl({
   markers: [string, string, string]
 }) {
   const outputId = useId()
+  const dragRef = useRef<{
+    pointerId: number
+    startY: number
+    startValue: number
+  } | null>(null)
   const angle = -135 + (value / 100) * 270
   const style = { '--knob-angle': `${angle}deg` } as CSSProperties
-  const updateFromPointer = (event: ReactPointerEvent<HTMLInputElement>) => {
-    const bounds = event.currentTarget.getBoundingClientRect()
-    const nextValue = Math.round(
-      Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)) * 100,
-    )
-    onChange(nextValue)
+  const finishPointerDrag = (event: ReactPointerEvent<HTMLInputElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    dragRef.current = null
   }
 
   return (
@@ -125,17 +131,37 @@ function RotaryControl({
             }
           }}
           onPointerDown={(event) => {
+            event.preventDefault()
             event.currentTarget.setPointerCapture(event.pointerId)
-            updateFromPointer(event)
+            dragRef.current = {
+              pointerId: event.pointerId,
+              startY: event.clientY,
+              startValue: value,
+            }
           }}
           onPointerMove={(event) => {
-            if (event.currentTarget.hasPointerCapture(event.pointerId)) updateFromPointer(event)
+            const drag = dragRef.current
+            if (!drag || drag.pointerId !== event.pointerId) return
+            event.preventDefault()
+            onChange(
+              rotaryValueFromVerticalDrag(
+                drag.startValue,
+                drag.startY,
+                event.clientY,
+                event.shiftKey,
+              ),
+            )
+          }}
+          onPointerUp={finishPointerDrag}
+          onPointerCancel={finishPointerDrag}
+          onLostPointerCapture={() => {
+            dragRef.current = null
           }}
           onDoubleClick={onReset}
           aria-label={ariaLabel}
           aria-valuetext={formattedValue}
           aria-describedby={outputId}
-          title="Drag left or right · double-click to reset"
+          title="Drag up or down · Shift for fine control · double-click to reset"
         />
       </div>
       <output id={outputId}>{formattedValue}</output>
@@ -157,6 +183,7 @@ function DeckPanel({
 }) {
   const deck = mixer.decks[id]
   const effectiveBpm = deck.bpm ? deck.bpm * (1 + deck.tempo / 100) : null
+  const playedRatio = deck.duration > 0 ? deck.currentTime / deck.duration : 0
 
   return (
     <article className={`deck-panel deck-${id}`}>
@@ -191,33 +218,27 @@ function DeckPanel({
             <span>{formatTime(deck.currentTime)}</span>
             <span>{formatTime(deck.duration)}</span>
           </div>
-          <input
-            type="range"
-            min="0"
-            max={Math.max(deck.duration, 1)}
-            step="0.05"
-            value={Math.min(deck.currentTime, Math.max(deck.duration, 1))}
-            onChange={(event) => mixer.seek(id, Number(event.target.value))}
-            disabled={!deck.loaded}
-            aria-label={`${deckLabel(id)} track position`}
-          />
-        </div>
-      </div>
-
-      <div className="phrase-pads" aria-label={`${deckLabel(id)} track quarters`}>
-        <span>Track quarter</span>
-        <div>
-          {[1, 2, 3, 4].map((index) => (
-            <button
-              key={index}
-              type="button"
-              onClick={() => mixer.jumpToPhrase(id, index)}
+          <div className={`waveform-scrub ${deck.loaded ? 'loaded' : ''}`}>
+            <div className="deck-waveform" aria-hidden="true">
+              {deck.waveform.map((amplitude, index) => (
+                <i
+                  key={index}
+                  className={(index + 1) / deck.waveform.length <= playedRatio ? 'played' : ''}
+                  style={{ height: `${Math.max(8, amplitude)}%` }}
+                />
+              ))}
+            </div>
+            <input
+              type="range"
+              min="0"
+              max={Math.max(deck.duration, 1)}
+              step="0.05"
+              value={Math.min(deck.currentTime, Math.max(deck.duration, 1))}
+              onChange={(event) => mixer.seek(id, Number(event.target.value))}
               disabled={!deck.loaded}
-              aria-label={`${deckLabel(id)} track quarter ${index}`}
-            >
-              {index}
-            </button>
-          ))}
+              aria-label={`${deckLabel(id)} track position`}
+            />
+          </div>
         </div>
       </div>
 
@@ -255,15 +276,43 @@ function DeckPanel({
           <Upload aria-hidden="true" />
           {deck.loaded ? 'Replace' : 'Load track'}
         </button>
-        <button
-          type="button"
-          className="button text"
-          onClick={() => mixer.tapTempo(id)}
-          disabled={!deck.loaded}
-        >
-          Tap BPM
-        </button>
       </div>
+
+      <details className="deck-tools">
+        <summary>
+          <span>
+            <strong>Track tools</strong>
+            <small>Quarter jumps and manual BPM</small>
+          </span>
+          <ChevronDown aria-hidden="true" />
+        </summary>
+        <div className="deck-tools-body">
+          <div className="phrase-pads" aria-label={`${deckLabel(id)} track quarters`}>
+            <span>Track quarter</span>
+            <div>
+              {[1, 2, 3, 4].map((index) => (
+                <button
+                  key={index}
+                  type="button"
+                  onClick={() => mixer.jumpToPhrase(id, index)}
+                  disabled={!deck.loaded}
+                  aria-label={`${deckLabel(id)} track quarter ${index}`}
+                >
+                  {index}
+                </button>
+              ))}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="button text tap-bpm-button"
+            onClick={() => mixer.tapTempo(id)}
+            disabled={!deck.loaded}
+          >
+            Tap BPM
+          </button>
+        </div>
+      </details>
 
       <div className="deck-footer">
         <div className="mini-level" aria-label={`${deckLabel(id)} audio level ${deck.audioLevel}%`}>
@@ -382,20 +431,14 @@ function GestureConsole({
   mixer: ReturnType<typeof useDjMixer>
   vision: ReturnType<typeof useVisionRuntime>
 }) {
+  const selectedMode = GESTURE_MODES.find(({ control }) => control === mixer.selectedControl)
+
   return (
     <aside className="gesture-console">
       <div className="panel-heading">
         <div>
-          <span>Gesture routing</span>
-          <strong>
-            {mixer.gesturePhase === 'armed'
-              ? 'Mixer armed'
-              : mixer.gesturePhase === 'calibrating'
-                ? 'Hold steady · calibrating'
-                : vision.analysis.hands.length
-                  ? 'Hand seen · mixer locked'
-                  : 'Waiting for a hand'}
-          </strong>
+          <span>Air controls</span>
+          <strong>{deckLabel(mixer.activeDeck)} · {selectedMode?.label}</strong>
         </div>
         <div className="gesture-heading-actions">
           <span className={`gesture-state-pill ${mixer.gesturePhase}`}>
@@ -417,48 +460,50 @@ function GestureConsole({
         </div>
       </div>
 
-      <div className="deck-target" aria-label="Gesture deck target">
-        {(['a', 'b'] as DeckId[]).map((id) => (
-          <button
-            key={id}
-            type="button"
-            className={mixer.activeDeck === id ? 'active' : ''}
-            onClick={() => mixer.selectControl(mixer.selectedControl, id)}
-            aria-pressed={mixer.activeDeck === id}
-          >
-            {deckLabel(id)}
-          </button>
-        ))}
+      <div className="gesture-route-group">
+        <span>Choose deck</span>
+        <div className="deck-target" aria-label="Gesture deck target">
+          {(['a', 'b'] as DeckId[]).map((id) => (
+            <button
+              key={id}
+              type="button"
+              className={mixer.activeDeck === id ? 'active' : ''}
+              onClick={() => mixer.selectControl(mixer.selectedControl, id)}
+              aria-pressed={mixer.activeDeck === id}
+            >
+              {id.toUpperCase()}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="gesture-modes">
-        {GESTURE_MODES.map(({ control, label, detail, icon: Icon }) => (
-          <button
-            key={control}
-            type="button"
-            className={mixer.selectedControl === control ? 'active' : ''}
-            onClick={() => mixer.selectControl(control, mixer.activeDeck)}
-            onDoubleClick={() => mixer.resetControl(control, mixer.activeDeck)}
-            aria-pressed={mixer.selectedControl === control}
-            title="Double-click to reset this control"
-          >
-            <Icon aria-hidden="true" />
-            <span>
+      <div className="gesture-route-group">
+        <span>Choose control</span>
+        <div className="gesture-modes">
+          {GESTURE_MODES.map(({ control, label, detail, icon: Icon }) => (
+            <button
+              key={control}
+              type="button"
+              className={mixer.selectedControl === control ? 'active' : ''}
+              onClick={() => mixer.selectControl(control, mixer.activeDeck)}
+              onDoubleClick={() => mixer.resetControl(control, mixer.activeDeck)}
+              aria-pressed={mixer.selectedControl === control}
+              aria-label={`${label}. ${detail}`}
+              title={`${detail} · double-click to reset`}
+            >
+              <Icon aria-hidden="true" />
               <strong>{label}</strong>
-              <small>{detail}</small>
-            </span>
-          </button>
-        ))}
+            </button>
+          ))}
+        </div>
       </div>
-      <p className="gesture-reset-hint">
-        Open hand engages · close fist locks · double-click resets.
-      </p>
 
       <div className="gesture-status" aria-live="polite">
         <Hand aria-hidden="true" />
         <div>
-          <span>Live instruction</span>
+          <span>{vision.analysis.hands.length ? 'Live instruction' : 'How to move'}</span>
           <strong>{mixer.gestureStatus}</strong>
+          <small>{selectedMode?.detail}</small>
         </div>
       </div>
     </aside>
@@ -499,9 +544,10 @@ export function DjRoomScreen({
       />
 
       <PageIntro
+        className="dj-room-intro"
         eyebrow="DJ Room"
-        title="Mix two tracks with movement."
-        description="Two local decks, automatic BPM analysis, reversible BPM sync, track quarters, and a camera-controlled mixer."
+        title="Mix with your hands."
+        description="Load two tracks, start the camera, then shape the mix with one open hand. Everything stays in this tab."
         actions={
           <>
             <button
@@ -531,6 +577,30 @@ export function DjRoomScreen({
           </>
         }
       />
+
+      <section className="dj-quick-start" aria-labelledby="dj-quick-start-title">
+        <div className="dj-quick-start-title">
+          <Sparkles aria-hidden="true" />
+          <span>
+            <strong id="dj-quick-start-title">Your first mix</strong>
+            <small>Three steps, no setup</small>
+          </span>
+        </div>
+        <ol>
+          <li>
+            <b>1</b>
+            <span><strong>Load</strong><small>Demo set or local tracks</small></span>
+          </li>
+          <li>
+            <b>2</b>
+            <span><strong>Start camera</strong><small>Pick a deck and control</small></span>
+          </li>
+          <li>
+            <b>3</b>
+            <span><strong>Open hand</strong><small>Move to mix · fist to lock</small></span>
+          </li>
+        </ol>
+      </section>
 
       <section className="dj-vision-layout">
         <CameraStage

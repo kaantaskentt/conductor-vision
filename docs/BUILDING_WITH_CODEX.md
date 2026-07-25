@@ -43,7 +43,7 @@ The important part is the order. A passing unit test is not enough for a camera 
 | --- | --- | --- | --- |
 | DJ Room rebuild | The original music interaction was spread across ambiguous controls and screens. | Two decks, one master mixer, one BPM Sync control, and a camera stage were brought into one performance surface. | Commits `4f0b7b8`, `ff53e56`, and `29547d7`; current DJ Room screenshots in `docs/design/` |
 | First-run experience | A new visitor needed private audio files before hearing the idea. | **Try demo set** now synthesizes two short loops locally. | `src/lib/demoAudio.ts` and deterministic WAV-generation tests |
-| Gesture takeover | A detected hand could immediately drag an existing control away from its current value. | An explicit open-hand clutch calibrates relative to the current value before movement is allowed. | `src/lib/gestureController.ts`, unit traces, and the real hook integration suite |
+| Gesture takeover | A detected hand could immediately drag an existing control away from its current value, while wrist rotation could momentarily hide fingers and drop the gesture. | An open-palm clutch grabs the current value, holds through short landmark flicker, and releases only after a deliberate fist or sustained loss. | `src/lib/gestureController.ts`, unit traces, and the real hook integration suite |
 | Filter release | Filter could inherit a stale wrist baseline or remain offset after the hand closed or disappeared. | Release invalidates the baseline and eases Filter back to its 50% neutral point. | Timed state-machine tests and Web Audio parameter assertions |
 | Camera remounting | Moving between Vision and DJ Room could detach the active overlay or let stale asynchronous playback tear down a valid stream. | Canvas attachment and video playback use ownership-aware lifecycle helpers. | `cameraOverlayLifecycle` and `videoElementLifecycle` tests plus a real camera tab-switch check |
 | Replay foundation | A future shareable clip needed the sound after the master dynamics stage without adding microphone, screen, or upload permissions. | A bounded local recorder can tap post-master audio and merge it with an owned canvas stream. No visible Replay Studio interface is claimed yet. | `src/lib/airMixReplay.ts`, mixer integration tests, strict duration and memory limits |
@@ -55,7 +55,7 @@ At commit `20b9971`, the branch had 77 passing deterministic and React integrati
 
 The most useful Codex work came from finding where an apparently reasonable implementation was still wrong:
 
-- **Absolute gesture mapping looked simple, but it caused jumps.** The control needed relative pickup against its current state.
+- **Absolute gesture mapping looked simple, but it caused jumps.** The control needed relative pickup against its current state plus release hysteresis for imperfect landmark frames.
 - **A hand being visible was not the same as intent.** The open-hand clutch became a product requirement rather than a confidence threshold.
 - **Resetting React state did not guarantee audio reset.** Tests had to inspect the Web Audio parameters as well as the interface value.
 - **Keeping a camera stream alive did not guarantee the visible canvas stayed attached.** Tab switching required separate stream ownership and overlay attachment lifecycles.

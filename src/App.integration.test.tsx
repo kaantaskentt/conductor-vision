@@ -276,7 +276,7 @@ describe('Ultra Vision app golden path', () => {
   }
 
   it('loads the instant demo, keeps controls usable, and preserves the mix across tabs', async () => {
-    expect(container.querySelector('h1')?.textContent).toBe('Mix two tracks with movement.')
+    expect(container.querySelector('h1')?.textContent).toBe('Mix with your hands.')
     expect((buttonByName(container, 'Start both') as HTMLButtonElement).disabled).toBe(true)
 
     await loadDemoSet()
@@ -319,6 +319,24 @@ describe('Ultra Vision app golden path', () => {
     expect(container.querySelector<HTMLInputElement>(
       'input[aria-label="Deck A bipolar filter"]',
     )?.value).toBe('50')
+  })
+
+  it('keeps the first-mix path visible while tucking away secondary deck tools', () => {
+    expect(container.textContent).toContain('Your first mix')
+    expect(container.textContent).toContain('Demo set or local tracks')
+    expect(container.textContent).toContain('Move to mix · fist to lock')
+
+    const waveforms = [...container.querySelectorAll('.deck-waveform')]
+    expect(waveforms).toHaveLength(2)
+    expect(waveforms.every((waveform) => waveform.children.length === 44)).toBe(true)
+
+    const trackTools = [...container.querySelectorAll<HTMLDetailsElement>('.deck-tools')]
+    expect(trackTools).toHaveLength(2)
+    expect(trackTools.every((details) => !details.open)).toBe(true)
+
+    expect(container.querySelectorAll('.gesture-modes button')).toHaveLength(3)
+    expect(container.querySelector<HTMLButtonElement>('.gesture-modes button.active')?.textContent)
+      .toBe('Crossfader')
   })
 
   it('toggles BPM Sync reversibly from the user-facing control', async () => {

@@ -2,9 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createDemoTracks } from '../lib/demoAudio'
 import {
   createFilterGestureState,
+  createGestureClutchState,
+  transitionGestureClutch,
   transitionFilterGesture,
   type FilterGestureState,
   type FilterGestureTransition,
+  type GestureClutchState,
 } from '../lib/gestureController'
 import { clamp, type GestureFrame } from '../lib/vision'
 
@@ -23,6 +26,8 @@ export const DJ_NEUTRAL_VALUES = {
   tempo: 0,
 } as const
 
+export const DJ_WAVEFORM_SAMPLES = 44
+
 export type DeckState = {
   name: string
   loaded: boolean
@@ -35,6 +40,7 @@ export type DeckState = {
   bpm: number | null
   bpmStatus: string
   audioLevel: number
+  waveform: number[]
   error: string | null
 }
 
@@ -87,11 +93,14 @@ const AUDIO_EXTENSION = /\.(mp3|wav|flac|ogg)$/i
 const FILTER_LOW_MIN_HZ = 220
 const FILTER_LOW_OPEN_HZ = 20_000
 const FILTER_HIGH_OPEN_HZ = 20
-const FILTER_HIGH_MAX_HZ = 12_000
+const FILTER_HIGH_MAX_HZ = 16_000
+const FILTER_CURVE_EXPONENT = 0.68
+const FILTER_Q_MIN = 0.82
+const FILTER_Q_MAX = 2.1
 const POSITION_GESTURE_DEAD_ZONE = 0.025
 const GESTURE_CALIBRATION_MS = 420
 const POSITION_CALIBRATION_TOLERANCE = 0.04
-export const GESTURE_ENGAGE_FINGERS = 2
+export const GESTURE_ENGAGE_FINGERS = 3
 
 export function validateAudioFile(file: File) {
   const hasSupportedType = ACCEPTED_AUDIO_TYPES.has(file.type)
@@ -170,8 +179,8 @@ export function smoothBoundedControlValue(
   return clamp(smoothControlValue(current, target, strength), min, max)
 }
 
-export function isGestureFrameEngaged(frame: GestureFrame) {
-  return frame.detected && frame.openFingers >= GESTURE_ENGAGE_FINGERS
+export function isGestureFrameEngaged(frame: GestureFrame, alreadyHeld = false) {
+  return frame.detected && frame.openFingers >= (alreadyHeld ? 2 : GESTURE_ENGAGE_FINGERS)
 }
 
 export function relativeGestureValue(
@@ -188,14 +197,14 @@ export function relativeGestureValue(
 export function bipolarFilterFrequencies(amount: number) {
   const value = clamp(amount, 0, 100)
   if (value < 50) {
-    const sweep = (50 - value) / 50
+    const sweep = Math.pow((50 - value) / 50, FILTER_CURVE_EXPONENT)
     return {
       highpass: FILTER_HIGH_OPEN_HZ,
       lowpass: FILTER_LOW_OPEN_HZ * Math.pow(FILTER_LOW_MIN_HZ / FILTER_LOW_OPEN_HZ, sweep),
     }
   }
   if (value > 50) {
-    const sweep = (value - 50) / 50
+    const sweep = Math.pow((value - 50) / 50, FILTER_CURVE_EXPONENT)
     return {
       highpass:
         FILTER_HIGH_OPEN_HZ * Math.pow(FILTER_HIGH_MAX_HZ / FILTER_HIGH_OPEN_HZ, sweep),
@@ -203,6 +212,30 @@ export function bipolarFilterFrequencies(amount: number) {
     }
   }
   return { highpass: FILTER_HIGH_OPEN_HZ, lowpass: FILTER_LOW_OPEN_HZ }
+}
+
+export function bipolarFilterResonance(amount: number) {
+  const distanceFromNeutral = Math.abs(clamp(amount, 0, 100) - 50) / 50
+  return FILTER_Q_MIN + (FILTER_Q_MAX - FILTER_Q_MIN) * Math.pow(distanceFromNeutral, 0.72)
+}
+
+export function channelGainFromPercent(amount: number) {
+  const normalized = clamp(amount, 0, 100) / 100
+  if (normalized === 0) return 0
+  const decibels = -48 * Math.pow(1 - normalized, 2)
+  return Math.pow(10, decibels / 20)
+}
+
+export function appendWaveformSample(
+  history: number[],
+  level: number,
+  sampleCount = DJ_WAVEFORM_SAMPLES,
+) {
+  if (sampleCount <= 0) return []
+  return [
+    ...history.slice(Math.max(0, history.length - sampleCount + 1)),
+    Math.round(clamp(level, 0, 100)),
+  ].slice(-sampleCount)
 }
 
 export function estimateBpmFromSamples(samples: Float32Array, sampleRate: number) {
@@ -325,6 +358,7 @@ function initialDeckState(): DeckState {
     bpm: null,
     bpmStatus: 'Load a track',
     audioLevel: 0,
+    waveform: Array.from({ length: DJ_WAVEFORM_SAMPLES }, () => 0),
     error: null,
   }
 }
@@ -376,6 +410,7 @@ export function useDjMixer() {
     value: number
   } | null>(null)
   const filterGestureRef = useRef<FilterGestureState>(createFilterGestureState())
+  const gestureClutchRef = useRef<GestureClutchState>(createGestureClutchState())
   const positionGestureRef = useRef<PositionGesture | null>(null)
   const filterReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -409,10 +444,11 @@ export function useDjMixer() {
 
   const disarmGesture = useCallback(
     (message?: string) => {
-      const wasEngaged = gestureEngagedRef.current
+      const wasEngaged = gestureClutchRef.current.phase !== 'locked'
       cancelFilterRelease()
       gestureEngagedRef.current = false
       if (wasEngaged) gestureRequiresReleaseRef.current = true
+      gestureClutchRef.current = createGestureClutchState()
       positionGestureRef.current = null
       filterGestureRef.current = createFilterGestureState()
       smoothedGestureRef.current = null
@@ -444,7 +480,14 @@ export function useDjMixer() {
           let total = 0
           for (let index = 0; index < sampleCount; index += 1) total += nodes.bins[index]
           const audioLevel = Math.round((total / Math.max(sampleCount, 1) / 255) * 100)
-          if (decksRef.current[id].audioLevel !== audioLevel) patchDeck(id, { audioLevel })
+          const current = decksRef.current[id]
+          const waveform = appendWaveformSample(current.waveform, audioLevel)
+          const waveformChanged = waveform.some(
+            (value, index) => value !== current.waveform[index],
+          )
+          if (current.audioLevel !== audioLevel || waveformChanged) {
+            patchDeck(id, { audioLevel, waveform })
+          }
         }
         lastUpdate = now
       }
@@ -481,15 +524,16 @@ export function useDjMixer() {
         const volume = context.createGain()
         const crossfade = context.createGain()
         const filterFrequencies = bipolarFilterFrequencies(decksRef.current[id].filter)
+        const filterResonance = bipolarFilterResonance(decksRef.current[id].filter)
         highpass.type = 'highpass'
-        highpass.Q.value = 0.82
+        highpass.Q.value = filterResonance
         highpass.frequency.value = filterFrequencies.highpass
         lowpass.type = 'lowpass'
-        lowpass.Q.value = 0.82
+        lowpass.Q.value = filterResonance
         lowpass.frequency.value = filterFrequencies.lowpass
         analyser.fftSize = 256
         analyser.smoothingTimeConstant = 0.78
-        volume.gain.value = decksRef.current[id].volume / 100
+        volume.gain.value = channelGainFromPercent(decksRef.current[id].volume)
         crossfade.gain.value = equalPowerCrossfade(crossfaderRef.current)[id]
         source.connect(highpass)
         highpass.connect(lowpass)
@@ -727,7 +771,11 @@ export function useDjMixer() {
       const volume = Math.round(clamp(value, 0, 100))
       const context = audioContextRef.current
       if (context && nodesRef.current[id]) {
-        nodesRef.current[id].volume.gain.setTargetAtTime(volume / 100, context.currentTime, 0.06)
+        nodesRef.current[id].volume.gain.setTargetAtTime(
+          channelGainFromPercent(volume),
+          context.currentTime,
+          0.045,
+        )
       }
       patchDeck(id, { volume })
     },
@@ -735,20 +783,31 @@ export function useDjMixer() {
   )
 
   const setDeckFilter = useCallback(
-    (id: DeckId, value: number) => {
+    (id: DeckId, value: number, timeConstant = 0.045) => {
       const filter = Math.round(clamp(value, 0, 100))
       const context = audioContextRef.current
       if (context && nodesRef.current[id]) {
         const frequencies = bipolarFilterFrequencies(filter)
+        const resonance = bipolarFilterResonance(filter)
         nodesRef.current[id].highpass.frequency.setTargetAtTime(
           frequencies.highpass,
           context.currentTime,
-          0.06,
+          timeConstant,
         )
         nodesRef.current[id].lowpass.frequency.setTargetAtTime(
           frequencies.lowpass,
           context.currentTime,
-          0.06,
+          timeConstant,
+        )
+        nodesRef.current[id].highpass.Q.setTargetAtTime(
+          resonance,
+          context.currentTime,
+          timeConstant,
+        )
+        nodesRef.current[id].lowpass.Q.setTargetAtTime(
+          resonance,
+          context.currentTime,
+          timeConstant,
         )
       }
       patchDeck(id, { filter })
@@ -778,7 +837,7 @@ export function useDjMixer() {
         }
         filterReleaseTimerRef.current = null
         if (transition.command !== 'reset-neutral' || !transition.deck) return
-        setDeckFilter(transition.deck, DJ_NEUTRAL_VALUES.filter)
+        setDeckFilter(transition.deck, DJ_NEUTRAL_VALUES.filter, 0.12)
         smoothedGestureRef.current = null
         setGestureStatus(`${deckLabel(transition.deck)} filter returned to neutral`)
       }
@@ -1003,8 +1062,8 @@ export function useDjMixer() {
         control === 'crossfader'
           ? 'Open your hand, hold steady, then move left or right'
           : control === 'filter'
-            ? `Open your hand, hold steady, then rotate for ${deckLabel(deck)}`
-            : `Open your hand, hold steady, then move up or down for ${deckLabel(deck)}`,
+            ? `Open your palm to grab ${deckLabel(deck)} filter · rotate · fist releases`
+            : `Open your palm to grab ${deckLabel(deck)} level · move up or down · fist locks`,
       )
     },
     [activeDeck, disarmGesture, selectedControl, setDeckFilter],
@@ -1038,22 +1097,16 @@ export function useDjMixer() {
 
         const armed = transition.state.phase === 'armed'
         gestureEngagedRef.current = armed
-        setGesturePhase(armed ? 'armed' : 'calibrating')
+        setGesturePhase(armed ? 'armed' : 'locked')
 
-        if (transition.feedback === 'calibration-started') {
-          setGestureStatus(`Hold steady to arm ${deckLabel(activeDeck)} filter`)
-          return
-        }
-        if (transition.feedback === 'calibration-restarted') {
-          setGestureStatus(`Keep your wrist still to arm ${deckLabel(activeDeck)} filter`)
-          return
-        }
-        if (transition.feedback === 'calibrating') {
-          setGestureStatus(`Hold steady · calibrating ${deckLabel(activeDeck)} filter`)
+        if (transition.feedback === 'grabbed') {
+          setGestureStatus(
+            `${deckLabel(activeDeck)} filter grabbed at ${decksRef.current[activeDeck].filter}% · rotate · fist releases`,
+          )
           return
         }
         if (transition.feedback === 'armed' || transition.target === undefined) {
-          setGestureStatus(`${deckLabel(activeDeck)} filter armed · rotate your wrist`)
+          setGestureStatus(`${deckLabel(activeDeck)} filter held · rotate your wrist`)
           return
         }
 
@@ -1062,15 +1115,45 @@ export function useDjMixer() {
           smoothedGestureRef.current.deck === activeDeck
             ? smoothedGestureRef.current.value
             : decksRef.current[activeDeck].filter
-        const value = smoothBoundedControlValue(previous, transition.target, 0, 100, 0.28)
+        const value = smoothBoundedControlValue(previous, transition.target, 0, 100, 0.48)
         smoothedGestureRef.current = { control: 'filter', deck: activeDeck, value }
         setDeckFilter(activeDeck, value)
-        setGestureStatus(`${deckLabel(activeDeck)} filter follows wrist movement`)
+        setGestureStatus(
+          `${deckLabel(activeDeck)} filter ${Math.round(value)}% · close fist to return to 50%`,
+        )
       }
 
-      if (!isGestureFrameEngaged(frame)) {
+      if (gestureRequiresReleaseRef.current) {
+        if (!frame.detected || frame.openFingers <= 1) {
+          gestureRequiresReleaseRef.current = false
+          gestureClutchRef.current = createGestureClutchState()
+          setGestureStatus('Released · open your palm to grab the selected control')
+          return
+        }
         gestureEngagedRef.current = false
-        gestureRequiresReleaseRef.current = false
+        setGesturePhase('locked')
+        setGestureStatus('Close your fist once, then open your palm to grab')
+        return
+      }
+
+      const clutchTransition = transitionGestureClutch(gestureClutchRef.current, {
+        detected: frame.detected,
+        openFingers: frame.openFingers,
+        now,
+      })
+      gestureClutchRef.current = clutchTransition.state
+
+      if (clutchTransition.feedback === 'release-pending') {
+        setGestureStatus(
+          clutchTransition.releaseReason === 'fist'
+            ? 'Keep your fist closed to release'
+            : 'Tracking paused · keep your hand in view',
+        )
+        return
+      }
+
+      if (clutchTransition.feedback === 'released') {
+        gestureEngagedRef.current = false
         setGesturePhase('locked')
         positionGestureRef.current = null
         smoothedGestureRef.current = null
@@ -1085,27 +1168,33 @@ export function useDjMixer() {
             transition.state.phase === 'release-grace'
           ) {
             scheduleFilterRelease(transition.state.releaseAt)
+            setGestureStatus(`${deckLabel(activeDeck)} filter released · returning to 50%`)
           }
         } else {
           filterGestureRef.current = createFilterGestureState()
+          setGestureStatus(
+            selectedControl === 'volume'
+              ? `${deckLabel(activeDeck)} level locked at ${decksRef.current[activeDeck].volume}%`
+              : `Crossfader locked at ${Math.round(crossfaderRef.current)}`,
+          )
         }
+        return
+      }
+
+      if (clutchTransition.state.phase !== 'held') {
+        gestureEngagedRef.current = false
+        setGesturePhase('locked')
         if (now - lastGestureUpdateAtRef.current > 280) {
           lastGestureUpdateAtRef.current = now
           setGestureStatus(
             frame.detected
-              ? 'Mixer locked · open your hand to engage'
+              ? 'Open your palm to grab the selected control'
               : 'Waiting for a hand',
           )
         }
         return
       }
 
-      if (gestureRequiresReleaseRef.current) {
-        gestureEngagedRef.current = false
-        setGesturePhase('locked')
-        setGestureStatus('Close your hand once, then open it to re-arm the mixer')
-        return
-      }
       if (
         selectedControl === 'filter' &&
         decksRef.current[activeDeck].loaded &&
@@ -1196,32 +1285,15 @@ export function useDjMixer() {
             baselineValue: decksRef.current[activeDeck].volume,
             samples: 1,
             startedAt: now,
-            engaged: false,
+            engaged: true,
           }
           positionGestureRef.current = gesture
-          setGesturePhase('calibrating')
-          setGestureStatus(`Hand seen · hold steady to arm ${deckLabel(activeDeck)} level`)
-          return
-        }
-        if (!gesture.engaged) {
-          if (Math.abs(input - gesture.baselineInput) > POSITION_CALIBRATION_TOLERANCE) {
-            gesture.baselineInput = input
-            gesture.samples = 1
-            gesture.startedAt = now
-            setGesturePhase('calibrating')
-            setGestureStatus(`Keep still for a moment to arm ${deckLabel(activeDeck)} level`)
-            return
-          }
-          gesture.samples += 1
-          gesture.baselineInput += (input - gesture.baselineInput) / gesture.samples
-          if (now - gesture.startedAt < GESTURE_CALIBRATION_MS) {
-            setGesturePhase('calibrating')
-            setGestureStatus(`Hold steady · calibrating ${deckLabel(activeDeck)} level`)
-            return
-          }
-          gesture.engaged = true
           gestureEngagedRef.current = true
           setGesturePhase('armed')
+          setGestureStatus(
+            `${deckLabel(activeDeck)} level grabbed at ${gesture.baselineValue}% · move up or down · fist locks`,
+          )
+          return
         }
         if (Math.abs(input - gesture.baselineInput) <= POSITION_GESTURE_DEAD_ZONE) {
           setGestureStatus(`${deckLabel(activeDeck)} level armed · move up or down`)
@@ -1231,17 +1303,19 @@ export function useDjMixer() {
           gesture.baselineValue,
           gesture.baselineInput,
           input,
-          120,
+          170,
         )
         const previous =
           smoothedGestureRef.current?.control === 'volume' &&
           smoothedGestureRef.current.deck === activeDeck
             ? smoothedGestureRef.current.value
             : decksRef.current[activeDeck].volume
-        const value = smoothBoundedControlValue(previous, target, 0, 100, 0.32)
+        const value = smoothBoundedControlValue(previous, target, 0, 100, 0.48)
         smoothedGestureRef.current = { control: 'volume', deck: activeDeck, value }
         setDeckVolume(activeDeck, value)
-        setGestureStatus(`${deckLabel(activeDeck)} volume follows hand height`)
+        setGestureStatus(
+          `${deckLabel(activeDeck)} level ${Math.round(value)}% · close fist to lock`,
+        )
       } else if (selectedControl === 'filter') applyFilterSample()
     },
     [
