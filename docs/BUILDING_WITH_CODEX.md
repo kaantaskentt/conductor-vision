@@ -48,8 +48,11 @@ The important part is the order. A passing unit test is not enough for a camera 
 | Camera remounting | Moving between Vision and DJ Room could detach the active overlay or let stale asynchronous playback tear down a valid stream. | Canvas attachment and video playback use ownership-aware lifecycle helpers. | `cameraOverlayLifecycle` and `videoElementLifecycle` tests plus a real camera tab-switch check |
 | Replay foundation | A future shareable clip needed the sound after the master dynamics stage without adding microphone, screen, or upload permissions. | A bounded local recorder can tap post-master audio and merge it with an owned canvas stream. No visible Replay Studio interface is claimed yet. | `src/lib/airMixReplay.ts`, mixer integration tests, strict duration and memory limits |
 | Repository trust | Documentation and CI could drift from the commands contributors actually ran. | One Vitest configuration owns coverage floors, clean npm 10 installation is reproducible, and the repository records privacy and model boundaries. | CI, CodeQL, `docs/TESTING.md`, `SECURITY.md`, and `THIRD_PARTY_NOTICES.md` |
+| Launch readiness | A static checklist could say the performer was ready when the camera or gesture was not, and a real room frame had slipped into repository evidence. | Readiness now advances only from actual track, camera, hand, and clutch state; public screenshots are camera-off and stale retired controls were removed. | `src/lib/firstMixReadiness.ts`, app integration tests, and current privacy-safe screenshots in `docs/design/` |
 
 At commit `20b9971`, the branch had 77 passing deterministic and React integration tests. Coverage was 62.08% statements, 48% branches, 51.56% functions, and 63.33% lines; CI, CodeQL, lint, build, and the high-severity dependency audit were green. Those numbers are a historical snapshot, not a substitute for running the current `npm run check` command.
+
+The current launch candidate has 128 passing tests with 81.43% statement, 73.82% branch, 81.76% function, and 83.29% line coverage. The same gate also passes lint, the production build, and the full dependency audit with zero known vulnerabilities.
 
 ## Assumptions that failed
 

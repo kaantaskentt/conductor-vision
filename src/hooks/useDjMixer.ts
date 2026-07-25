@@ -159,8 +159,13 @@ export function bpmFromTapTimes(times: number[]) {
   return normalizeBpm(60_000 / average)
 }
 
-export function chooseSyncMaster(aPlaying: boolean, bPlaying: boolean): DeckId {
+export function chooseSyncMaster(
+  aPlaying: boolean,
+  bPlaying: boolean,
+  crossfader: number = DJ_NEUTRAL_VALUES.crossfader,
+): DeckId {
   if (bPlaying && !aPlaying) return 'b'
+  if (aPlaying && bPlaying && crossfader > DJ_NEUTRAL_VALUES.crossfader) return 'b'
   return 'a'
 }
 
@@ -606,13 +611,16 @@ export function useDjMixer() {
     const nodes = nodesRef.current[id]
     if (!context || !nodes) return
     const frequencies = bipolarFilterFrequencies(DJ_NEUTRAL_VALUES.filter)
+    const resonance = bipolarFilterResonance(DJ_NEUTRAL_VALUES.filter)
     nodes.volume.gain.setTargetAtTime(
-      DJ_NEUTRAL_VALUES.volume / 100,
+      channelGainFromPercent(DJ_NEUTRAL_VALUES.volume),
       context.currentTime,
       0.035,
     )
     nodes.highpass.frequency.setTargetAtTime(frequencies.highpass, context.currentTime, 0.035)
     nodes.lowpass.frequency.setTargetAtTime(frequencies.lowpass, context.currentTime, 0.035)
+    nodes.highpass.Q.setTargetAtTime(resonance, context.currentTime, 0.035)
+    nodes.lowpass.Q.setTargetAtTime(resonance, context.currentTime, 0.035)
   }, [])
 
   const loadFile = useCallback(
@@ -908,7 +916,11 @@ export function useDjMixer() {
       return
     }
 
-    const masterId = chooseSyncMaster(current.a.playing, current.b.playing)
+    const masterId = chooseSyncMaster(
+      current.a.playing,
+      current.b.playing,
+      crossfaderRef.current,
+    )
     const targetId: DeckId = masterId === 'a' ? 'b' : 'a'
     const master = current[masterId]
     const target = current[targetId]

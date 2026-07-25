@@ -66,7 +66,7 @@ See [docs/TESTING.md](./docs/TESTING.md) for the browser matrix, deterministic c
 - Keep camera and media processing local unless a future feature obtains explicit informed consent.
 - Describe the runtime honestly. MediaPipe is shipped; NVIDIA Eagle / LocateAnything is experimental research.
 - Give one selected gesture control authority over one audio parameter at a time.
-- Require calibration and an open-hand clutch before movement changes audio.
+- Require relative pickup and an open-hand clutch before movement changes audio; preserve the crossfader's brief steady calibration step.
 - Preserve keyboard navigation, visible focus, reduced motion, semantic labels, and readable contrast.
 - Prefer a useful recovery path over a decorative error state.
 

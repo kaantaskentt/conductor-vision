@@ -27,7 +27,7 @@ npm run check
 - Camera frames, uploaded images, and audio stay in the browser unless a future feature obtains explicit informed consent.
 - The current shipped vision runtime is MediaPipe. NVIDIA Eagle / LocateAnything remains experimental and must not be described as shipped.
 - Crossfader neutral is `0`; bipolar filter neutral is `50`; channel reset is `82`.
-- A newly detected hand must not cause an audio control to jump. Gesture takeover requires calibration and an explicit open-hand clutch.
+- A newly detected hand must not cause an audio control to jump. Gesture takeover requires relative pickup and an explicit open-hand clutch; the crossfader adds a brief steady calibration step.
 - Closing the hand or losing tracking locks position controls. Filter returns smoothly to neutral after release.
 - BPM Sync matches playback rate only until beat-grid and phase alignment are actually implemented.
 - Do not bundle copyrighted audio, private camera captures, secrets, or generated build output.

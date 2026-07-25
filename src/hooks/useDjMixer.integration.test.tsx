@@ -377,6 +377,52 @@ describe('DJ mixer filter gesture integration', () => {
     )
   })
 
+  it('restores the exact neutral gain and filter curve when a loaded track is replaced', async () => {
+    const context = FakeAudioContext.instances[0]
+    await act(async () => {
+      current.setDeckVolume('a', 25)
+      current.setDeckFilter('a', 100)
+    })
+
+    await act(async () => {
+      await current.loadFile(
+        'a',
+        new File(['replacement'], 'replacement.wav', { type: 'audio/wav' }),
+        { knownBpm: 126 },
+      )
+    })
+
+    const neutralFrequencies = bipolarFilterFrequencies(DJ_NEUTRAL_VALUES.filter)
+    const neutralResonance = bipolarFilterResonance(DJ_NEUTRAL_VALUES.filter)
+    expect(current.decks.a.volume).toBe(DJ_NEUTRAL_VALUES.volume)
+    expect(current.decks.a.filter).toBe(DJ_NEUTRAL_VALUES.filter)
+    expect(context.gains[0].gain.setTargetAtTime).toHaveBeenLastCalledWith(
+      channelGainFromPercent(DJ_NEUTRAL_VALUES.volume),
+      4,
+      0.035,
+    )
+    expect(context.filters[0].frequency.setTargetAtTime).toHaveBeenLastCalledWith(
+      neutralFrequencies.highpass,
+      4,
+      0.035,
+    )
+    expect(context.filters[1].frequency.setTargetAtTime).toHaveBeenLastCalledWith(
+      neutralFrequencies.lowpass,
+      4,
+      0.035,
+    )
+    expect(context.filters[0].Q.setTargetAtTime).toHaveBeenLastCalledWith(
+      neutralResonance,
+      4,
+      0.035,
+    )
+    expect(context.filters[1].Q.setTargetAtTime).toHaveBeenLastCalledWith(
+      neutralResonance,
+      4,
+      0.035,
+    )
+  })
+
   it('creates an isolated post-master capture tap without disturbing speaker output', async () => {
     const context = FakeAudioContext.instances[0]
     const compressor = context.compressors[0]

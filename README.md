@@ -36,14 +36,14 @@ No account, API key, database, backend, or audio files are required for the firs
 1. Open the [live app](https://ultra-vision.vercel.app) and choose **DJ Room**.
 2. Select **Try demo set** to generate two short, copyright-safe tracks locally.
 3. Press **Start both** and move the center crossfader.
-4. Select **Start camera**, allow access, then open your palm to grab the selected control without moving its current value.
+4. Follow the live readiness strip: start the camera, allow access, then open your palm to grab the selected control without moving its current value.
 
 Close your hand to lock the crossfader or volume position; Filter instead returns to its neutral midpoint after release. A newly detected hand grabs the current value without moving it, then responds only to intentional movement.
 
 ## What it can do
 
 - **Instant demo set** — generate two original rhythmic loops locally and reach a playable mix without finding audio files.
-- **Two-deck DJ Room** — control independent transports, hardware-style level and bipolar filter knobs, live analyser waveforms, track-quarter jumps, post-fader meters, a master limiter, and an equal-power crossfader.
+- **Two-deck DJ Room** — control independent transports, hardware-style level and bipolar filter knobs, live analyser signal history, track-quarter jumps, post-fader meters, a master limiter, and an equal-power crossfader.
 - **Intentional gesture routing** — send an open palm to the crossfader or one deck's level or filter. Relative pickup prevents first-frame jumps, brief landmark flicker stays latched, and a deliberate fist releases the control.
 - **BPM tools** — estimate BPM locally, tap a correction, and use one reversible BPM Sync control to match playback rates.
 - **Vision workspace** — inspect hand landmarks, raised fingers, face signals, motion direction, and color coverage.
@@ -56,7 +56,7 @@ BPM Sync matches tempo; it does not claim automatic beat-grid, downbeat, or phas
 
 | Vision | DJ Room |
 | --- | --- |
-| ![Ultra Vision real-time vision analysis](./docs/design/ultra-vision-analysis.jpg) | ![Ultra Vision camera and gesture clutch](./docs/design/ultra-vision-gesture-clutch.png) |
+| ![Ultra Vision real-time vision analysis](./docs/design/ultra-vision-analysis.jpg) | ![Ultra Vision privacy-safe first-mix readiness flow](./docs/design/ultra-vision-readiness.jpg) |
 | Inspect live landmarks, motion, face signals, and pixel studies. | Choose one mix control, grab it with an open palm, then perform with movement. |
 
 The interface reflows from desktop down to phone-sized viewports. Real camera and audio behavior still depends on the browser and device; the maintained test matrix lives in [docs/TESTING.md](./docs/TESTING.md).

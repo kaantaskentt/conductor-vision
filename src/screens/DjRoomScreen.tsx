@@ -1,4 +1,5 @@
 import {
+  Check,
   ChevronDown,
   Disc3,
   Hand,
@@ -16,6 +17,7 @@ import { useId, useRef, type CSSProperties, type PointerEvent as ReactPointerEve
 import { CameraActions, CameraStage, PageIntro } from '../components/AppShell'
 import type { DeckId, DjControl, useDjMixer } from '../hooks/useDjMixer'
 import type { useVisionRuntime } from '../hooks/useVisionRuntime'
+import { deriveFirstMixReadiness } from '../lib/firstMixReadiness'
 import { rotaryValueFromVerticalDrag } from '../lib/gestureController'
 
 const ACCEPTED_AUDIO = 'audio/mpeg,audio/wav,audio/flac,audio/ogg,.mp3,.wav,.flac,.ogg'
@@ -115,7 +117,7 @@ function RotaryControl({
           value={value}
           onChange={(event) => onChange(Number(event.target.value))}
           onKeyDown={(event) => {
-            const amount = event.shiftKey ? 5 : 1
+            const amount = event.shiftKey ? 1 : 5
             if (event.key === 'ArrowUp' || event.key === 'ArrowRight') {
               event.preventDefault()
               onChange(Math.min(100, value + amount))
@@ -432,13 +434,24 @@ function GestureConsole({
   vision: ReturnType<typeof useVisionRuntime>
 }) {
   const selectedMode = GESTURE_MODES.find(({ control }) => control === mixer.selectedControl)
+  const isMasterControl = mixer.selectedControl === 'crossfader'
+  const visibleGestureStatus =
+    vision.status === 'running'
+      ? mixer.gestureStatus
+      : vision.status === 'loading'
+        ? 'Preparing local hand tracking'
+        : vision.status === 'error'
+          ? 'Camera needs attention before Air Controls can connect'
+          : 'Start the camera to use Air Controls'
 
   return (
     <aside className="gesture-console">
       <div className="panel-heading">
         <div>
           <span>Air controls</span>
-          <strong>{deckLabel(mixer.activeDeck)} · {selectedMode?.label}</strong>
+          <strong>
+            {isMasterControl ? 'Master' : deckLabel(mixer.activeDeck)} · {selectedMode?.label}
+          </strong>
         </div>
         <div className="gesture-heading-actions">
           <span className={`gesture-state-pill ${mixer.gesturePhase}`}>
@@ -460,22 +473,28 @@ function GestureConsole({
         </div>
       </div>
 
-      <div className="gesture-route-group">
-        <span>Choose deck</span>
-        <div className="deck-target" aria-label="Gesture deck target">
-          {(['a', 'b'] as DeckId[]).map((id) => (
-            <button
-              key={id}
-              type="button"
-              className={mixer.activeDeck === id ? 'active' : ''}
-              onClick={() => mixer.selectControl(mixer.selectedControl, id)}
-              aria-pressed={mixer.activeDeck === id}
-            >
-              {id.toUpperCase()}
-            </button>
-          ))}
+      {isMasterControl ? (
+        <div className="gesture-route-note">
+          Crossfader controls the master mix between both decks.
         </div>
-      </div>
+      ) : (
+        <div className="gesture-route-group">
+          <span>Choose deck</span>
+          <div className="deck-target" aria-label="Gesture deck target">
+            {(['a', 'b'] as DeckId[]).map((id) => (
+              <button
+                key={id}
+                type="button"
+                className={mixer.activeDeck === id ? 'active' : ''}
+                onClick={() => mixer.selectControl(mixer.selectedControl, id)}
+                aria-pressed={mixer.activeDeck === id}
+              >
+                {id.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="gesture-route-group">
         <span>Choose control</span>
@@ -498,11 +517,11 @@ function GestureConsole({
         </div>
       </div>
 
-      <div className="gesture-status" aria-live="polite">
+      <div className="gesture-status">
         <Hand aria-hidden="true" />
         <div>
           <span>{vision.analysis.hands.length ? 'Live instruction' : 'How to move'}</span>
-          <strong>{mixer.gestureStatus}</strong>
+          <strong>{visibleGestureStatus}</strong>
           <small>{selectedMode?.detail}</small>
         </div>
       </div>
@@ -519,6 +538,22 @@ export function DjRoomScreen({
 }) {
   const deckAInputRef = useRef<HTMLInputElement | null>(null)
   const deckBInputRef = useRef<HTMLInputElement | null>(null)
+  const firstMixSteps = deriveFirstMixReadiness({
+    bothTracksLoaded: mixer.decks.a.loaded && mixer.decks.b.loaded,
+    cameraStatus: vision.status,
+    cameraMessage: vision.message,
+    handDetected: vision.analysis.hands.length > 0,
+    gesturePhase: mixer.gesturePhase,
+  })
+  const currentFirstMixStep = firstMixSteps.find(({ state }) => state === 'active')
+  const firstMixAnnouncement =
+    vision.status === 'loading'
+      ? `Camera preparation: ${vision.message}`
+      : vision.status === 'error'
+        ? `Camera needs attention. ${vision.message}`
+        : currentFirstMixStep
+          ? `First mix step: ${currentFirstMixStep.label}. ${currentFirstMixStep.detail}`
+          : 'First mix ready. The selected control is armed.'
 
   return (
     <>
@@ -553,16 +588,7 @@ export function DjRoomScreen({
             <button
               type="button"
               className="button primary demo-set-button"
-              onClick={() => {
-                void mixer.loadDemoMix().then((loaded) => {
-                  if (loaded) {
-                    document.getElementById('mixer-decks')?.scrollIntoView({
-                      behavior: 'smooth',
-                      block: 'start',
-                    })
-                  }
-                })
-              }}
+              onClick={() => void mixer.loadDemoMix()}
               disabled={mixer.demoLoading}
             >
               <Sparkles aria-hidden="true" />
@@ -583,23 +609,30 @@ export function DjRoomScreen({
           <Sparkles aria-hidden="true" />
           <span>
             <strong id="dj-quick-start-title">Your first mix</strong>
-            <small>Three steps, no setup</small>
+            <small>{currentFirstMixStep ? 'Follow the live readiness steps' : 'Ready to perform'}</small>
           </span>
         </div>
         <ol>
-          <li>
-            <b>1</b>
-            <span><strong>Load</strong><small>Demo set or local tracks</small></span>
-          </li>
-          <li>
-            <b>2</b>
-            <span><strong>Start camera</strong><small>Pick a deck and control</small></span>
-          </li>
-          <li>
-            <b>3</b>
-            <span><strong>Open hand</strong><small>Move to mix · fist to lock</small></span>
-          </li>
+          {firstMixSteps.map((step, index) => (
+            <li
+              key={step.id}
+              className={step.state}
+              aria-current={step.state === 'active' ? 'step' : undefined}
+            >
+              <b aria-hidden="true">
+                {step.state === 'complete' ? <Check /> : index + 1}
+              </b>
+              <span>
+                <strong>{step.label}</strong>
+                <small>{step.detail}</small>
+              </span>
+              <span className="sr-only">{step.state}.</span>
+            </li>
+          ))}
         </ol>
+        <output className="sr-only" aria-live="polite" aria-atomic="true">
+          {firstMixAnnouncement}
+        </output>
       </section>
 
       <section className="dj-vision-layout">

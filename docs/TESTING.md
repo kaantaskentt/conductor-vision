@@ -28,6 +28,8 @@ For each browser, verify:
 5. BPM Sync toggles and restores original rates.
 6. With the camera live, switch Vision → DJ Room → Vision and confirm landmarks remain on the visible canvas.
 7. Keyboard focus, arrow-key range control, reduced motion, and readable zoom.
+8. First-mix readiness advances only when both tracks, camera, and an armed gesture are actually ready.
+9. Screen-reader announcements occur on discrete readiness or clutch transitions, not on continuously changing control percentages.
 
 ## Camera automation strategy
 

@@ -55,11 +55,14 @@ describe('DJ mixer audio safeguards and math', () => {
     expect(matchedTempoPercent(0, 120)).toBeNull()
   })
 
-  it('uses the playing deck as the BPM Sync master and otherwise defaults to Deck A', () => {
-    expect(chooseSyncMaster(false, true)).toBe('b')
-    expect(chooseSyncMaster(true, false)).toBe('a')
-    expect(chooseSyncMaster(false, false)).toBe('a')
-    expect(chooseSyncMaster(true, true)).toBe('a')
+  it('uses the playing deck as the BPM Sync master and the audible deck when both play', () => {
+    expect(chooseSyncMaster(false, true, -100)).toBe('b')
+    expect(chooseSyncMaster(true, false, 100)).toBe('a')
+    expect(chooseSyncMaster(false, false, 100)).toBe('a')
+    expect(chooseSyncMaster(true, true, -1)).toBe('a')
+    expect(chooseSyncMaster(true, true, 0)).toBe('a')
+    expect(chooseSyncMaster(true, true, 1)).toBe('b')
+    expect(chooseSyncMaster(true, true, 100)).toBe('b')
   })
 
   it('smooths gesture values without overshooting the target', () => {
