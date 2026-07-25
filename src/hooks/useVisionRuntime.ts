@@ -36,22 +36,149 @@ type VisionRuntimeOptions = {
   onGestureFrame: (frame: GestureFrame) => void
 }
 
-const WASM_ROOT = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm'
-const HAND_MODEL =
-  'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
-const FACE_MODEL =
-  'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task'
+export const VISION_WASM_ROOT = '/vendor/mediapipe/tasks-vision/0.10.35/wasm'
+
+export type VerifiedVisionModelAsset = Readonly<{
+  label: string
+  url: string
+  bytes: number
+  sha256: string
+}>
+
+export const HAND_MODEL: VerifiedVisionModelAsset = {
+  label: 'Hand tracking model',
+  url: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+  bytes: 7_819_105,
+  sha256: 'fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1',
+}
+
+export const FACE_MODEL: VerifiedVisionModelAsset = {
+  label: 'Face tracking model',
+  url: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+  bytes: 3_758_596,
+  sha256: '64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff',
+}
+
+type VisionModelResponse = Pick<Response, 'ok' | 'status' | 'arrayBuffer'>
+type VisionModelFetcher = (url: string, init: RequestInit) => Promise<VisionModelResponse>
+
+const verifiedModelPromises = new Map<string, Promise<Uint8Array<ArrayBuffer>>>()
 type VisionFileset = Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>
 
-function cameraErrorMessage(error: unknown) {
-  if (!window.isSecureContext) return 'Camera access needs HTTPS or localhost.'
-  if (error instanceof DOMException) {
-    if (error.name === 'NotAllowedError') {
-      return 'Camera permission was blocked. Allow access in your browser, then try again.'
-    }
-    if (error.name === 'NotFoundError') return 'No camera was found on this device.'
-    if (error.name === 'NotReadableError') return 'Another app is currently using the camera.'
+export class VisionModelAssetError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'VisionModelAssetError'
   }
+}
+
+function bytesToHex(bytes: Uint8Array) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+async function fetchAndVerifyVisionModel(
+  asset: VerifiedVisionModelAsset,
+  fetcher: VisionModelFetcher,
+  subtle: SubtleCrypto | null | undefined,
+) {
+  let response: VisionModelResponse
+  try {
+    response = await fetcher(asset.url, {
+      cache: 'force-cache',
+      credentials: 'omit',
+      mode: 'cors',
+      referrerPolicy: 'no-referrer',
+    })
+  } catch {
+    throw new VisionModelAssetError(
+      `${asset.label} could not be downloaded. Check your connection, then retry.`,
+    )
+  }
+
+  if (!response.ok) {
+    throw new VisionModelAssetError(
+      `${asset.label} could not be downloaded (HTTP ${response.status}). Check your connection, then retry.`,
+    )
+  }
+
+  let buffer: ArrayBuffer
+  try {
+    buffer = await response.arrayBuffer()
+  } catch {
+    throw new VisionModelAssetError(
+      `${asset.label} could not be read. Check your connection, then retry.`,
+    )
+  }
+
+  if (buffer.byteLength !== asset.bytes) {
+    throw new VisionModelAssetError(
+      `${asset.label} failed its integrity check. Refresh the page; if this continues, report a deployment issue.`,
+    )
+  }
+  if (!subtle) {
+    throw new VisionModelAssetError(
+      `${asset.label} cannot be verified in this browser. Update your browser, then retry.`,
+    )
+  }
+
+  let digest: ArrayBuffer
+  try {
+    digest = await subtle.digest('SHA-256', buffer)
+  } catch {
+    throw new VisionModelAssetError(
+      `${asset.label} could not be verified. Update your browser, then retry.`,
+    )
+  }
+  if (bytesToHex(new Uint8Array(digest)) !== asset.sha256) {
+    throw new VisionModelAssetError(
+      `${asset.label} failed its integrity check. Refresh the page; if this continues, report a deployment issue.`,
+    )
+  }
+
+  return new Uint8Array(buffer)
+}
+
+export function getVerifiedVisionModel(
+  asset: VerifiedVisionModelAsset,
+  fetcher: VisionModelFetcher = (url, init) => fetch(url, init),
+  subtle: SubtleCrypto | null | undefined = globalThis.crypto?.subtle,
+) {
+  const cacheKey = `${asset.url}:${asset.bytes}:${asset.sha256}`
+  const cached = verifiedModelPromises.get(cacheKey)
+  if (cached) return cached
+
+  const request = fetchAndVerifyVisionModel(asset, fetcher, subtle)
+  verifiedModelPromises.set(cacheKey, request)
+  void request.catch(() => {
+    if (verifiedModelPromises.get(cacheKey) === request) verifiedModelPromises.delete(cacheKey)
+  })
+  return request
+}
+
+export function cameraErrorMessage(
+  error: unknown,
+  isSecureContext = typeof window === 'undefined' ? true : window.isSecureContext,
+) {
+  if (isSecureContext === false) return 'Camera access needs HTTPS or localhost.'
+  const errorName = error && typeof error === 'object' && 'name' in error ? String(error.name) : ''
+  if (errorName === 'NotAllowedError') {
+    return 'Camera permission was blocked. Allow access in your browser, then try again.'
+  }
+  if (errorName === 'NotFoundError') return 'No camera was found on this device.'
+  if (errorName === 'NotReadableError') return 'Another app is currently using the camera.'
+  if (errorName === 'AbortError') {
+    return 'Camera startup was interrupted. Check the connection, then try again.'
+  }
+  if (errorName === 'OverconstrainedError') {
+    return 'This camera cannot provide the requested video settings. Try another camera or refresh.'
+  }
+  if (errorName === 'SecurityError') {
+    return 'Browser security settings blocked the camera. Check this site\'s permission, then try again.'
+  }
+  if (errorName === 'NotSupportedError') {
+    return 'Camera access is not supported in this browser.'
+  }
+  if (error instanceof VisionModelAssetError) return error.message
   if (error instanceof Error && /fetch|network|model|wasm/i.test(error.message)) {
     return 'The local vision runtime could not load. Check your connection and retry.'
   }
@@ -59,8 +186,9 @@ function cameraErrorMessage(error: unknown) {
 }
 
 async function createHandLandmarker(vision: VisionFileset) {
+  const modelAssetBuffer = await getVerifiedVisionModel(HAND_MODEL)
   const options = {
-    baseOptions: { modelAssetPath: HAND_MODEL, delegate: 'GPU' as const },
+    baseOptions: { modelAssetBuffer: modelAssetBuffer.slice(), delegate: 'GPU' as const },
     runningMode: 'VIDEO' as const,
     numHands: 2,
     minHandDetectionConfidence: 0.38,
@@ -72,14 +200,15 @@ async function createHandLandmarker(vision: VisionFileset) {
   } catch {
     return HandLandmarker.createFromOptions(vision, {
       ...options,
-      baseOptions: { modelAssetPath: HAND_MODEL, delegate: 'CPU' },
+      baseOptions: { modelAssetBuffer: modelAssetBuffer.slice(), delegate: 'CPU' },
     })
   }
 }
 
 async function createFaceLandmarker(vision: VisionFileset) {
+  const modelAssetBuffer = await getVerifiedVisionModel(FACE_MODEL)
   const options = {
-    baseOptions: { modelAssetPath: FACE_MODEL, delegate: 'GPU' as const },
+    baseOptions: { modelAssetBuffer: modelAssetBuffer.slice(), delegate: 'GPU' as const },
     runningMode: 'VIDEO' as const,
     numFaces: 1,
     minFaceDetectionConfidence: 0.42,
@@ -92,7 +221,7 @@ async function createFaceLandmarker(vision: VisionFileset) {
   } catch {
     return FaceLandmarker.createFromOptions(vision, {
       ...options,
-      baseOptions: { modelAssetPath: FACE_MODEL, delegate: 'CPU' },
+      baseOptions: { modelAssetBuffer: modelAssetBuffer.slice(), delegate: 'CPU' },
     })
   }
 }
@@ -108,6 +237,8 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
   )
   const samplerRef = useRef<HTMLCanvasElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const streamEndedCleanupRef = useRef<(() => void) | null>(null)
+  const stoppedStreamsRef = useRef(new WeakSet<MediaStream>())
   const handLandmarkerRef = useRef<HandLandmarker | null>(null)
   const faceLandmarkerRef = useRef<FaceLandmarker | null>(null)
   const filesetRef = useRef<VisionFileset | null>(null)
@@ -131,7 +262,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
   const getVisionFileset = useCallback(async () => {
     if (filesetRef.current) return filesetRef.current
     if (!filesetPromiseRef.current) {
-      filesetPromiseRef.current = FilesetResolver.forVisionTasks(WASM_ROOT)
+      filesetPromiseRef.current = FilesetResolver.forVisionTasks(VISION_WASM_ROOT)
         .then((fileset) => {
           filesetRef.current = fileset
           return fileset
@@ -221,14 +352,29 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
     attachCameraOverlayCanvas(overlayLifecycleRef.current, element)
   }, [])
 
+  const stopStreamTracks = useCallback((stream: MediaStream) => {
+    if (stoppedStreamsRef.current.has(stream)) return
+    stoppedStreamsRef.current.add(stream)
+    stream.getTracks().forEach((track) => {
+      try {
+        track.stop()
+      } catch {
+        // Continue releasing the remaining owned tracks.
+      }
+    })
+  }, [])
+
   const teardown = useCallback((updateState: boolean) => {
     startRequestRef.current += 1
     runningRef.current = false
     loadingRef.current = false
     if (animationRef.current !== null) cancelAnimationFrame(animationRef.current)
     animationRef.current = null
-    streamRef.current?.getTracks().forEach((track) => track.stop())
+    const stream = streamRef.current
     streamRef.current = null
+    streamEndedCleanupRef.current?.()
+    streamEndedCleanupRef.current = null
+    if (stream) stopStreamTracks(stream)
     previousGrayRef.current = null
     resetCameraOverlayFrame(overlayLifecycleRef.current)
     primaryHandRef.current = null
@@ -250,7 +396,37 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
       setMessage('Camera is off. Processing begins only when you start it.')
       setAnalysis(createEmptyAnalysis(targetColorRef.current))
     }
-  }, [])
+  }, [stopStreamTracks])
+
+  const watchStreamEnd = useCallback(
+    (stream: MediaStream) => {
+      streamEndedCleanupRef.current?.()
+      const videoTracks =
+        typeof stream.getVideoTracks === 'function' ? stream.getVideoTracks() : []
+      const tracks = videoTracks.length ? videoTracks : stream.getTracks()
+      const handleEnded = () => {
+        if (disposedRef.current || streamRef.current !== stream) return
+        teardown(false)
+        gestureCallbackRef.current({
+          detected: false,
+          x: 0.5,
+          y: 0.5,
+          wristAngle: 0,
+          openFingers: 0,
+        })
+        setStatus('error')
+        setMessage(
+          'The camera stopped unexpectedly. Reconnect or re-enable it, then start the camera again.',
+        )
+      }
+      tracks.forEach((track) => track.addEventListener('ended', handleEnded))
+      streamEndedCleanupRef.current = () => {
+        tracks.forEach((track) => track.removeEventListener('ended', handleEnded))
+      }
+      if (tracks.some((track) => track.readyState === 'ended')) handleEnded()
+    },
+    [teardown],
+  )
 
   const setVideoElement = useCallback(
     (element: HTMLVideoElement | null) => {
@@ -439,7 +615,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
 
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error('Camera access is not supported in this browser.')
+        throw new DOMException('Camera API unavailable.', 'NotSupportedError')
       }
       await getHandLandmarker()
       if (enableFaceRef.current) await getFaceLandmarker()
@@ -455,10 +631,12 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
         audio: false,
       })
       if (requestId !== startRequestRef.current || disposedRef.current) {
-        stream.getTracks().forEach((track) => track.stop())
+        stopStreamTracks(stream)
         return
       }
       streamRef.current = stream
+      watchStreamEnd(stream)
+      if (requestId !== startRequestRef.current || disposedRef.current) return
       let video: HTMLVideoElement | null = null
       while (true) {
         video = videoLifecycleRef.current.element
@@ -468,7 +646,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
           await video.play()
         } catch (error) {
           if (requestId !== startRequestRef.current || disposedRef.current) {
-            stream.getTracks().forEach((track) => track.stop())
+            stopStreamTracks(stream)
             if (video.srcObject === stream) video.srcObject = null
             return
           }
@@ -476,7 +654,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
           throw error
         }
         if (requestId !== startRequestRef.current || disposedRef.current) {
-          stream.getTracks().forEach((track) => track.stop())
+          stopStreamTracks(stream)
           if (video.srcObject === stream) video.srcObject = null
           return
         }
@@ -506,15 +684,18 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
       }
     } catch (error) {
       if (requestId !== startRequestRef.current || disposedRef.current) return
-      streamRef.current?.getTracks().forEach((track) => track.stop())
+      const stream = streamRef.current
       streamRef.current = null
+      streamEndedCleanupRef.current?.()
+      streamEndedCleanupRef.current = null
+      if (stream) stopStreamTracks(stream)
       if (videoLifecycleRef.current.element) videoLifecycleRef.current.element.srcObject = null
       loadingRef.current = false
       runningRef.current = false
       setStatus('error')
       setMessage(cameraErrorMessage(error))
     }
-  }, [getFaceLandmarker, getHandLandmarker, predictLoop])
+  }, [getFaceLandmarker, getHandLandmarker, predictLoop, stopStreamTracks, watchStreamEnd])
 
   const stop = useCallback(() => teardown(true), [teardown])
 

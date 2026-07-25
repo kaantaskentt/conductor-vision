@@ -3,7 +3,7 @@
 import { act, useLayoutEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useVisionRuntime } from './useVisionRuntime'
+import { cameraErrorMessage, HAND_MODEL, useVisionRuntime } from './useVisionRuntime'
 
 const mediaPipe = vi.hoisted(() => ({
   drawingContexts: [] as CanvasRenderingContext2D[],
@@ -12,6 +12,10 @@ const mediaPipe = vi.hoisted(() => ({
   closeHandLandmarker: vi.fn(),
   detectHand: vi.fn(),
 }))
+
+function hexBuffer(hex: string) {
+  return Uint8Array.from(hex.match(/.{2}/g) ?? [], (byte) => Number.parseInt(byte, 16)).buffer
+}
 
 vi.mock('@mediapipe/tasks-vision', () => {
   class DrawingUtils {
@@ -54,11 +58,17 @@ vi.mock('@mediapipe/tasks-vision', () => {
 
 type Runtime = ReturnType<typeof useVisionRuntime>
 
-function Harness({ onUpdate }: { onUpdate: (runtime: Runtime) => void }) {
+function Harness({
+  onUpdate,
+  onGestureFrame,
+}: {
+  onUpdate: (runtime: Runtime) => void
+  onGestureFrame: Parameters<typeof useVisionRuntime>[0]['onGestureFrame']
+}) {
   const runtime = useVisionRuntime({
     enableFace: false,
     targetColor: 'purple',
-    onGestureFrame: vi.fn(),
+    onGestureFrame,
   })
   useLayoutEffect(() => {
     onUpdate(runtime)
@@ -91,10 +101,28 @@ function createCanvas() {
 }
 
 function createStream() {
-  const track = { stop: vi.fn() }
+  let readyState: MediaStreamTrackState = 'live'
+  const track = Object.assign(new EventTarget(), {
+    kind: 'video',
+    stop: vi.fn(() => {
+      readyState = 'ended'
+    }),
+  }) as unknown as MediaStreamTrack & { stop: ReturnType<typeof vi.fn> }
+  Object.defineProperty(track, 'readyState', {
+    configurable: true,
+    get: () => readyState,
+  })
   return {
-    stream: { getTracks: () => [track] } as unknown as MediaStream,
+    stream: {
+      getTracks: () => [track],
+      getVideoTracks: () => [track],
+      getAudioTracks: () => [],
+    } as unknown as MediaStream,
     track,
+    end: () => {
+      readyState = 'ended'
+      track.dispatchEvent(new Event('ended'))
+    },
   }
 }
 
@@ -108,6 +136,47 @@ function createDeferred() {
   return { promise, resolve, reject }
 }
 
+describe('camera error recovery messages', () => {
+  it.each([
+    [
+      'NotAllowedError',
+      'Camera permission was blocked. Allow access in your browser, then try again.',
+    ],
+    ['NotFoundError', 'No camera was found on this device.'],
+    ['NotReadableError', 'Another app is currently using the camera.'],
+    [
+      'AbortError',
+      'Camera startup was interrupted. Check the connection, then try again.',
+    ],
+    [
+      'OverconstrainedError',
+      'This camera cannot provide the requested video settings. Try another camera or refresh.',
+    ],
+    [
+      'SecurityError',
+      "Browser security settings blocked the camera. Check this site's permission, then try again.",
+    ],
+    ['NotSupportedError', 'Camera access is not supported in this browser.'],
+  ])('maps %s to an actionable recovery message', (name, message) => {
+    expect(cameraErrorMessage(new DOMException('Camera failed.', name), true)).toBe(message)
+  })
+
+  it('prioritizes the secure-context requirement and preserves model-load guidance', () => {
+    expect(cameraErrorMessage(new DOMException('Blocked.', 'SecurityError'), false)).toBe(
+      'Camera access needs HTTPS or localhost.',
+    )
+    expect(cameraErrorMessage(new Error('WASM network fetch failed'), true)).toBe(
+      'The local vision runtime could not load. Check your connection and retry.',
+    )
+  })
+
+  it('uses a safe generic recovery for an unknown failure', () => {
+    expect(cameraErrorMessage({ name: 'UnknownError' }, true)).toBe(
+      'The camera could not start. Refresh the page and try again.',
+    )
+  })
+})
+
 describe('vision runtime camera lifecycle integration', () => {
   let root: Root
   let runtime: Runtime
@@ -115,6 +184,8 @@ describe('vision runtime camera lifecycle integration', () => {
   let animationFrames: Map<number, FrameRequestCallback>
   let nextAnimationId: number
   let streams: ReturnType<typeof createStream>[]
+  let onGestureFrame: Parameters<typeof useVisionRuntime>[0]['onGestureFrame']
+  let modelFetch: ReturnType<typeof vi.fn>
 
   beforeEach(async () => {
     vi.useFakeTimers()
@@ -132,6 +203,30 @@ describe('vision runtime camera lifecycle integration', () => {
     })
 
     streams = [createStream(), createStream()]
+    onGestureFrame = vi.fn()
+    modelFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url !== HAND_MODEL.url) {
+        throw new Error(`Unexpected fetch in vision runtime integration test: ${url}`)
+      }
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new ArrayBuffer(HAND_MODEL.bytes),
+      }
+    })
+    vi.stubGlobal('fetch', modelFetch)
+    vi.stubGlobal('crypto', {
+      subtle: {
+        digest: vi.fn(async (_algorithm: AlgorithmIdentifier, data: BufferSource) => {
+          const bytes = ArrayBuffer.isView(data) ? data.byteLength : data.byteLength
+          if (bytes !== HAND_MODEL.bytes) {
+            throw new Error(`Unexpected model digest length: ${bytes}`)
+          }
+          return hexBuffer(HAND_MODEL.sha256)
+        }),
+      },
+    })
     let streamIndex = 0
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
@@ -161,7 +256,12 @@ describe('vision runtime camera lifecycle integration', () => {
     container = document.createElement('div')
     root = createRoot(container)
     await act(async () => {
-      root.render(<Harness onUpdate={(nextRuntime) => (runtime = nextRuntime)} />)
+      root.render(
+        <Harness
+          onUpdate={(nextRuntime) => (runtime = nextRuntime)}
+          onGestureFrame={onGestureFrame}
+        />,
+      )
       vi.advanceTimersByTime(1_000)
     })
   })
@@ -185,6 +285,13 @@ describe('vision runtime camera lifecycle integration', () => {
     })
 
     expect(runtime.status).toBe('running')
+    expect(modelFetch).toHaveBeenCalledOnce()
+    expect(modelFetch).toHaveBeenCalledWith(HAND_MODEL.url, {
+      cache: 'force-cache',
+      credentials: 'omit',
+      mode: 'cors',
+      referrerPolicy: 'no-referrer',
+    })
     expect(mediaPipe.drawingContexts).toEqual([canvasA.context])
     expect(mediaPipe.connectorContexts).toEqual([canvasA.context])
     expect(mediaPipe.landmarkContexts).toEqual([canvasA.context])
@@ -330,5 +437,126 @@ describe('vision runtime camera lifecycle integration', () => {
     expect(runtime.status).toBe('running')
     expect(streams[0].track.stop).not.toHaveBeenCalled()
     expect(videoB.srcObject).toBe(streams[0].stream)
+  })
+
+  it('moves to a recoverable error when the active camera track ends, then starts a fresh stream', async () => {
+    const video = createVideo()
+    const { canvas } = createCanvas()
+
+    await act(async () => {
+      runtime.setVideoElement(video)
+      runtime.setCanvasElement(canvas)
+      await runtime.start()
+    })
+    expect(runtime.status).toBe('running')
+
+    await act(async () => {
+      streams[0].end()
+    })
+
+    expect(runtime.status).toBe('error')
+    expect(runtime.message).toBe(
+      'The camera stopped unexpectedly. Reconnect or re-enable it, then start the camera again.',
+    )
+    expect(video.srcObject).toBeNull()
+    expect(streams[0].track.stop).toHaveBeenCalledTimes(1)
+    expect(animationFrames.size).toBe(0)
+    expect(onGestureFrame).toHaveBeenLastCalledWith({
+      detected: false,
+      x: 0.5,
+      y: 0.5,
+      wristAngle: 0,
+      openFingers: 0,
+    })
+
+    await act(async () => runtime.start())
+
+    expect(runtime.status).toBe('running')
+    expect(video.srcObject).toBe(streams[1].stream)
+    expect(streams[0].track.stop).toHaveBeenCalledTimes(1)
+    expect(streams[1].track.stop).not.toHaveBeenCalled()
+  })
+
+  it('rejects a stream whose camera track already ended before it could attach', async () => {
+    const video = createVideo()
+    const { canvas } = createCanvas()
+    streams[0].end()
+
+    await act(async () => {
+      runtime.setVideoElement(video)
+      runtime.setCanvasElement(canvas)
+      await runtime.start()
+    })
+
+    expect(runtime.status).toBe('error')
+    expect(runtime.message).toContain('camera stopped unexpectedly')
+    expect(video.play).not.toHaveBeenCalled()
+    expect(video.srcObject).toBeNull()
+    expect(streams[0].track.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores a stale ended event after stop and restart', async () => {
+    const video = createVideo()
+    const { canvas } = createCanvas()
+
+    await act(async () => {
+      runtime.setVideoElement(video)
+      runtime.setCanvasElement(canvas)
+      await runtime.start()
+      runtime.stop()
+      await runtime.start()
+    })
+    expect(runtime.status).toBe('running')
+
+    await act(async () => {
+      streams[0].end()
+    })
+
+    expect(runtime.status).toBe('running')
+    expect(video.srcObject).toBe(streams[1].stream)
+    expect(streams[0].track.stop).toHaveBeenCalledTimes(1)
+    expect(streams[1].track.stop).not.toHaveBeenCalled()
+  })
+
+  it('keeps the ended-track error when a pending play request settles later', async () => {
+    const pendingPlay = createDeferred()
+    const video = createVideo()
+    const { canvas } = createCanvas()
+    video.play = vi.fn(() => pendingPlay.promise)
+
+    let startPromise!: Promise<void>
+    await act(async () => {
+      runtime.setVideoElement(video)
+      runtime.setCanvasElement(canvas)
+      startPromise = runtime.start()
+      for (let index = 0; index < 6; index += 1) await Promise.resolve()
+    })
+
+    await act(async () => {
+      streams[0].end()
+    })
+    expect(runtime.status).toBe('error')
+
+    await act(async () => {
+      pendingPlay.resolve()
+      await startPromise
+    })
+
+    expect(runtime.status).toBe('error')
+    expect(runtime.message).toContain('camera stopped unexpectedly')
+    expect(video.srcObject).toBeNull()
+    expect(streams[0].track.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports unsupported camera APIs without attempting model or device startup', async () => {
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: undefined,
+    })
+
+    await act(async () => runtime.start())
+
+    expect(runtime.status).toBe('error')
+    expect(runtime.message).toBe('Camera access is not supported in this browser.')
   })
 })

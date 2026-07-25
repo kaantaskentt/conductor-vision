@@ -43,6 +43,7 @@ React state mirrors user-facing deck status. Refs own high-frequency or imperati
 ## Trust boundaries
 
 - Camera and media remain in the tab.
-- MediaPipe WASM and model files are fetched from explicitly allow-listed Google and jsDelivr origins before camera permission is requested. This is a documented third-party runtime trust boundary; self-hosting those assets is planned before a privacy-focused 1.0 release.
+- Lock-pinned MediaPipe WASM is served from the application origin. Hand and face model bundles remain external because their object URLs do not publish clear model-specific redistribution terms; Ultra Vision accepts them only after HTTP success, exact byte length, and SHA-256 verification, then passes the verified bytes through `modelAssetBuffer` before requesting camera permission.
+- The model host is permitted only by `connect-src`, never `script-src`, and model requests contain no camera frames.
 - Object URLs are revoked when tracks are replaced or the mixer unmounts.
 - Future hosted models or persistence require a new threat model and informed-consent design.

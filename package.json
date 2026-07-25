@@ -2,11 +2,34 @@
   "name": "ultra-vision",
   "private": true,
   "version": "0.2.0",
+  "description": "Local-first browser vision and gesture-controlled two-deck DJ mixing.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kaantaskentt/ultra-vision.git"
+  },
+  "homepage": "https://ultra-vision.vercel.app",
+  "bugs": {
+    "url": "https://github.com/kaantaskentt/ultra-vision/issues"
+  },
+  "keywords": [
+    "computer-vision",
+    "gesture-control",
+    "local-first",
+    "mediapipe",
+    "web-audio",
+    "dj"
+  ],
+  "packageManager": "npm@10.9.4",
+  "engines": {
+    "node": ">=20.19.0 <21 || >=22.12.0"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "oxlint --deny-warnings",
+    "check": "npm run test:coverage && npm run lint && npm run build && npm audit --audit-level=high",
+    "lint": "oxlint --deny-warnings --ignore-pattern \"public/vendor/**\"",
     "preview": "vite preview",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"

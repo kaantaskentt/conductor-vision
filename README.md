@@ -5,7 +5,8 @@
 <h1 align="center">Ultra Vision</h1>
 
 <p align="center">
-  A local-first browser instrument for real-time vision and gesture-controlled audio.
+  <strong>Turn your webcam into a private DJ controller.</strong><br />
+  Mix two tracks with your hand while camera frames and music stay in the browser.
 </p>
 
 <p align="center">
@@ -17,41 +18,52 @@
 <p align="center">
   <a href="https://ultra-vision.vercel.app"><strong>Try Ultra Vision live</strong></a>
   ·
-  <a href="./ROADMAP.md">Roadmap</a>
+  <a href="#run-it-locally">Run locally</a>
   ·
   <a href="./CONTRIBUTING.md">Contribute</a>
 </p>
 
-### Vision workspace
-
-![Ultra Vision real-time vision analysis](./docs/design/ultra-vision-analysis.jpg)
-
 <p align="center">
-  <em>Real-time hand landmarks, face signals, motion, and color sampling—all processed locally.</em>
+  <a href="https://ultra-vision.vercel.app">
+    <img src="./public/ultra-vision-social.png" alt="Ultra Vision two-deck gesture-controlled DJ mixer" />
+  </a>
 </p>
 
-### DJ Room
+No account, API key, database, backend, or audio files are required for the first mix. Ultra Vision combines a generated demo set, a two-deck Web Audio mixer, and deliberate hand-gesture control in one browser tab.
 
-![Ultra Vision camera and gesture clutch](./docs/design/ultra-vision-gesture-clutch.png)
+## Try your first mix in 60 seconds
 
-![Ultra Vision generated demo set and two-deck DJ mixer](./docs/design/ultra-vision-demo-mixer.png)
+1. Open the [live app](https://ultra-vision.vercel.app) and choose **DJ Room**.
+2. Select **Try demo set** to generate two short, copyright-safe loops locally.
+3. Press **Start both** and move the center crossfader.
+4. Select **Start camera**, allow access, then hold an open hand steady to calibrate before moving left or right.
 
-Ultra Vision turns a webcam and two audio files into a private, interactive visual instrument and DJ mixer. It tracks hands and faces, studies pixels, detects track tempo, and maps deliberate movement to focused mix controls—all inside the browser tab.
+Close your hand to lock the crossfader or channel position; Filter instead returns to its neutral midpoint after release. A newly detected hand never takes over immediately.
 
 ## What it can do
 
-- **Instant demo set** — generate two original rhythmic loops locally and reach a playable two-deck mix without finding audio files.
-- **DJ Room** — mix two local tracks with independent transports, hardware-style level and bipolar filter knobs, track-quarter jumps, post-fader meters, a master limiter, and an equal-power crossfader.
-- **BPM tools** — estimate BPM locally, tap a tempo when analysis needs help, and use one reversible BPM Sync control to match the idle deck to the playing deck.
-- **Vision** — inspect hand landmarks, raised fingers, face signals, motion direction, and color coverage.
-- **Pixel Studio** — run transparent color-similarity and luminance studies on an upload or captured frame inside Vision.
-- **Intentional gesture routing** — choose the crossfader or one deck's channel or filter, open your hand to engage, and close it to lock. Relative pickup prevents the first frame from jumping a control.
-- **Local media** — camera frames, images, and uploaded tracks are not sent to an application backend.
-- **Responsive interface** — the complete workflow works from a phone-sized viewport through desktop.
+- **Instant demo set** — generate two original rhythmic loops locally and reach a playable mix without finding audio files.
+- **Two-deck DJ Room** — control independent transports, hardware-style level and bipolar filter knobs, track-quarter jumps, post-fader meters, a master limiter, and an equal-power crossfader.
+- **Intentional gesture routing** — send an open hand to the crossfader or one deck's channel or filter. Relative pickup prevents first-frame jumps; a closed hand or tracking loss locks the control.
+- **BPM tools** — estimate BPM locally, tap a correction, and use one reversible BPM Sync control to match playback rates.
+- **Vision workspace** — inspect hand landmarks, raised fingers, face signals, motion direction, and color coverage.
+- **Pixel Studio** — study color similarity and luminance from an upload or captured frame with transparent, deterministic calculations.
+- **Local media** — camera frames, captured images, and uploaded tracks are not sent to an application backend.
 
-## Quick start
+BPM Sync matches tempo; it does not claim automatic beat-grid, downbeat, or phase alignment.
 
-Requirements: Node.js 20.19+ or 22.12+ and a modern Chromium, Firefox, or Safari browser.
+## Two instruments, one private tab
+
+| Vision | DJ Room |
+| --- | --- |
+| ![Ultra Vision real-time vision analysis](./docs/design/ultra-vision-analysis.jpg) | ![Ultra Vision camera and gesture clutch](./docs/design/ultra-vision-gesture-clutch.png) |
+| Inspect live landmarks, motion, face signals, and pixel studies. | Choose one mix control, calibrate deliberately, then perform with movement. |
+
+The interface reflows from desktop down to phone-sized viewports. Real camera and audio behavior still depends on the browser and device; the maintained test matrix lives in [docs/TESTING.md](./docs/TESTING.md).
+
+## Run it locally
+
+Use Node.js 20.19+ or 22.12+ and a recent desktop Chromium, Firefox, or Safari browser.
 
 ```bash
 git clone https://github.com/kaantaskentt/ultra-vision.git
@@ -60,83 +72,71 @@ npm ci
 npm run dev
 ```
 
-Open the local Vite URL, choose **Start camera**, and allow camera access. Camera access requires `localhost` or HTTPS.
+Open the local Vite URL. Camera access requires `localhost` or HTTPS.
 
-No API keys, database, or backend service are required.
+## How gesture mixing feels
 
-## DJ Room workflow
+1. Pick Deck A or Deck B and choose Crossfader, Channel, or Filter.
+2. Hold an open hand steady while Ultra Vision calibrates against the current control position.
+3. Move only after the control becomes armed.
+4. Close your hand or leave the frame to lock position controls. Filter eases back to its 50% neutral point.
 
-1. Choose **Try demo set** for two generated local loops, or load one of your own tracks into each deck. For files up to 12 MB, Ultra Vision examines up to the first 90 seconds locally to estimate BPM. Larger files skip the memory-heavy analysis and remain ready for **Tap BPM**.
-2. If a tempo is missing or incorrect, use **Tap BPM** a few times on the beat.
-3. Press the center **BPM Sync** control. The playing deck becomes the master; if neither or both are playing, Deck A leads. Press it again to restore both original tempos. Sync works within the ±20% deck range, including sensible half-time and double-time matches, and preserves pitch where the browser supports it.
-4. Use the track-quarter pads as coarse navigation, align the downbeat manually, then mix with the channel controls and equal-power crossfader.
-5. Start the camera and route hand movement to the crossfader, channel level, or filter. Hold an open hand steady to calibrate without a jump, then move. Close your hand to lock; Filter returns to its 50% neutral position after release. Use **Reset**, **Reset mix**, or double-click a mode or knob at any time.
-
-BPM Sync matches tempo; it does not claim automatic beat-grid or phase alignment.
+Use **Reset**, **Reset mix**, or double-click a mode or knob whenever you want a known starting point.
 
 ## Runtime architecture
 
 ```mermaid
 flowchart LR
   Camera["Webcam"] --> Vision["MediaPipe Tasks Vision"]
-  Vision --> Signals["Hand, face, and gesture signals"]
+  Vision --> Signals["Hand and face signals"]
   Camera --> Pixels["Canvas pixel sampling"]
   Pixels --> Signals
-  DeckA["Local track A"] --> TempoA["BPM analysis + deck A graph"]
-  DeckB["Local track B"] --> TempoB["BPM analysis + deck B graph"]
-  Demo["Generated demo set"] --> TempoA
-  Demo --> TempoB
-  TempoA --> Mixer["Equal-power mixer"]
-  TempoB --> Mixer
-  Signals --> Mixer
-  Mixer --> Output["Browser audio output"]
+  Demo["Generated demo set"] --> Decks["Two Web Audio deck graphs"]
+  Files["Local audio files"] --> Decks
+  Signals --> Gestures["Calibrated gesture controller"]
+  Gestures --> Decks
+  Decks --> Limiter["Master limiter"]
+  Limiter --> Output["Browser audio output"]
 ```
 
-The current runtime uses:
+The current runtime uses React 19, TypeScript, Vite, MediaPipe Tasks Vision, Canvas sampling, Web Audio, and Lucide icons. Read the deeper [architecture guide](./docs/ARCHITECTURE.md).
 
-- React 19, TypeScript, and Vite
-- MediaPipe Tasks Vision for hand and face landmarks
-- Canvas sampling for motion and color analysis
-- Web Audio for per-deck bipolar filters, channel gain, meters, internal BPM matching, and equal-power mixing
-- Lucide for accessible interface icons
+## Honest model and product scope
 
-## Honest model scope
+MediaPipe is the shipped vision runtime. NVIDIA Eagle / LocateAnything is **not** part of the current browser application; it remains a researched option for future open-vocabulary grounding. Its integration and model-license risks are documented in [docs/EAGLE_NEXT.md](./docs/EAGLE_NEXT.md).
 
-NVIDIA Eagle / LocateAnything is **not** part of the current browser runtime. It is a researched next step for open-vocabulary grounding such as “find the red mug” or “locate the object closest to my hand.”
+A bounded, post-master local recording engine also exists in the codebase, but Replay Studio does not yet have a shipped interface. The roadmap does not present foundations as finished product features.
 
-The integration plan and model-license warning live in [docs/EAGLE_NEXT.md](./docs/EAGLE_NEXT.md). Keeping this boundary explicit prevents pixel heuristics from being presented as neural-model output.
+## Quality and privacy
 
-## Quality checks
+Run the same complete local gate expected before a pull request:
 
 ```bash
-npm test
-npm run lint
-npm run build
-npm audit --audit-level=high
+npm run check
 ```
 
-The CI workflow runs tests with coverage thresholds, lint, the production build, and a full dependency audit on every push and pull request.
-
-## Privacy and security
+That command runs the test suite with coverage floors, lint, a production build, and a full dependency audit at the high-severity threshold. CI and CodeQL run on every pull request.
 
 - Camera and uploaded media are processed in the active browser tab.
 - File types and sizes are checked before object URLs are created.
-- MediaPipe's pinned browser runtime and the models required at startup are fetched from explicitly allow-listed jsDelivr and Google origins before the camera opens. If you switch a running DJ camera into Vision, the optional face model can load afterward. These origins are not sent camera frames, but they remain an external runtime trust boundary until the assets are self-hosted.
+- Lock-pinned MediaPipe WASM is served from Ultra Vision's own origin. Hand and face model bundles are fetched from their exact Google-hosted upstream URLs, accepted only after byte-length and SHA-256 verification, and then passed to MediaPipe as in-memory bytes. Camera frames are never sent with those requests.
 - GPU initialization falls back to CPU when needed.
-- The project has no secrets, accounts, analytics, or application backend.
+- There are no accounts, application secrets, analytics, databases, or application APIs.
 
-See [SECURITY.md](./SECURITY.md) for responsible disclosure.
+See [SECURITY.md](./SECURITY.md) for responsible disclosure and [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for dependency and model notices.
+
+## Built in public with Codex
+
+Ultra Vision was strengthened through a human-directed Codex workflow: product feedback became explicit invariants, implementation was separated from independent review, and camera/audio behavior was backed by deterministic tests before public claims changed.
+
+Read [Building Ultra Vision with Codex](./docs/BUILDING_WITH_CODEX.md) for the decisions, failed assumptions, agent workflow, commit evidence, and remaining limitations.
 
 ## Project status
 
-Ultra Vision is an active experimental project. Vision and two-deck mixing are functional; BPM Sync currently matches tempo rather than phase. The public roadmap covers deterministic camera tests, waveform beat grids, local performance clips, saved calibration profiles, and optional open-vocabulary grounding.
+Ultra Vision is an active experimental project. Vision and two-deck mixing are functional; phase-aware sync, browser-level camera fixtures, measured long-session performance, and the Replay Studio interface remain future work.
 
-Read the [roadmap](./ROADMAP.md), [architecture](./docs/ARCHITECTURE.md), [testing strategy](./docs/TESTING.md), and [third-party notices](./THIRD_PARTY_NOTICES.md).
-
-## Contributing
-
-Issues and focused pull requests are welcome. Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a change.
+Read the [roadmap](./ROADMAP.md), [testing strategy](./docs/TESTING.md), and [contributor guide](./CONTRIBUTING.md). Focused issues and pull requests are welcome.
 
 ## License
 
-The application code is available under the [MIT License](./LICENSE). Third-party models and libraries retain their own licenses. In particular, review the LocateAnything model license before any future integration or commercial use.
+The application code is available under the [MIT License](./LICENSE). Third-party models and libraries retain their own licenses. Review the LocateAnything model license before any future integration or commercial use.

@@ -17,13 +17,10 @@ Use Node.js 20.19+ or 22.12+.
 
 ```bash
 npm ci
-npm test
-npm run lint
-npm run build
-npm audit --audit-level=high
+npm run check
 ```
 
-Run the app with `npm run dev`. Camera testing requires `localhost` or HTTPS.
+`npm run check` runs tests with coverage, lint, the production build, and the high-severity dependency audit. Use `npm test` for a faster feedback loop while developing. Run the app with `npm run dev`; camera testing requires `localhost` or HTTPS.
 
 ## Product invariants
 
