@@ -39,6 +39,10 @@ function App() {
     })
   }, [handleGestureFrame, screen])
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+  }, [screen])
+
   return (
     <div className="app">
       <audio ref={(element) => mixer.setAudioElement('a', element)} preload="metadata" />

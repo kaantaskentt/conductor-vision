@@ -1,18 +1,31 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   bipolarFilterFrequencies,
   bpmFromTapTimes,
   chooseSyncMaster,
+  createBpmAnalysisQueue,
   equalPowerCrossfade,
   estimateBpmFromSamples,
   isGestureFrameEngaged,
+  MAX_BPM_ANALYSIS_BYTES,
   matchedTempoPercent,
   phraseTimeForIndex,
   relativeGestureValue,
+  shouldAutoAnalyzeBpm,
   smoothBoundedControlValue,
   smoothControlValue,
   validateAudioFile,
 } from './useDjMixer'
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve
+    reject = nextReject
+  })
+  return { promise, resolve, reject }
+}
 
 describe('DJ mixer audio safeguards and math', () => {
   it('maps four phrase jumps across the track', () => {
@@ -100,6 +113,74 @@ describe('DJ mixer audio safeguards and math', () => {
       }
     }
     expect(estimateBpmFromSamples(samples, sampleRate)).toBe(120)
+  })
+
+  it('serializes BPM decoders so two deck loads cannot decode concurrently', async () => {
+    const firstGate = deferred<void>()
+    const secondGate = deferred<void>()
+    let active = 0
+    let maximumActive = 0
+    const analyze = vi.fn(async (file: File) => {
+      active += 1
+      maximumActive = Math.max(maximumActive, active)
+      await (file.name === 'first.mp3' ? firstGate.promise : secondGate.promise)
+      active -= 1
+      return file.name === 'first.mp3' ? 120 : 126
+    })
+    const queue = createBpmAnalysisQueue(analyze)
+    const first = queue.enqueue(
+      new File(['first'], 'first.mp3', { type: 'audio/mpeg' }),
+      () => true,
+    )
+    const second = queue.enqueue(
+      new File(['second'], 'second.mp3', { type: 'audio/mpeg' }),
+      () => true,
+    )
+
+    await Promise.resolve()
+    expect(analyze).toHaveBeenCalledTimes(1)
+    expect(maximumActive).toBe(1)
+
+    firstGate.resolve()
+    await expect(first).resolves.toEqual({ status: 'complete', bpm: 120 })
+    await Promise.resolve()
+    expect(analyze).toHaveBeenCalledTimes(2)
+    expect(maximumActive).toBe(1)
+
+    secondGate.resolve()
+    await expect(second).resolves.toEqual({ status: 'complete', bpm: 126 })
+    expect(maximumActive).toBe(1)
+  })
+
+  it('skips stale queued BPM work before allocating another decoder', async () => {
+    const firstGate = deferred<void>()
+    const analyze = vi.fn(async () => {
+      await firstGate.promise
+      return 120
+    })
+    const queue = createBpmAnalysisQueue(analyze)
+    const first = queue.enqueue(
+      new File(['first'], 'first.mp3', { type: 'audio/mpeg' }),
+      () => true,
+    )
+    let secondIsCurrent = true
+    const second = queue.enqueue(
+      new File(['second'], 'second.mp3', { type: 'audio/mpeg' }),
+      () => secondIsCurrent,
+    )
+
+    await Promise.resolve()
+    secondIsCurrent = false
+    firstGate.resolve()
+    await first
+
+    await expect(second).resolves.toEqual({ status: 'stale' })
+    expect(analyze).toHaveBeenCalledTimes(1)
+  })
+
+  it('bounds automatic BPM analysis before compressed audio is decoded', () => {
+    expect(shouldAutoAnalyzeBpm({ size: MAX_BPM_ANALYSIS_BYTES })).toBe(true)
+    expect(shouldAutoAnalyzeBpm({ size: MAX_BPM_ANALYSIS_BYTES + 1 })).toBe(false)
   })
 
   it('accepts supported local audio and rejects misleading files', () => {

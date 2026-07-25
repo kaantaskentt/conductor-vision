@@ -72,7 +72,7 @@ type PositionGesture = {
 
 const DECK_IDS: DeckId[] = ['a', 'b']
 const MAX_AUDIO_BYTES = 100 * 1024 * 1024
-const MAX_BPM_ANALYSIS_BYTES = 12 * 1024 * 1024
+export const MAX_BPM_ANALYSIS_BYTES = 8 * 1024 * 1024
 const ACCEPTED_AUDIO_TYPES = new Set([
   'audio/mpeg',
   'audio/mp3',
@@ -100,6 +100,10 @@ export function validateAudioFile(file: File) {
     throw new Error('Choose an MP3, WAV, FLAC, or OGG audio file.')
   }
   if (file.size > MAX_AUDIO_BYTES) throw new Error('Choose an audio file smaller than 100 MB.')
+}
+
+export function shouldAutoAnalyzeBpm(file: Pick<File, 'size'>) {
+  return file.size <= MAX_BPM_ANALYSIS_BYTES
 }
 
 export function phraseTimeForIndex(index: number, duration: number) {
@@ -277,6 +281,37 @@ async function detectBpm(file: File) {
   }
 }
 
+type BpmAnalyzer = (file: File) => Promise<number | null>
+
+type QueuedBpmResult =
+  | { status: 'complete'; bpm: number | null }
+  | { status: 'stale' }
+
+export function createBpmAnalysisQueue(analyze: BpmAnalyzer = detectBpm) {
+  let tail = Promise.resolve()
+
+  return {
+    enqueue(
+      file: File,
+      isCurrent: () => boolean,
+      onStart?: () => void,
+    ): Promise<QueuedBpmResult> {
+      const task = tail.then(async (): Promise<QueuedBpmResult> => {
+        if (!isCurrent()) return { status: 'stale' }
+        onStart?.()
+        const bpm = await analyze(file)
+        if (!isCurrent()) return { status: 'stale' }
+        return { status: 'complete', bpm }
+      })
+      tail = task.then(
+        () => undefined,
+        () => undefined,
+      )
+      return task
+    },
+  }
+}
+
 function initialDeckState(): DeckState {
   return {
     name: 'No track loaded',
@@ -327,6 +362,10 @@ export function useDjMixer() {
   const nodesRef = useRef<Partial<Record<DeckId, DeckNodes>>>({})
   const meterAnimationRef = useRef<number | null>(null)
   const bpmRequestRef = useRef<Record<DeckId, number>>({ a: 0, b: 0 })
+  const bpmAnalysisQueueRef = useRef<ReturnType<typeof createBpmAnalysisQueue> | null>(null)
+  const bpmAnalysisQueue =
+    bpmAnalysisQueueRef.current ??
+    (bpmAnalysisQueueRef.current = createBpmAnalysisQueue())
   const tapTimesRef = useRef<Record<DeckId, number[]>>({ a: [], b: [] })
   const lastGestureUpdateAtRef = useRef(0)
   const gestureEngagedRef = useRef(false)
@@ -535,12 +574,12 @@ export function useDjMixer() {
   const loadFile = useCallback(
     async (id: DeckId, file?: File, options: LoadFileOptions = {}) => {
       if (!file) return false
-      const requestId = bpmRequestRef.current[id] + 1
-      bpmRequestRef.current[id] = requestId
       try {
         validateAudioFile(file)
         const audio = audioElementsRef.current[id]
         if (!audio) throw new Error(`${deckLabel(id)} is not ready.`)
+        const requestId = bpmRequestRef.current[id] + 1
+        bpmRequestRef.current[id] = requestId
         disarmGesture(`${deckLabel(id)} changed · gesture pickup reset`)
         const syncSnapshot = bpmSyncRef.current
         if (syncSnapshot) {
@@ -575,22 +614,30 @@ export function useDjMixer() {
           name: options.title ?? file.name.replace(/\.[^.]+$/, ''),
           loaded: true,
           bpm: knownBpm,
-          bpmStatus: knownBpm ? `${knownBpm} BPM demo` : 'Analyzing BPM…',
+          bpmStatus: knownBpm ? `${knownBpm} BPM demo` : 'Waiting for BPM analysis…',
         })
         if (knownBpm) return true
-        if (file.size > MAX_BPM_ANALYSIS_BYTES) {
+        if (!shouldAutoAnalyzeBpm(file)) {
           patchDeck(id, {
             bpm: null,
-            bpmStatus: 'Track ready · tap BPM (automatic analysis skipped for large files)',
+            bpmStatus: 'Track ready · tap BPM (auto analysis is limited to 8 MB)',
           })
           return true
         }
         try {
-          const bpm = await detectBpm(file)
-          if (bpmRequestRef.current[id] !== requestId) return false
+          const result = await bpmAnalysisQueue.enqueue(
+            file,
+            () => bpmRequestRef.current[id] === requestId,
+            () => {
+              if (bpmRequestRef.current[id] === requestId) {
+                patchDeck(id, { bpmStatus: 'Analyzing BPM…' })
+              }
+            },
+          )
+          if (result.status === 'stale') return false
           patchDeck(id, {
-            bpm,
-            bpmStatus: bpm ? `${bpm} BPM detected` : 'Tap BPM to set tempo',
+            bpm: result.bpm,
+            bpmStatus: result.bpm ? `${result.bpm} BPM detected` : 'Tap BPM to set tempo',
           })
         } catch {
           if (bpmRequestRef.current[id] === requestId) {
@@ -605,7 +652,7 @@ export function useDjMixer() {
         return false
       }
     },
-    [disarmGesture, patchDeck, resetDeckAudioParameters],
+    [bpmAnalysisQueue, disarmGesture, patchDeck, resetDeckAudioParameters],
   )
 
   const togglePlayback = useCallback(
@@ -1250,10 +1297,12 @@ export function useDjMixer() {
 
   useEffect(() => {
     const objectUrls = objectUrlsRef.current
+    const bpmRequests = bpmRequestRef.current
     const captureReleases = masterCaptureReleasesRef.current
     const captureGeneration = captureGenerationRef
     return () => {
       captureGeneration.current += 1
+      for (const id of DECK_IDS) bpmRequests[id] += 1
       if (meterAnimationRef.current !== null) cancelAnimationFrame(meterAnimationRef.current)
       if (filterReleaseTimerRef.current !== null) clearTimeout(filterReleaseTimerRef.current)
       for (const id of DECK_IDS) {
