@@ -35,6 +35,14 @@ type FakeGain = {
   connect: ReturnType<typeof vi.fn>
 }
 
+type FakeAnalyser = {
+  fftSize: number
+  smoothingTimeConstant: number
+  frequencyBinCount: number
+  getByteFrequencyData: ReturnType<typeof vi.fn>
+  connect: ReturnType<typeof vi.fn>
+}
+
 type FakeCompressor = {
   threshold: FakeAudioParam
   knee: FakeAudioParam
@@ -62,6 +70,7 @@ class FakeAudioContext {
   destination = {} as AudioDestinationNode
   filters: FakeFilter[] = []
   gains: FakeGain[] = []
+  analysers: FakeAnalyser[] = []
   compressors: FakeCompressor[] = []
   mediaDestinations: FakeMediaDestination[] = []
 
@@ -115,13 +124,15 @@ class FakeAudioContext {
   }
 
   createAnalyser() {
-    return {
+    const analyser: FakeAnalyser = {
       fftSize: 0,
       smoothingTimeConstant: 0,
       frequencyBinCount: 32,
       getByteFrequencyData: vi.fn(),
       connect: vi.fn(),
-    } as unknown as AnalyserNode
+    }
+    this.analysers.push(analyser)
+    return analyser as unknown as AnalyserNode
   }
 
   createGain() {
@@ -156,6 +167,60 @@ function createAudioElement() {
 
 function Harness({ onUpdate }: { onUpdate: (mixer: Mixer) => void }) {
   const mixer = useDjMixer()
+  useLayoutEffect(() => {
+    onUpdate(mixer)
+  })
+  return null
+}
+
+function createEventAudioElement() {
+  const audio = new EventTarget() as EventTarget & HTMLAudioElement
+  let paused = true
+  Object.assign(audio, {
+    preservesPitch: true,
+    duration: 180,
+    currentTime: 0,
+    playbackRate: 1,
+    src: '',
+    loop: false,
+    load: vi.fn(),
+  })
+  Object.defineProperty(audio, 'paused', {
+    configurable: true,
+    get: () => paused,
+  })
+  audio.play = vi.fn(async () => {
+    if (!paused) return
+    paused = false
+    audio.dispatchEvent(new Event('play'))
+  })
+  audio.pause = vi.fn(() => {
+    if (paused) return
+    paused = true
+    audio.dispatchEvent(new Event('pause'))
+  })
+  return audio
+}
+
+function MeterHarness({
+  audioA,
+  audioB,
+  onUpdate,
+}: {
+  audioA: HTMLAudioElement
+  audioB: HTMLAudioElement
+  onUpdate: (mixer: Mixer) => void
+}) {
+  const mixer = useDjMixer()
+  const { setAudioElement } = mixer
+  useLayoutEffect(() => {
+    setAudioElement('a', audioA)
+    setAudioElement('b', audioB)
+    return () => {
+      setAudioElement('a', null)
+      setAudioElement('b', null)
+    }
+  }, [audioA, audioB, setAudioElement])
   useLayoutEffect(() => {
     onUpdate(mixer)
   })
@@ -604,5 +669,199 @@ describe('DJ mixer filter gesture integration', () => {
     await expect(pendingCapture).rejects.toThrow('The master mix is no longer available.')
     expect(context.mediaDestinations).toHaveLength(0)
     expect(context.close).toHaveBeenCalledOnce()
+  })
+})
+
+describe('DJ mixer meter lifecycle', () => {
+  let root: Root
+  let container: HTMLDivElement
+  let current: Mixer
+  let mounted: boolean
+  let hidden: boolean
+  let nextAnimationId: number
+  let animationFrames: Map<number, FrameRequestCallback>
+  let requestFrame: ReturnType<typeof vi.fn>
+  let cancelFrame: ReturnType<typeof vi.fn>
+  let originalHiddenDescriptor: PropertyDescriptor | undefined
+  let audioA: HTMLAudioElement
+  let audioB: HTMLAudioElement
+
+  beforeEach(async () => {
+    FakeAudioContext.instances = []
+    Object.defineProperty(globalThis, 'AudioContext', {
+      configurable: true,
+      value: FakeAudioContext,
+    })
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn((file: File) => `blob:${file.name}`),
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    })
+
+    hidden = false
+    originalHiddenDescriptor = Object.getOwnPropertyDescriptor(document, 'hidden')
+    Object.defineProperty(document, 'hidden', {
+      configurable: true,
+      get: () => hidden,
+    })
+
+    nextAnimationId = 1
+    animationFrames = new Map()
+    requestFrame = vi.fn((callback: FrameRequestCallback) => {
+      const id = nextAnimationId++
+      animationFrames.set(id, callback)
+      return id
+    })
+    cancelFrame = vi.fn((id: number) => {
+      animationFrames.delete(id)
+    })
+    vi.stubGlobal('requestAnimationFrame', requestFrame)
+    vi.stubGlobal('cancelAnimationFrame', cancelFrame)
+    ;(
+      globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+    ).IS_REACT_ACT_ENVIRONMENT = true
+
+    audioA = createEventAudioElement()
+    audioB = createEventAudioElement()
+    container = document.createElement('div')
+    root = createRoot(container)
+    mounted = true
+    await act(async () => {
+      root.render(
+        <MeterHarness
+          audioA={audioA}
+          audioB={audioB}
+          onUpdate={(mixer) => (current = mixer)}
+        />,
+      )
+    })
+    await act(async () => {
+      await Promise.all([
+        current.loadFile('a', new File(['a'], 'a.wav', { type: 'audio/wav' }), {
+          knownBpm: 120,
+        }),
+        current.loadFile('b', new File(['b'], 'b.wav', { type: 'audio/wav' }), {
+          knownBpm: 126,
+        }),
+      ])
+    })
+  })
+
+  afterEach(async () => {
+    if (mounted) await act(async () => root.unmount())
+    container.remove()
+    if (originalHiddenDescriptor) {
+      Object.defineProperty(document, 'hidden', originalHiddenDescriptor)
+    } else {
+      Reflect.deleteProperty(document, 'hidden')
+    }
+    vi.unstubAllGlobals()
+  })
+
+  function runNextAnimationFrame(now: number) {
+    const entry = animationFrames.entries().next().value as
+      | [number, FrameRequestCallback]
+      | undefined
+    if (!entry) throw new Error('Expected a pending meter animation frame.')
+    animationFrames.delete(entry[0])
+    act(() => entry[1](now))
+  }
+
+  function setDocumentHidden(nextHidden: boolean) {
+    hidden = nextHidden
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+  }
+
+  it('runs only while at least one deck is playing and preserves the sampling cadence', async () => {
+    expect(animationFrames.size).toBe(0)
+
+    await act(async () => current.togglePlayback('a'))
+    expect(current.decks.a.playing).toBe(true)
+    expect(animationFrames.size).toBe(1)
+
+    await act(async () => current.togglePlayback('b'))
+    expect(current.decks.b.playing).toBe(true)
+    expect(animationFrames.size).toBe(1)
+
+    const context = FakeAudioContext.instances[0]
+    expect(context.analysers).toHaveLength(2)
+    for (const analyser of context.analysers) {
+      analyser.getByteFrequencyData.mockImplementation((bins: Uint8Array) => bins.fill(255))
+    }
+    runNextAnimationFrame(40)
+    expect(context.analysers.every((analyser) => analyser.getByteFrequencyData.mock.calls.length === 0)).toBe(
+      true,
+    )
+    expect(animationFrames.size).toBe(1)
+
+    runNextAnimationFrame(100)
+    expect(context.analysers.every((analyser) => analyser.getByteFrequencyData.mock.calls.length === 1)).toBe(
+      true,
+    )
+    expect(current.decks.a.audioLevel).toBe(100)
+    expect(current.decks.b.audioLevel).toBe(100)
+    expect(animationFrames.size).toBe(1)
+
+    await act(async () => current.togglePlayback('a'))
+    expect(current.decks.a.playing).toBe(false)
+    expect(current.decks.b.playing).toBe(true)
+    expect(animationFrames.size).toBe(1)
+
+    await act(async () => current.togglePlayback('b'))
+    expect(current.decks.b.playing).toBe(false)
+    expect(animationFrames.size).toBe(0)
+    expect(current.decks.a.audioLevel).toBe(0)
+    expect(current.decks.b.audioLevel).toBe(0)
+
+    await act(async () => current.togglePlayback('a'))
+    expect(current.decks.a.playing).toBe(true)
+    expect(animationFrames.size).toBe(1)
+  })
+
+  it('sleeps while hidden and resumes only when a deck is still playing', async () => {
+    await act(async () => current.togglePlayback('a'))
+    expect(animationFrames.size).toBe(1)
+
+    setDocumentHidden(true)
+    expect(animationFrames.size).toBe(0)
+    const requestsBeforeResume = requestFrame.mock.calls.length
+
+    setDocumentHidden(false)
+    expect(requestFrame).toHaveBeenCalledTimes(requestsBeforeResume + 1)
+    expect(animationFrames.size).toBe(1)
+
+    runNextAnimationFrame(100)
+    expect(FakeAudioContext.instances[0].analysers[0].getByteFrequencyData).toHaveBeenCalledOnce()
+
+    setDocumentHidden(true)
+    await act(async () => current.togglePlayback('a'))
+    expect(current.decks.a.playing).toBe(false)
+    expect(animationFrames.size).toBe(0)
+
+    const requestsWhilePaused = requestFrame.mock.calls.length
+    setDocumentHidden(false)
+    expect(requestFrame).toHaveBeenCalledTimes(requestsWhilePaused)
+    expect(animationFrames.size).toBe(0)
+  })
+
+  it('cancels the pending frame and visibility subscription on unmount', async () => {
+    await act(async () => current.togglePlayback('a'))
+    const pendingFrame = animationFrames.keys().next().value as number | undefined
+    expect(pendingFrame).toBeDefined()
+
+    const requestsBeforeUnmount = requestFrame.mock.calls.length
+    await act(async () => root.unmount())
+    mounted = false
+
+    expect(cancelFrame).toHaveBeenCalledWith(pendingFrame)
+    expect(animationFrames.size).toBe(0)
+
+    setDocumentHidden(true)
+    setDocumentHidden(false)
+    audioA.dispatchEvent(new Event('play'))
+    expect(requestFrame).toHaveBeenCalledTimes(requestsBeforeUnmount)
   })
 })

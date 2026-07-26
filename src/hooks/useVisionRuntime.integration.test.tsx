@@ -335,6 +335,95 @@ describe('vision runtime camera lifecycle integration', () => {
     ])
   })
 
+  it('keeps tracking when a fresh video timestamp arrives after a slow frame', async () => {
+    const video = createVideo()
+    const { canvas } = createCanvas()
+
+    await act(async () => {
+      runtime.setVideoElement(video)
+      runtime.setCanvasElement(canvas)
+      await runtime.start()
+    })
+    const gestureCallsAfterStart = vi.mocked(onGestureFrame).mock.calls.length
+
+    await act(async () => {
+      vi.advanceTimersByTime(500)
+      const duplicateFrame = animationFrames.entries().next().value as
+        | [number, FrameRequestCallback]
+        | undefined
+      if (!duplicateFrame) throw new Error('The running camera should request another frame.')
+      animationFrames.delete(duplicateFrame[0])
+      duplicateFrame[1](performance.now())
+    })
+    expect(runtime.status).toBe('running')
+    expect(onGestureFrame).toHaveBeenCalledTimes(gestureCallsAfterStart)
+
+    video.currentTime += 1 / 30
+    await act(async () => {
+      vi.advanceTimersByTime(700)
+      const freshFrame = animationFrames.entries().next().value as
+        | [number, FrameRequestCallback]
+        | undefined
+      if (!freshFrame) throw new Error('The running camera should request another frame.')
+      animationFrames.delete(freshFrame[0])
+      freshFrame[1](performance.now())
+    })
+
+    expect(runtime.status).toBe('running')
+    expect(streams[0].track.stop).not.toHaveBeenCalled()
+    expect(onGestureFrame).toHaveBeenCalledTimes(gestureCallsAfterStart + 1)
+    expect(onGestureFrame).toHaveBeenLastCalledWith(expect.objectContaining({ detected: true }))
+  })
+
+  it('releases gesture control once and exposes a recoverable error when video frames freeze', async () => {
+    const video = createVideo()
+    const { canvas } = createCanvas()
+
+    await act(async () => {
+      runtime.setVideoElement(video)
+      runtime.setCanvasElement(canvas)
+      await runtime.start()
+    })
+    expect(onGestureFrame).toHaveBeenLastCalledWith(expect.objectContaining({ detected: true }))
+    const gestureCallsAfterStart = vi.mocked(onGestureFrame).mock.calls.length
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_000)
+      const frozenFrame = animationFrames.entries().next().value as
+        | [number, FrameRequestCallback]
+        | undefined
+      if (!frozenFrame) throw new Error('The running camera should request another frame.')
+      animationFrames.delete(frozenFrame[0])
+      frozenFrame[1](performance.now())
+    })
+
+    expect(runtime.status).toBe('error')
+    expect(runtime.message).toBe(
+      'Camera frames stopped updating. Gesture controls were released; start the camera to reconnect.',
+    )
+    expect(streams[0].track.stop).toHaveBeenCalledTimes(1)
+    expect(video.srcObject).toBeNull()
+    expect(animationFrames.size).toBe(0)
+    expect(onGestureFrame).toHaveBeenCalledTimes(gestureCallsAfterStart + 1)
+    expect(onGestureFrame).toHaveBeenLastCalledWith({
+      detected: false,
+      x: 0.5,
+      y: 0.5,
+      wristAngle: 0,
+      openFingers: 0,
+    })
+
+    await act(async () => {
+      vi.advanceTimersByTime(5_000)
+    })
+    expect(onGestureFrame).toHaveBeenCalledTimes(gestureCallsAfterStart + 1)
+
+    await act(async () => runtime.start())
+    expect(runtime.status).toBe('running')
+    expect(video.srcObject).toBe(streams[1].stream)
+    expect(onGestureFrame).toHaveBeenLastCalledWith(expect.objectContaining({ detected: true }))
+  })
+
   it('recovers onto the newly mounted camera view when the old play request aborts during startup', async () => {
     const pendingPlay = createDeferred()
     const videoA = createVideo()

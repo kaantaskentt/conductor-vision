@@ -311,6 +311,14 @@ describe('Ultra Vision app golden path', () => {
     expect(container.textContent).toContain('Tracks ready. Start the performance.')
     expect(buttonByName(container, 'Start performance')).toBeTruthy()
     expect(container.querySelector('.performance-bar')).toBeTruthy()
+    const deckAMeter = container.querySelector('meter[aria-label="Deck A audio level"]')
+    const masterAMeter = container.querySelector(
+      'meter[aria-label="Deck A master audio level"]',
+    )
+    expect(deckAMeter?.getAttribute('min')).toBe('0')
+    expect(deckAMeter?.getAttribute('max')).toBe('100')
+    expect(deckAMeter?.getAttribute('value')).toBe('0')
+    expect(masterAMeter?.getAttribute('value')).toBe('0')
 
     const filter = container.querySelector<HTMLInputElement>(
       'input[aria-label="Deck A bipolar filter"]',
@@ -596,6 +604,77 @@ describe('Ultra Vision app golden path', () => {
     expect(buttonByName(container, 'Start camera')).toBeTruthy()
     expect(track.stop).toHaveBeenCalledTimes(1)
     expect(container.textContent).toContain('Camera is off')
+  })
+
+  it('starts hand tracking without waiting for optional face analysis', async () => {
+    const { stream, track } = createStream()
+    getUserMedia.mockResolvedValue(stream)
+    let resolveFace!: (landmarker: {
+      detectForVideo: ReturnType<typeof vi.fn>
+      close: ReturnType<typeof vi.fn>
+    }) => void
+    const faceLandmarker = new Promise<{
+      detectForVideo: ReturnType<typeof vi.fn>
+      close: ReturnType<typeof vi.fn>
+    }>((resolve) => {
+      resolveFace = resolve
+    })
+    mediaPipe.createFace.mockReset().mockReturnValueOnce(faceLandmarker)
+
+    await act(async () => click(buttonByName(container, 'Vision')))
+    await act(async () => {
+      click(buttonByName(container, 'Start camera'))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(getUserMedia).toHaveBeenCalledTimes(1)
+    expect(buttonByName(container, 'Stop camera')).toBeTruthy()
+    expect(container.textContent).toContain('Hand tracking live · loading face tracking…')
+    expect(mediaPipe.createFace).toHaveBeenCalledTimes(1)
+    expect(mediaPipe.createFace.mock.results[0]?.value).toBe(faceLandmarker)
+
+    const detectFace = vi.fn(() => {
+      throw new Error('Optional face analysis failed.')
+    })
+    await act(async () => {
+      resolveFace({
+        detectForVideo: detectFace,
+        close: vi.fn(),
+      })
+      await faceLandmarker
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Live. Camera frames stay in this browser tab.')
+    const video = container.querySelector('video')
+    if (!video) throw new Error('Vision camera view was not rendered.')
+    Object.defineProperties(video, {
+      readyState: { configurable: true, value: HTMLMediaElement.HAVE_ENOUGH_DATA },
+      videoWidth: { configurable: true, value: 640 },
+      videoHeight: { configurable: true, value: 360 },
+    })
+    for (let frame = 1; frame <= 3 && detectFace.mock.calls.length === 0; frame += 1) {
+      Object.defineProperty(video, 'currentTime', {
+        configurable: true,
+        value: frame / 30,
+      })
+      await act(async () => {
+        animationQueue.shift()?.(performance.now() + frame * 34)
+        await Promise.resolve()
+      })
+    }
+    expect(detectFace).toHaveBeenCalledOnce()
+    expect(buttonByName(container, 'Stop camera')).toBeTruthy()
+    expect(container.textContent).toContain(
+      'Hand tracking is live. Face analysis paused; restart the camera to retry it.',
+    )
+
+    await act(async () => click(buttonByName(container, 'Stop camera')))
+    expect(track.stop).toHaveBeenCalledTimes(1)
   })
 
   it('preserves a manually adjusted filter when camera input was never engaged', async () => {

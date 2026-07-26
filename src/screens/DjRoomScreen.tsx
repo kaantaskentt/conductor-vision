@@ -444,7 +444,19 @@ function DeckPanel({
       </details>
 
       <div className="deck-footer">
-        <div className="mini-level" aria-label={`${deckLabel(id)} audio level ${deck.audioLevel}%`}>
+        <meter
+          className="sr-only"
+          aria-label={`${deckLabel(id)} audio level`}
+          min={0}
+          max={100}
+          value={deck.audioLevel}
+        >
+          {deck.audioLevel}%
+        </meter>
+        <div
+          className="mini-level"
+          aria-hidden="true"
+        >
           <i style={{ width: `${deck.audioLevel}%` }} />
         </div>
         <span>{deck.bpmStatus}</span>
@@ -473,7 +485,16 @@ function MixerConsole({ mixer }: { mixer: ReturnType<typeof useDjMixer> }) {
         {(['a', 'b'] as DeckId[]).map((id) => (
           <div key={id}>
             <span>{id.toUpperCase()}</span>
-            <div>
+            <meter
+              className="sr-only"
+              aria-label={`${deckLabel(id)} master audio level`}
+              min={0}
+              max={100}
+              value={mixer.decks[id].audioLevel}
+            >
+              {mixer.decks[id].audioLevel}%
+            </meter>
+            <div aria-hidden="true">
               {Array.from({ length: 12 }, (_, index) => (
                 <i
                   key={index}
@@ -705,18 +726,19 @@ function PerformanceBar({ mixer }: { mixer: ReturnType<typeof useDjMixer> }) {
   const deckButton = (id: DeckId) => {
     const deck = mixer.decks[id]
     const effectiveBpm = deck.bpm ? deck.bpm * (1 + deck.tempo / 100) : null
+    const bpmLabel = effectiveBpm ? `${effectiveBpm.toFixed(1)} BPM` : 'BPM pending'
     const playedRatio = deck.duration > 0 ? deck.currentTime / deck.duration : 0
     return (
       <button
         type="button"
         className={`performance-deck performance-deck-${id} ${deck.playing ? 'playing' : ''}`}
         onClick={() => void mixer.togglePlayback(id)}
-        aria-label={`${deck.playing ? 'Pause' : 'Play'} ${deckLabel(id)} from performance bar`}
+        aria-label={`${deck.playing ? 'Pause' : 'Play'} ${deckLabel(id)}, ${deck.name}, ${bpmLabel}, from performance bar`}
       >
         <b>{id.toUpperCase()}</b>
         <span>
           <strong>{deck.name}</strong>
-          <small>{effectiveBpm ? `${effectiveBpm.toFixed(1)} BPM` : 'BPM pending'}</small>
+          <small>{bpmLabel}</small>
         </span>
         {deck.playing ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
         <div className="performance-deck-waveform" aria-hidden="true">

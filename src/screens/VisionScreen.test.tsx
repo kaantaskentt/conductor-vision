@@ -206,11 +206,21 @@ describe('Pixel Studio preview failures', () => {
     const luminanceButton = Array.from(
       container.querySelectorAll<HTMLButtonElement>('.pixel-study-list button'),
     ).find((button) => button.textContent?.includes('Luminance map'))
-    if (!runButton || !luminanceButton) throw new Error('Pixel Studio controls were not rendered.')
+    const maskButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('.pixel-study-list button'),
+    ).find((button) => button.textContent?.includes('Color similarity'))
+    if (!runButton || !luminanceButton || !maskButton) {
+      throw new Error('Pixel Studio controls were not rendered.')
+    }
+
+    expect(maskButton.getAttribute('aria-pressed')).toBe('true')
+    expect(luminanceButton.getAttribute('aria-pressed')).toBe('false')
 
     await act(async () => runButton.click())
     await act(async () => luminanceButton.click())
     expect(runButton.textContent).toContain('Run study')
+    expect(maskButton.getAttribute('aria-pressed')).toBe('false')
+    expect(luminanceButton.getAttribute('aria-pressed')).toBe('true')
 
     await act(async () => {
       firstStudy.resolve('data:image/webp;base64,stale-mask')

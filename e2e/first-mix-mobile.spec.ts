@@ -39,6 +39,14 @@ test('mobile first mix keeps stage controls reachable without zooming out', asyn
   await expect(performanceBar).toBeInViewport()
   await expectNoHorizontalOverflow(page)
 
+  const deckA = performanceBar.getByRole('button', { name: /Play Deck A/ })
+  const deckB = performanceBar.getByRole('button', { name: /Play Deck B/ })
+  await expect(deckA).toHaveAccessibleName(/Play Deck A, Neon Pulse, 120\.0 BPM/)
+  await expect(deckB).toHaveAccessibleName(/Play Deck B, Midnight Circuit, 126\.0 BPM/)
+  for (const deck of [deckA, deckB]) {
+    expect(await deck.evaluate((button) => button.scrollWidth <= button.clientWidth)).toBe(true)
+  }
+
   await page.getByRole('button', { name: 'Play without camera' }).click()
   await expect.poll(() => page.locator('audio').evaluateAll((audio) =>
     audio.length === 2 && audio.every((track) => !(track as HTMLAudioElement).paused),
@@ -104,4 +112,19 @@ test('performance controls reflow at 320 CSS pixels', async ({ page }) => {
   expect(box!.x).toBeGreaterThanOrEqual(0)
   expect(box!.x + box!.width).toBeLessThanOrEqual(320)
   await expectNoHorizontalOverflow(page)
+})
+
+test('desktop first-mix progress labels remain fully visible', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.goto('/')
+
+  const progressLabels = page.locator('.first-mix-progress li > span:not(.sr-only)')
+  await expect(progressLabels).toHaveCount(3)
+  for (let index = 0; index < await progressLabels.count(); index += 1) {
+    const label = progressLabels.nth(index)
+    expect(
+      await label.evaluate((element) => element.scrollWidth <= element.clientWidth),
+      `progress label ${index + 1} should not be visually truncated`,
+    ).toBe(true)
+  }
 })

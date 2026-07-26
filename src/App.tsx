@@ -15,7 +15,15 @@ function App() {
   const [screen, setScreen] = useState<Screen>('dj-room')
   const [targetColor, setTargetColor] = useState<TargetColor>('purple')
   const mixer = useDjMixer()
-  const { handleGestureFrame, releaseGestureSession } = mixer
+  const { handleGestureFrame, releaseGestureSession, setAudioElement } = mixer
+  const setDeckAAudioElement = useCallback(
+    (element: HTMLAudioElement | null) => setAudioElement('a', element),
+    [setAudioElement],
+  )
+  const setDeckBAudioElement = useCallback(
+    (element: HTMLAudioElement | null) => setAudioElement('b', element),
+    [setAudioElement],
+  )
   const handleVisionGesture = useCallback(
     (frame: Parameters<typeof handleGestureFrame>[0]) => {
       if (screen === 'dj-room') handleGestureFrame(frame)
@@ -55,8 +63,8 @@ function App() {
 
   return (
     <div className="app">
-      <audio ref={(element) => mixer.setAudioElement('a', element)} preload="metadata" />
-      <audio ref={(element) => mixer.setAudioElement('b', element)} preload="metadata" />
+      <audio ref={setDeckAAudioElement} preload="metadata" />
+      <audio ref={setDeckBAudioElement} preload="metadata" />
       <AppHeader screen={screen} onScreenChange={setScreen} />
       <main id="main-content" className="app-main">
         {screen === 'vision' && (

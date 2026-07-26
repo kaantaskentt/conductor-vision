@@ -475,10 +475,25 @@ export function useDjMixer() {
     }
   }, [])
 
+  const stopMeter = useCallback(() => {
+    if (meterAnimationRef.current === null) return
+    cancelAnimationFrame(meterAnimationRef.current)
+    meterAnimationRef.current = null
+  }, [])
+
+  const shouldRunMeter = useCallback(
+    () =>
+      !document.hidden &&
+      DECK_IDS.some((id) => decksRef.current[id].playing),
+    [],
+  )
+
   const startMeter = useCallback(() => {
-    if (meterAnimationRef.current !== null) return
+    if (meterAnimationRef.current !== null || !shouldRunMeter()) return
     let lastUpdate = 0
     const update = (now: number) => {
+      meterAnimationRef.current = null
+      if (!shouldRunMeter()) return
       if (now - lastUpdate > 80) {
         for (const id of DECK_IDS) {
           const nodes = nodesRef.current[id]
@@ -502,7 +517,30 @@ export function useDjMixer() {
       meterAnimationRef.current = requestAnimationFrame(update)
     }
     meterAnimationRef.current = requestAnimationFrame(update)
+  }, [patchDeck, shouldRunMeter])
+
+  const clearMeterLevels = useCallback(() => {
+    for (const id of DECK_IDS) {
+      if (decksRef.current[id].audioLevel !== 0) patchDeck(id, { audioLevel: 0 })
+    }
   }, [patchDeck])
+
+  useEffect(() => {
+    if (decks.a.playing || decks.b.playing) startMeter()
+    else {
+      stopMeter()
+      clearMeterLevels()
+    }
+  }, [clearMeterLevels, decks.a.playing, decks.b.playing, startMeter, stopMeter])
+
+  useEffect(() => {
+    const syncMeterVisibility = () => {
+      if (document.hidden) stopMeter()
+      else startMeter()
+    }
+    document.addEventListener('visibilitychange', syncMeterVisibility)
+    return () => document.removeEventListener('visibilitychange', syncMeterVisibility)
+  }, [startMeter, stopMeter])
 
   const ensureDeckGraph = useCallback(
     async (id: DeckId) => {
@@ -558,11 +596,10 @@ export function useDjMixer() {
           crossfade,
           bins: new Uint8Array(analyser.frequencyBinCount),
         }
-        startMeter()
       }
       if (context.state === 'suspended') await context.resume()
     },
-    [startMeter],
+    [],
   )
 
   const createMasterCapture = useCallback(async (): Promise<MasterCaptureHandle> => {
@@ -1442,7 +1479,7 @@ export function useDjMixer() {
     return () => {
       captureGeneration.current += 1
       for (const id of DECK_IDS) bpmRequests[id] += 1
-      if (meterAnimationRef.current !== null) cancelAnimationFrame(meterAnimationRef.current)
+      stopMeter()
       if (filterReleaseTimerRef.current !== null) clearTimeout(filterReleaseTimerRef.current)
       for (const id of DECK_IDS) {
         if (objectUrls[id]) URL.revokeObjectURL(objectUrls[id] ?? '')
@@ -1452,7 +1489,7 @@ export function useDjMixer() {
       if (context && context.state !== 'closed') void context.close()
       masterNodeRef.current = null
     }
-  }, [])
+  }, [stopMeter])
 
   return {
     decks,

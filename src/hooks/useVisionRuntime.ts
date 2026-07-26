@@ -38,6 +38,8 @@ type VisionRuntimeOptions = {
 
 export const VISION_WASM_ROOT = '/vendor/mediapipe/tasks-vision/0.10.35/wasm'
 
+const CAMERA_FRAME_STALL_TIMEOUT_MS = 1_000
+
 export type VerifiedVisionModelAsset = Readonly<{
   label: string
   url: string
@@ -248,6 +250,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
   const animationRef = useRef<number | null>(null)
   const previousGrayRef = useRef<Uint8ClampedArray | null>(null)
   const lastFrameAtRef = useRef(performance.now())
+  const lastVideoAdvanceAtRef = useRef(performance.now())
   const lastUiUpdateRef = useRef(0)
   const frameCountRef = useRef(0)
   const runningRef = useRef(false)
@@ -455,6 +458,21 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
     [teardown],
   )
 
+  const failStalledCamera = useCallback(() => {
+    teardown(false)
+    gestureCallbackRef.current({
+      detected: false,
+      x: 0.5,
+      y: 0.5,
+      wristAngle: 0,
+      openFingers: 0,
+    })
+    setStatus('error')
+    setMessage(
+      'Camera frames stopped updating. Gesture controls were released; start the camera to reconnect.',
+    )
+  }, [teardown])
+
   const predictLoop = useCallback(() => {
     if (!runningRef.current) return
 
@@ -462,18 +480,32 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
     const canvas = overlayLifecycleRef.current.canvas
     const hands = handLandmarkerRef.current
 
-    if (!video || !canvas || !hands || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+    if (!video || !canvas || !hands) {
+      animationRef.current = requestAnimationFrame(predictLoop)
+      return
+    }
+
+    const now = performance.now()
+    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      if (now - lastVideoAdvanceAtRef.current >= CAMERA_FRAME_STALL_TIMEOUT_MS) {
+        failStalledCamera()
+        return
+      }
       animationRef.current = requestAnimationFrame(predictLoop)
       return
     }
 
     if (!claimCameraVideoFrame(overlayLifecycleRef.current, video.currentTime)) {
+      if (now - lastVideoAdvanceAtRef.current >= CAMERA_FRAME_STALL_TIMEOUT_MS) {
+        failStalledCamera()
+        return
+      }
       animationRef.current = requestAnimationFrame(predictLoop)
       return
     }
+    lastVideoAdvanceAtRef.current = now
 
     try {
-      const now = performance.now()
       const sourceWidth = video.videoWidth || 1280
       const sourceHeight = video.videoHeight || 720
       if (canvas.width !== sourceWidth) canvas.width = sourceWidth
@@ -486,10 +518,21 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
       context.clearRect(0, 0, sourceWidth, sourceHeight)
 
       const handResult = hands.detectForVideo(video, now)
-      const faceResult =
-        enableFaceRef.current && faceLandmarkerRef.current
-          ? faceLandmarkerRef.current.detectForVideo(video, now)
-          : null
+      let faceResult: ReturnType<FaceLandmarker['detectForVideo']> | null = null
+      const faceLandmarker = enableFaceRef.current ? faceLandmarkerRef.current : null
+      if (faceLandmarker) {
+        try {
+          faceResult = faceLandmarker.detectForVideo(video, now)
+        } catch {
+          if (faceLandmarkerRef.current === faceLandmarker) faceLandmarkerRef.current = null
+          try {
+            faceLandmarker.close()
+          } catch {
+            // Hand tracking remains available even if optional face cleanup fails.
+          }
+          setMessage('Hand tracking is live. Face analysis paused; restart the camera to retry it.')
+        }
+      }
       const handSummaries = summarizeHands(handResult)
       const faceSummary = faceResult
         ? summarizeFace(faceResult)
@@ -599,7 +642,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
       setStatus('error')
       setMessage('Vision paused after a processing error. Start the camera to try again.')
     }
-  }, [teardown])
+  }, [failStalledCamera, teardown])
 
   const start = useCallback(async () => {
     if (loadingRef.current || runningRef.current) return
@@ -609,7 +652,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
     setStatus('loading')
     setMessage(
       enableFaceRef.current
-        ? 'Loading hand and face tracking before the camera opens…'
+        ? 'Loading hand tracking first. Face analysis joins after the camera starts…'
         : 'Loading hand tracking before the camera opens…',
     )
 
@@ -618,10 +661,9 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
         throw new DOMException('Camera API unavailable.', 'NotSupportedError')
       }
       await getHandLandmarker()
-      if (enableFaceRef.current) await getFaceLandmarker()
       if (requestId !== startRequestRef.current || disposedRef.current) return
 
-      setMessage('Models ready · requesting camera permission…')
+      setMessage('Hand tracking ready · requesting camera permission…')
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: 'user',
@@ -664,6 +706,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
       loadingRef.current = false
       runningRef.current = true
       lastFrameAtRef.current = performance.now()
+      lastVideoAdvanceAtRef.current = lastFrameAtRef.current
       lastUiUpdateRef.current = 0
       setStatus('running')
       setMessage('Live. Camera frames stay in this browser tab.')

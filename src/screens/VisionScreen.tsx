@@ -214,6 +214,7 @@ function PixelStudio({ vision }: { vision: ReturnType<typeof useVisionRuntime> }
           <button
             type="button"
             className={study === 'mask' ? 'active' : ''}
+            aria-pressed={study === 'mask'}
             onClick={() => {
               cancelPendingStudy()
               setStudy('mask')
@@ -234,6 +235,7 @@ function PixelStudio({ vision }: { vision: ReturnType<typeof useVisionRuntime> }
           <button
             type="button"
             className={study === 'depth' ? 'active' : ''}
+            aria-pressed={study === 'depth'}
             onClick={() => {
               cancelPendingStudy()
               setStudy('depth')
