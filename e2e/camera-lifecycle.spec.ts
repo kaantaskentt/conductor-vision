@@ -157,7 +157,7 @@ test('production camera survives handoff, capture, stop, and restart', async ({ 
     await expect(page.locator('.pixel-source-chip')).toHaveText('Camera capture')
 
     await page.getByRole('button', { name: 'DJ Room', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Mix with your hands.' })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1, name: /mixed with/i })).toBeVisible()
     await expectLiveCamera(page)
     expect((await readCameraProbe(page)).streamId).toBe(djRoomProbe.streamId)
 
