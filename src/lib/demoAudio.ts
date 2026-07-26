@@ -4,6 +4,13 @@ export type DemoTrack = {
   title: string
 }
 
+export type DemoGenerationOptions = {
+  maxWorkMilliseconds?: number
+  now?: () => number
+  signal?: AbortSignal
+  yieldControl?: () => Promise<void>
+}
+
 const SAMPLE_RATE = 22_050
 const CHANNELS = 2
 const BITS_PER_SAMPLE = 16
@@ -13,6 +20,8 @@ const BEATS_PER_BAR = 4
 const DEMO_BARS = 12
 const PCM_MAX = 32_767
 const TAU = Math.PI * 2
+export const DEMO_AUDIO_WORK_BUDGET_MS = 8
+const DEMO_AUDIO_YIELD_CHECK_FRAMES = 256
 
 const BASS_PATTERNS: ReadonlyArray<ReadonlyArray<number | null>> = [
   [0, null, 0, 7, 3, null, 3, 7, 0, null, 10, 7, 3, 7, 10, null],
@@ -255,12 +264,24 @@ function assertTrackInputs(bpm: number, rootHz: number, seed: number) {
   }
 }
 
-export function createDemoTrack(
+type DemoTrackWriter = {
+  bpm: number
+  buffer: ArrayBuffer
+  durationSeconds: number
+  frame: Float64Array
+  rootHz: number
+  sampleCount: number
+  seed: number
+  title: string
+  view: DataView
+}
+
+function createDemoTrackWriter(
   title: string,
   bpm: number,
   rootHz: number,
   seed: number,
-): DemoTrack {
+): DemoTrackWriter {
   assertTrackInputs(bpm, rootHz, seed)
   const durationSeconds = (DEMO_BARS * BEATS_PER_BAR * 60) / bpm
   const sampleCount = Math.round(SAMPLE_RATE * durationSeconds)
@@ -282,37 +303,112 @@ export function createDemoTrack(
   writeAscii(view, 36, 'data')
   view.setUint32(40, dataBytes, true)
 
-  const frame = new Float64Array(CHANNELS)
-  for (let index = 0; index < sampleCount; index += 1) {
-    synthStereoFrame(
-      frame,
-      index,
-      index / SAMPLE_RATE,
-      durationSeconds,
-      bpm,
-      rootHz,
-      seed,
-    )
-    const frameOffset = 44 + index * BYTES_PER_FRAME
-    for (let channel = 0; channel < CHANNELS; channel += 1) {
-      const normalized = clamp(frame[channel], -1, 1)
-      view.setInt16(
-        frameOffset + channel * BYTES_PER_SAMPLE,
-        Math.round(normalized * PCM_MAX),
-        true,
-      )
-    }
-  }
-
-  const fileName = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.wav`
   return {
     bpm,
+    buffer,
+    durationSeconds,
+    frame: new Float64Array(CHANNELS),
+    rootHz,
+    sampleCount,
+    seed,
     title,
-    file: new File([buffer], fileName, {
+    view,
+  }
+}
+
+function writeDemoTrackFrame(writer: DemoTrackWriter, index: number) {
+  synthStereoFrame(
+    writer.frame,
+    index,
+    index / SAMPLE_RATE,
+    writer.durationSeconds,
+    writer.bpm,
+    writer.rootHz,
+    writer.seed,
+  )
+  const frameOffset = 44 + index * BYTES_PER_FRAME
+  for (let channel = 0; channel < CHANNELS; channel += 1) {
+    const normalized = clamp(writer.frame[channel], -1, 1)
+    writer.view.setInt16(
+      frameOffset + channel * BYTES_PER_SAMPLE,
+      Math.round(normalized * PCM_MAX),
+      true,
+    )
+  }
+}
+
+function finishDemoTrack(writer: DemoTrackWriter): DemoTrack {
+  const fileName = `${writer.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.wav`
+  return {
+    bpm: writer.bpm,
+    title: writer.title,
+    file: new File([writer.buffer], fileName, {
       type: 'audio/wav',
       lastModified: 0,
     }),
   }
+}
+
+function throwIfDemoGenerationAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return
+  if (signal.reason !== undefined) throw signal.reason
+  throw new DOMException('Demo generation was cancelled.', 'AbortError')
+}
+
+function yieldToMainThread() {
+  const browserScheduler = (
+    globalThis as typeof globalThis & {
+      scheduler?: { yield?: () => Promise<void> }
+    }
+  ).scheduler
+  if (typeof browserScheduler?.yield === 'function') return browserScheduler.yield()
+  return new Promise<void>((resolve) => setTimeout(resolve, 0))
+}
+
+export function createDemoTrack(
+  title: string,
+  bpm: number,
+  rootHz: number,
+  seed: number,
+): DemoTrack {
+  const writer = createDemoTrackWriter(title, bpm, rootHz, seed)
+  for (let index = 0; index < writer.sampleCount; index += 1) {
+    writeDemoTrackFrame(writer, index)
+  }
+  return finishDemoTrack(writer)
+}
+
+export async function createDemoTrackCooperatively(
+  title: string,
+  bpm: number,
+  rootHz: number,
+  seed: number,
+  options: DemoGenerationOptions = {},
+): Promise<DemoTrack> {
+  const maxWorkMilliseconds = options.maxWorkMilliseconds ?? DEMO_AUDIO_WORK_BUDGET_MS
+  if (!Number.isFinite(maxWorkMilliseconds) || maxWorkMilliseconds <= 0) {
+    throw new RangeError('Demo work budget must be a positive finite number.')
+  }
+
+  throwIfDemoGenerationAborted(options.signal)
+  const writer = createDemoTrackWriter(title, bpm, rootHz, seed)
+  const now = options.now ?? (() => performance.now())
+  const yieldControl = options.yieldControl ?? yieldToMainThread
+  let workStartedAt = now()
+
+  for (let index = 0; index < writer.sampleCount; index += 1) {
+    writeDemoTrackFrame(writer, index)
+    if ((index + 1) % DEMO_AUDIO_YIELD_CHECK_FRAMES !== 0) continue
+
+    throwIfDemoGenerationAborted(options.signal)
+    if (now() - workStartedAt < maxWorkMilliseconds) continue
+    await yieldControl()
+    throwIfDemoGenerationAborted(options.signal)
+    workStartedAt = now()
+  }
+
+  throwIfDemoGenerationAborted(options.signal)
+  return finishDemoTrack(writer)
 }
 
 export function createDemoTracks(): [DemoTrack, DemoTrack] {
@@ -320,4 +416,18 @@ export function createDemoTracks(): [DemoTrack, DemoTrack] {
     createDemoTrack('Neon Pulse', 120, 55, 8),
     createDemoTrack('Midnight Circuit', 126, 65.41, 19),
   ]
+}
+
+export async function createDemoTracksCooperatively(
+  options: DemoGenerationOptions = {},
+): Promise<[DemoTrack, DemoTrack]> {
+  const deckA = await createDemoTrackCooperatively('Neon Pulse', 120, 55, 8, options)
+  const deckB = await createDemoTrackCooperatively(
+    'Midnight Circuit',
+    126,
+    65.41,
+    19,
+    options,
+  )
+  return [deckA, deckB]
 }

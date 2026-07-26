@@ -10,6 +10,9 @@ const mediaPipe = vi.hoisted(() => ({
   createHand: vi.fn(),
   resolveFileset: vi.fn(),
 }))
+const demoAudio = vi.hoisted(() => ({
+  createDemoTracksCooperatively: vi.fn(),
+}))
 
 const HAND_MODEL_BYTES = 7_819_105
 const FACE_MODEL_BYTES = 3_758_596
@@ -25,6 +28,10 @@ vi.mock('@mediapipe/tasks-vision', () => ({
   FilesetResolver: { forVisionTasks: mediaPipe.resolveFileset },
   HandLandmarker: { HAND_CONNECTIONS: [], createFromOptions: mediaPipe.createHand },
   FaceLandmarker: { FACE_LANDMARKS_TESSELATION: [], createFromOptions: mediaPipe.createFace },
+}))
+
+vi.mock('./lib/demoAudio', () => ({
+  createDemoTracksCooperatively: demoAudio.createDemoTracksCooperatively,
 }))
 
 type FakeAudioParam = {
@@ -154,6 +161,19 @@ describe('Ultra Vision app golden path', () => {
       globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
     ).IS_REACT_ACT_ENVIRONMENT = true
     animationQueue = []
+    demoAudio.createDemoTracksCooperatively.mockReset()
+    demoAudio.createDemoTracksCooperatively.mockResolvedValue([
+      {
+        bpm: 120,
+        file: new File(['deck-a'], 'neon-pulse.wav', { type: 'audio/wav' }),
+        title: 'Neon Pulse',
+      },
+      {
+        bpm: 126,
+        file: new File(['deck-b'], 'midnight-circuit.wav', { type: 'audio/wav' }),
+        title: 'Midnight Circuit',
+      },
+    ])
     vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
       animationQueue.push(callback)
       return animationQueue.length
@@ -270,8 +290,7 @@ describe('Ultra Vision app golden path', () => {
     await act(async () => {
       click(buttonByName(container, 'Load instant demo'))
       animationQueue.shift()?.(16)
-      await Promise.resolve()
-      await Promise.resolve()
+      for (let index = 0; index < 8; index += 1) await Promise.resolve()
     })
   }
 
@@ -524,6 +543,34 @@ describe('Ultra Vision app golden path', () => {
     expect([...container.querySelectorAll('audio')].every((audio) => audio.paused)).toBe(true)
   })
 
+  it('cancels pending demo generation when the performer leaves DJ Room', async () => {
+    let generationSignal: AbortSignal | undefined
+    demoAudio.createDemoTracksCooperatively.mockImplementationOnce(
+      ({ signal }: { signal?: AbortSignal }) =>
+        new Promise((_, reject) => {
+          generationSignal = signal
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+        }),
+    )
+
+    await act(async () => {
+      click(buttonByName(container, 'Load instant demo'))
+      animationQueue.shift()?.(16)
+      for (let index = 0; index < 8; index += 1) await Promise.resolve()
+    })
+    expect(generationSignal?.aborted).toBe(false)
+
+    await act(async () => {
+      click(buttonByName(container, 'Vision'))
+      for (let index = 0; index < 4; index += 1) await Promise.resolve()
+    })
+
+    expect(generationSignal?.aborted).toBe(true)
+    expect(container.querySelector('h1')?.textContent).toBe(
+      'See what the camera understands.',
+    )
+  })
+
   it('keeps the essential manual mix controls together in the performance bar', async () => {
     await loadDemoSet()
 
@@ -586,6 +633,7 @@ describe('Ultra Vision app golden path', () => {
         facingMode: 'user',
         width: { ideal: 1280 },
         height: { ideal: 720 },
+        frameRate: { ideal: 30, max: 30 },
       },
       audio: false,
     })

@@ -1,9 +1,20 @@
+import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
-import { beforeAll, describe, expect, it } from 'vitest'
-import { createDemoTrack, createDemoTracks, type DemoTrack } from './demoAudio'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
+import {
+  createDemoTrack,
+  createDemoTrackCooperatively,
+  createDemoTracks,
+  createDemoTracksCooperatively,
+  type DemoTrack,
+} from './demoAudio'
 
 const WAV_HEADER_BYTES = 44
 const EXPECTED_BEATS = 48
+const EXPECTED_TRACK_HASHES = [
+  '8e5b505f8d6343140473f178ed6825d6971913b92bd857d3e232298eed822d03',
+  '0a42509451810628562c07361fa145118149ad7bbc41aec3c46566b7723f0fc4',
+]
 
 type WavInfo = {
   bitsPerSample: number
@@ -165,7 +176,78 @@ describe('generated demo audio', () => {
       .toBeLessThan(4_300_000)
     expect(elapsedMilliseconds).toBeLessThan(5_000)
     expect(regeneratedBuffers.map(sha256)).toEqual(buffers.map(sha256))
+    expect(regeneratedBuffers.map(sha256)).toEqual(EXPECTED_TRACK_HASHES)
   }, 15_000)
+
+  it('cooperatively creates byte-identical tracks while yielding control', async () => {
+    const yieldControl = vi.fn(() => Promise.resolve())
+    const cooperativeTracks = await createDemoTracksCooperatively({
+      maxWorkMilliseconds: 2,
+      yieldControl,
+    })
+    const cooperativeBuffers = await Promise.all(
+      cooperativeTracks.map((track) => track.file.arrayBuffer()),
+    )
+
+    expect(yieldControl).toHaveBeenCalled()
+    expect(cooperativeTracks.map(({ bpm, file, title }) => ({
+      bpm,
+      name: file.name,
+      size: file.size,
+      title,
+      type: file.type,
+    }))).toEqual(
+      tracks.map(({ bpm, file, title }) => ({
+        bpm,
+        name: file.name,
+        size: file.size,
+        title,
+        type: file.type,
+      })),
+    )
+    cooperativeBuffers.forEach((buffer, index) => {
+      expect(Buffer.compare(Buffer.from(buffer), Buffer.from(buffers[index]))).toBe(0)
+    })
+    expect(cooperativeBuffers.map(sha256)).toEqual(EXPECTED_TRACK_HASHES)
+  }, 15_000)
+
+  it('cancels before work and at the first cooperative boundary', async () => {
+    const cancelledBeforeStart = new AbortController()
+    const unusedYield = vi.fn(() => Promise.resolve())
+    cancelledBeforeStart.abort()
+
+    await expect(
+      createDemoTrackCooperatively('Cancelled', 120, 55, 8, {
+        signal: cancelledBeforeStart.signal,
+        yieldControl: unusedYield,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    expect(unusedYield).not.toHaveBeenCalled()
+
+    const cancelledAtBoundary = new AbortController()
+    const abortingYield = vi.fn(async () => cancelledAtBoundary.abort())
+    await expect(
+      createDemoTrackCooperatively('Cancelled', 120, 55, 8, {
+        maxWorkMilliseconds: 0.01,
+        signal: cancelledAtBoundary.signal,
+        yieldControl: abortingYield,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    expect(abortingYield).toHaveBeenCalledOnce()
+  })
+
+  it('propagates cooperative scheduler failures without returning partial audio', async () => {
+    const schedulerFailure = new Error('Scheduler unavailable')
+    const failingYield = vi.fn(() => Promise.reject(schedulerFailure))
+
+    await expect(
+      createDemoTrackCooperatively('Failure', 120, 55, 8, {
+        maxWorkMilliseconds: 0.01,
+        yieldControl: failingYield,
+      }),
+    ).rejects.toBe(schedulerFailure)
+    expect(failingYield).toHaveBeenCalledOnce()
+  })
 
   it('rejects out-of-range inputs before allocating audio', () => {
     expect(() => createDemoTrack('Too slow', 60, 55, 1)).toThrow(RangeError)
@@ -173,5 +255,20 @@ describe('generated demo audio', () => {
     expect(() => createDemoTrack('Bad seed', 120, 55, Number.NaN)).toThrow(
       RangeError,
     )
+  })
+
+  it('rejects invalid cooperative inputs before scheduling work', async () => {
+    const yieldControl = vi.fn(() => Promise.resolve())
+
+    await expect(
+      createDemoTrackCooperatively('Too slow', 60, 55, 1, { yieldControl }),
+    ).rejects.toBeInstanceOf(RangeError)
+    await expect(
+      createDemoTrackCooperatively('Bad budget', 120, 55, 1, {
+        maxWorkMilliseconds: 0,
+        yieldControl,
+      }),
+    ).rejects.toBeInstanceOf(RangeError)
+    expect(yieldControl).not.toHaveBeenCalled()
   })
 })

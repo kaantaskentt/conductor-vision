@@ -15,7 +15,12 @@ function App() {
   const [screen, setScreen] = useState<Screen>('dj-room')
   const [targetColor, setTargetColor] = useState<TargetColor>('purple')
   const mixer = useDjMixer()
-  const { handleGestureFrame, releaseGestureSession, setAudioElement } = mixer
+  const {
+    cancelDemoMix,
+    handleGestureFrame,
+    releaseGestureSession,
+    setAudioElement,
+  } = mixer
   const setDeckAAudioElement = useCallback(
     (element: HTMLAudioElement | null) => setAudioElement('a', element),
     [setAudioElement],
@@ -45,6 +50,7 @@ function App() {
     previousCameraStatusRef.current = vision.status
 
     if (previousScreen === 'dj-room' && screen === 'vision') {
+      cancelDemoMix()
       releaseGestureSession('left-dj-room')
     } else if (
       screen === 'dj-room' &&
@@ -55,7 +61,7 @@ function App() {
     } else if (screen === 'dj-room' && vision.status === 'error') {
       releaseGestureSession('camera-error')
     }
-  }, [releaseGestureSession, screen, vision.status])
+  }, [cancelDemoMix, releaseGestureSession, screen, vision.status])
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' })

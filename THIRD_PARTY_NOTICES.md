@@ -8,6 +8,7 @@ Ultra Vision application code is MIT licensed. Dependencies and model assets kee
 - **MediaPipe Tasks Vision** — Apache License 2.0. The lock-pinned browser WASM files are served unchanged from this repository.
 - **MediaPipe hand and face model bundles** — fetched from their exact Google-hosted upstream object URLs, verified by expected byte length and SHA-256 before use, and not redistributed in this repository because the object URLs provide no model-specific license statement.
 - **Lucide** — ISC License.
+- **axe-core and @axe-core/playwright** — MPL 2.0 development-only accessibility testing.
 - **Vite, TypeScript, Vitest, and Oxlint** — development tooling under their respective open-source licenses.
 
 Exact dependency versions are recorded in `package-lock.json`.

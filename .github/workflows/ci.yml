@@ -46,10 +46,10 @@ jobs:
         if: matrix.node-version == '22.12.0'
         run: npm audit --audit-level=high
 
-  camera:
-    name: Camera lifecycle and mobile UX
+  browser:
+    name: Browser accessibility, camera, hand, and mobile UX
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
@@ -69,10 +69,10 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run production browser contracts
-        run: npm run test:camera
+      - name: Run production browser and accessibility contracts
+        run: npm run test:browser
 
-      - name: Upload camera diagnostics
+      - name: Upload browser diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

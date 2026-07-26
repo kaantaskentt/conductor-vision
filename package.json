@@ -26,15 +26,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/check-bundle-budget.mjs",
     "check": "npm run test:coverage && npm run lint && npm run build && npm audit --audit-level=high",
     "lint": "oxlint --deny-warnings --ignore-pattern \"public/vendor/**\"",
     "preview": "vite preview",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:browser": "playwright test --project=chromium-camera --project=chromium-open-palm --project=chromium-accessibility",
     "test:camera": "playwright test --project=chromium-camera",
     "test:camera:hand": "playwright test --project=chromium-open-palm",
-    "test:camera:headed": "playwright test --project=chromium-camera --headed"
+    "test:camera:headed": "playwright test --project=chromium-camera --headed",
+    "test:accessibility": "playwright test --project=chromium-accessibility"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "0.10.35",
@@ -43,6 +45,7 @@
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
     "@playwright/test": "1.62.0",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",

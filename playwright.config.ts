@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 
 const isCi = Boolean(process.env.CI)
 const openPalmFixture = fileURLToPath(
-  new URL('./e2e/fixtures/open-palm.mjpeg', import.meta.url),
+  new URL('./e2e/fixtures/open-palm.y4m', import.meta.url),
 )
 const cameraLaunchArgs = [
   '--use-fake-ui-for-media-stream',
@@ -20,6 +20,7 @@ export default defineConfig({
     '**/camera-lifecycle.spec.ts',
     '**/first-mix-mobile.spec.ts',
     '**/open-palm-gesture.spec.ts',
+    '**/accessibility.spec.ts',
   ],
   fullyParallel: false,
   workers: 1,
@@ -65,6 +66,14 @@ export default defineConfig({
             `--use-file-for-fake-video-capture=${openPalmFixture}`,
           ],
         },
+      },
+    },
+    {
+      name: 'chromium-accessibility',
+      testMatch: '**/accessibility.spec.ts',
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1280, height: 720 },
       },
     },
   ],

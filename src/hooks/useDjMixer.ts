@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { createDemoTracks } from '../lib/demoAudio'
 import { equalPowerCrossfade } from '../lib/djAudio'
 import {
   createFilterGestureState,
@@ -70,6 +69,7 @@ type LoadFileOptions = {
   knownBpm?: number
   title?: string
   loop?: boolean
+  demoGeneration?: AbortController
 }
 
 type PositionGesture = {
@@ -404,6 +404,7 @@ export function useDjMixer() {
   const nodesRef = useRef<Partial<Record<DeckId, DeckNodes>>>({})
   const meterAnimationRef = useRef<number | null>(null)
   const bpmRequestRef = useRef<Record<DeckId, number>>({ a: 0, b: 0 })
+  const demoGenerationRef = useRef<AbortController | null>(null)
   const bpmAnalysisQueueRef = useRef<ReturnType<typeof createBpmAnalysisQueue> | null>(null)
   const bpmAnalysisQueue =
     bpmAnalysisQueueRef.current ??
@@ -441,6 +442,16 @@ export function useDjMixer() {
   const setAudioElement = useCallback((id: DeckId, element: HTMLAudioElement | null) => {
     if (element) element.preservesPitch = true
     audioElementsRef.current[id] = element
+  }, [])
+
+  const cancelDemoMix = useCallback(() => {
+    const generation = demoGenerationRef.current
+    if (!generation) return
+    generation.abort()
+    if (demoGenerationRef.current === generation) {
+      demoGenerationRef.current = null
+      setDemoLoading(false)
+    }
   }, [])
 
   const cancelFilterRelease = useCallback(() => {
@@ -666,6 +677,12 @@ export function useDjMixer() {
   const loadFile = useCallback(
     async (id: DeckId, file?: File, options: LoadFileOptions = {}) => {
       if (!file) return false
+      if (
+        demoGenerationRef.current &&
+        options.demoGeneration !== demoGenerationRef.current
+      ) {
+        cancelDemoMix()
+      }
       try {
         validateAudioFile(file)
         const audio = audioElementsRef.current[id]
@@ -745,7 +762,7 @@ export function useDjMixer() {
         return false
       }
     },
-    [bpmAnalysisQueue, disarmGesture, patchDeck, resetDeckAudioParameters],
+    [bpmAnalysisQueue, cancelDemoMix, disarmGesture, patchDeck, resetDeckAudioParameters],
   )
 
   const togglePlayback = useCallback(
@@ -1090,7 +1107,9 @@ export function useDjMixer() {
   ])
 
   const loadDemoMix = useCallback(async () => {
-    if (demoLoading) return false
+    if (demoGenerationRef.current) return false
+    const generation = new AbortController()
+    demoGenerationRef.current = generation
     setDemoLoading(true)
     setGestureStatus('Building the local demo set…')
     try {
@@ -1098,19 +1117,28 @@ export function useDjMixer() {
         new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
         new Promise<void>((resolve) => setTimeout(resolve, 100)),
       ])
-      const [deckA, deckB] = createDemoTracks()
+      if (generation.signal.aborted) return false
+      const { createDemoTracksCooperatively } = await import('../lib/demoAudio')
+      if (generation.signal.aborted) return false
+      const [deckA, deckB] = await createDemoTracksCooperatively({
+        signal: generation.signal,
+      })
+      if (generation.signal.aborted) return false
       const loaded = await Promise.all([
         loadFile('a', deckA.file, {
           knownBpm: deckA.bpm,
           title: deckA.title,
           loop: true,
+          demoGeneration: generation,
         }),
         loadFile('b', deckB.file, {
           knownBpm: deckB.bpm,
           title: deckB.title,
           loop: true,
+          demoGeneration: generation,
         }),
       ])
+      if (generation.signal.aborted) return false
       if (!loaded.every(Boolean)) {
         setGestureStatus('The demo set could not load · try again')
         return false
@@ -1119,12 +1147,16 @@ export function useDjMixer() {
       setGestureStatus('Demo set loaded · press Start both, then open your hand')
       return true
     } catch {
+      if (generation.signal.aborted) return false
       setGestureStatus('The demo set could not be built · try again')
       return false
     } finally {
-      setDemoLoading(false)
+      if (demoGenerationRef.current === generation) {
+        demoGenerationRef.current = null
+        setDemoLoading(false)
+      }
     }
-  }, [demoLoading, loadFile, resetMix])
+  }, [loadFile, resetMix])
 
   const tapTempo = useCallback(
     (id: DeckId) => {
@@ -1474,11 +1506,14 @@ export function useDjMixer() {
   useEffect(() => {
     const objectUrls = objectUrlsRef.current
     const bpmRequests = bpmRequestRef.current
+    const demoGeneration = demoGenerationRef
     const captureReleases = masterCaptureReleasesRef.current
     const captureGeneration = captureGenerationRef
     return () => {
       captureGeneration.current += 1
       for (const id of DECK_IDS) bpmRequests[id] += 1
+      demoGeneration.current?.abort()
+      demoGeneration.current = null
       stopMeter()
       if (filterReleaseTimerRef.current !== null) clearTimeout(filterReleaseTimerRef.current)
       for (const id of DECK_IDS) {
@@ -1506,6 +1541,7 @@ export function useDjMixer() {
     bpmSyncTarget: bpmSync?.targetId ?? null,
     createMasterCapture,
     setAudioElement,
+    cancelDemoMix,
     loadFile,
     loadDemoMix,
     togglePlayback,

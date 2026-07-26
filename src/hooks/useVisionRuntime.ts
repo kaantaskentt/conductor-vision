@@ -1,7 +1,6 @@
-import {
+import type {
   DrawingUtils,
   FaceLandmarker,
-  FilesetResolver,
   HandLandmarker,
 } from '@mediapipe/tasks-vision'
 import {
@@ -39,6 +38,7 @@ type VisionRuntimeOptions = {
 export const VISION_WASM_ROOT = '/vendor/mediapipe/tasks-vision/0.10.35/wasm'
 
 const CAMERA_FRAME_STALL_TIMEOUT_MS = 1_000
+const CAMERA_INFERENCE_INTERVAL_MS = 1_000 / 30
 
 export type VerifiedVisionModelAsset = Readonly<{
   label: string
@@ -65,7 +65,22 @@ type VisionModelResponse = Pick<Response, 'ok' | 'status' | 'arrayBuffer'>
 type VisionModelFetcher = (url: string, init: RequestInit) => Promise<VisionModelResponse>
 
 const verifiedModelPromises = new Map<string, Promise<Uint8Array<ArrayBuffer>>>()
-type VisionFileset = Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>
+type VisionTasksModule = typeof import('@mediapipe/tasks-vision')
+type VisionFileset = Awaited<
+  ReturnType<VisionTasksModule['FilesetResolver']['forVisionTasks']>
+>
+let visionTasksModulePromise: Promise<VisionTasksModule> | null = null
+
+export function getVisionTasksModule() {
+  if (visionTasksModulePromise) return visionTasksModulePromise
+
+  const request = import('@mediapipe/tasks-vision')
+  visionTasksModulePromise = request
+  void request.catch(() => {
+    if (visionTasksModulePromise === request) visionTasksModulePromise = null
+  })
+  return request
+}
 
 export class VisionModelAssetError extends Error {
   constructor(message: string) {
@@ -187,7 +202,7 @@ export function cameraErrorMessage(
   return 'The camera could not start. Refresh the page and try again.'
 }
 
-async function createHandLandmarker(vision: VisionFileset) {
+async function createHandLandmarker(tasks: VisionTasksModule, vision: VisionFileset) {
   const modelAssetBuffer = await getVerifiedVisionModel(HAND_MODEL)
   const options = {
     baseOptions: { modelAssetBuffer: modelAssetBuffer.slice(), delegate: 'GPU' as const },
@@ -198,16 +213,16 @@ async function createHandLandmarker(vision: VisionFileset) {
     minTrackingConfidence: 0.38,
   }
   try {
-    return await HandLandmarker.createFromOptions(vision, options)
+    return await tasks.HandLandmarker.createFromOptions(vision, options)
   } catch {
-    return HandLandmarker.createFromOptions(vision, {
+    return tasks.HandLandmarker.createFromOptions(vision, {
       ...options,
       baseOptions: { modelAssetBuffer: modelAssetBuffer.slice(), delegate: 'CPU' },
     })
   }
 }
 
-async function createFaceLandmarker(vision: VisionFileset) {
+async function createFaceLandmarker(tasks: VisionTasksModule, vision: VisionFileset) {
   const modelAssetBuffer = await getVerifiedVisionModel(FACE_MODEL)
   const options = {
     baseOptions: { modelAssetBuffer: modelAssetBuffer.slice(), delegate: 'GPU' as const },
@@ -219,9 +234,9 @@ async function createFaceLandmarker(vision: VisionFileset) {
     outputFaceBlendshapes: true,
   }
   try {
-    return await FaceLandmarker.createFromOptions(vision, options)
+    return await tasks.FaceLandmarker.createFromOptions(vision, options)
   } catch {
-    return FaceLandmarker.createFromOptions(vision, {
+    return tasks.FaceLandmarker.createFromOptions(vision, {
       ...options,
       baseOptions: { modelAssetBuffer: modelAssetBuffer.slice(), delegate: 'CPU' },
     })
@@ -243,6 +258,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
   const stoppedStreamsRef = useRef(new WeakSet<MediaStream>())
   const handLandmarkerRef = useRef<HandLandmarker | null>(null)
   const faceLandmarkerRef = useRef<FaceLandmarker | null>(null)
+  const visionTasksRef = useRef<VisionTasksModule | null>(null)
   const filesetRef = useRef<VisionFileset | null>(null)
   const filesetPromiseRef = useRef<Promise<VisionFileset> | null>(null)
   const handLoadPromiseRef = useRef<Promise<HandLandmarker> | null>(null)
@@ -251,6 +267,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
   const previousGrayRef = useRef<Uint8ClampedArray | null>(null)
   const lastFrameAtRef = useRef(performance.now())
   const lastVideoAdvanceAtRef = useRef(performance.now())
+  const lastInferenceAtRef = useRef(Number.NEGATIVE_INFINITY)
   const lastUiUpdateRef = useRef(0)
   const frameCountRef = useRef(0)
   const runningRef = useRef(false)
@@ -265,7 +282,11 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
   const getVisionFileset = useCallback(async () => {
     if (filesetRef.current) return filesetRef.current
     if (!filesetPromiseRef.current) {
-      filesetPromiseRef.current = FilesetResolver.forVisionTasks(VISION_WASM_ROOT)
+      filesetPromiseRef.current = getVisionTasksModule()
+        .then((tasks) => {
+          visionTasksRef.current = tasks
+          return tasks.FilesetResolver.forVisionTasks(VISION_WASM_ROOT)
+        })
         .then((fileset) => {
           filesetRef.current = fileset
           return fileset
@@ -281,7 +302,11 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
     if (handLandmarkerRef.current) return handLandmarkerRef.current
     if (!handLoadPromiseRef.current) {
       handLoadPromiseRef.current = getVisionFileset()
-        .then(createHandLandmarker)
+        .then((vision) => {
+          const tasks = visionTasksRef.current
+          if (!tasks) throw new Error('Vision runtime module is unavailable.')
+          return createHandLandmarker(tasks, vision)
+        })
         .then((landmarker) => {
           if (disposedRef.current) {
             landmarker.close()
@@ -301,7 +326,11 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
     if (faceLandmarkerRef.current) return faceLandmarkerRef.current
     if (!faceLoadPromiseRef.current) {
       faceLoadPromiseRef.current = getVisionFileset()
-        .then(createFaceLandmarker)
+        .then((vision) => {
+          const tasks = visionTasksRef.current
+          if (!tasks) throw new Error('Vision runtime module is unavailable.')
+          return createFaceLandmarker(tasks, vision)
+        })
         .then((landmarker) => {
           if (disposedRef.current) {
             landmarker.close()
@@ -352,6 +381,9 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
   }, [enableFace, getFaceLandmarker])
 
   const setCanvasElement = useCallback((element: HTMLCanvasElement | null) => {
+    if (overlayLifecycleRef.current.canvas !== element) {
+      lastInferenceAtRef.current = Number.NEGATIVE_INFINITY
+    }
     attachCameraOverlayCanvas(overlayLifecycleRef.current, element)
   }, [])
 
@@ -479,8 +511,9 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
     const video = videoLifecycleRef.current.element
     const canvas = overlayLifecycleRef.current.canvas
     const hands = handLandmarkerRef.current
+    const tasks = visionTasksRef.current
 
-    if (!video || !canvas || !hands) {
+    if (!video || !canvas || !hands || !tasks) {
       animationRef.current = requestAnimationFrame(predictLoop)
       return
     }
@@ -504,6 +537,11 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
       return
     }
     lastVideoAdvanceAtRef.current = now
+    if (now - lastInferenceAtRef.current < CAMERA_INFERENCE_INTERVAL_MS) {
+      animationRef.current = requestAnimationFrame(predictLoop)
+      return
+    }
+    lastInferenceAtRef.current = now
 
     try {
       const sourceWidth = video.videoWidth || 1280
@@ -540,10 +578,10 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
 
       const drawing = getCameraOverlayDrawing(
         overlayLifecycleRef.current,
-        () => new DrawingUtils(context),
+        () => new tasks.DrawingUtils(context),
       )
       handResult.landmarks.forEach((landmarks) => {
-        drawing.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS, {
+        drawing.drawConnectors(landmarks, tasks.HandLandmarker.HAND_CONNECTIONS, {
           color: '#7c4dff',
           lineWidth: 4,
         })
@@ -556,7 +594,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
       })
 
       faceResult?.faceLandmarks.forEach((landmarks) => {
-        drawing.drawConnectors(landmarks, FaceLandmarker.FACE_LANDMARKS_TESSELATION, {
+        drawing.drawConnectors(landmarks, tasks.FaceLandmarker.FACE_LANDMARKS_TESSELATION, {
           color: 'rgba(120, 217, 242, 0.32)',
           lineWidth: 1,
         })
@@ -669,6 +707,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
           facingMode: 'user',
           width: { ideal: 1280 },
           height: { ideal: 720 },
+          frameRate: { ideal: 30, max: 30 },
         },
         audio: false,
       })
@@ -707,6 +746,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
       runningRef.current = true
       lastFrameAtRef.current = performance.now()
       lastVideoAdvanceAtRef.current = lastFrameAtRef.current
+      lastInferenceAtRef.current = Number.NEGATIVE_INFINITY
       lastUiUpdateRef.current = 0
       setStatus('running')
       setMessage('Live. Camera frames stay in this browser tab.')

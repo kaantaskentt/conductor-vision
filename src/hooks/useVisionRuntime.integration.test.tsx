@@ -10,7 +10,9 @@ const mediaPipe = vi.hoisted(() => ({
   connectorContexts: [] as CanvasRenderingContext2D[],
   landmarkContexts: [] as CanvasRenderingContext2D[],
   closeHandLandmarker: vi.fn(),
+  createHandLandmarker: vi.fn(),
   detectHand: vi.fn(),
+  resolveFileset: vi.fn(),
 }))
 
 function hexBuffer(hex: string) {
@@ -38,16 +40,11 @@ vi.mock('@mediapipe/tasks-vision', () => {
   return {
     DrawingUtils,
     FilesetResolver: {
-      forVisionTasks: vi.fn(() => Promise.resolve({})),
+      forVisionTasks: mediaPipe.resolveFileset,
     },
     HandLandmarker: {
       HAND_CONNECTIONS: [],
-      createFromOptions: vi.fn(() =>
-        Promise.resolve({
-          close: mediaPipe.closeHandLandmarker,
-          detectForVideo: mediaPipe.detectHand,
-        }),
-      ),
+      createFromOptions: mediaPipe.createHandLandmarker,
     },
     FaceLandmarker: {
       FACE_LANDMARKS_TESSELATION: [],
@@ -186,6 +183,7 @@ describe('vision runtime camera lifecycle integration', () => {
   let streams: ReturnType<typeof createStream>[]
   let onGestureFrame: Parameters<typeof useVisionRuntime>[0]['onGestureFrame']
   let modelFetch: ReturnType<typeof vi.fn>
+  let getUserMedia: ReturnType<typeof vi.fn>
 
   beforeEach(async () => {
     vi.useFakeTimers()
@@ -193,6 +191,15 @@ describe('vision runtime camera lifecycle integration', () => {
     mediaPipe.connectorContexts.length = 0
     mediaPipe.landmarkContexts.length = 0
     mediaPipe.closeHandLandmarker.mockClear()
+    mediaPipe.resolveFileset.mockReset()
+    mediaPipe.resolveFileset.mockResolvedValue({})
+    mediaPipe.createHandLandmarker.mockReset()
+    mediaPipe.createHandLandmarker.mockImplementation(() =>
+      Promise.resolve({
+        close: mediaPipe.closeHandLandmarker,
+        detectForVideo: mediaPipe.detectHand,
+      }),
+    )
     mediaPipe.detectHand.mockReset()
     const landmarks = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.5, z: 0 }))
     mediaPipe.detectHand.mockReturnValue({
@@ -228,10 +235,11 @@ describe('vision runtime camera lifecycle integration', () => {
       },
     })
     let streamIndex = 0
+    getUserMedia = vi.fn(() => Promise.resolve(streams[streamIndex++].stream))
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
       value: {
-        getUserMedia: vi.fn(() => Promise.resolve(streams[streamIndex++].stream)),
+        getUserMedia,
       },
     })
 
@@ -296,6 +304,15 @@ describe('vision runtime camera lifecycle integration', () => {
     expect(mediaPipe.connectorContexts).toEqual([canvasA.context])
     expect(mediaPipe.landmarkContexts).toEqual([canvasA.context])
     expect(videoA.srcObject).toBe(streams[0].stream)
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({
+      video: {
+        facingMode: 'user',
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 30, max: 30 },
+      },
+      audio: false,
+    })
 
     await act(async () => {
       runtime.setVideoElement(null)
@@ -373,6 +390,79 @@ describe('vision runtime camera lifecycle integration', () => {
     expect(streams[0].track.stop).not.toHaveBeenCalled()
     expect(onGestureFrame).toHaveBeenCalledTimes(gestureCallsAfterStart + 1)
     expect(onGestureFrame).toHaveBeenLastCalledWith(expect.objectContaining({ detected: true }))
+  })
+
+  it('caps inference across the stall window, observes faster timestamps, then releases a freeze once', async () => {
+    const video = createVideo()
+    const { canvas } = createCanvas()
+
+    await act(async () => {
+      runtime.setVideoElement(video)
+      runtime.setCanvasElement(canvas)
+      await runtime.start()
+    })
+    expect(mediaPipe.detectHand).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      for (let index = 0; index < 66; index += 1) {
+        video.currentTime += 1 / 60
+        vi.advanceTimersByTime(17)
+        const frame = animationFrames.entries().next().value as
+          | [number, FrameRequestCallback]
+          | undefined
+        if (!frame) throw new Error('The running camera should request another frame.')
+        animationFrames.delete(frame[0])
+        frame[1](performance.now())
+      }
+    })
+
+    expect(mediaPipe.detectHand.mock.calls.length).toBeGreaterThanOrEqual(33)
+    expect(mediaPipe.detectHand.mock.calls.length).toBeLessThanOrEqual(35)
+    expect(runtime.status).toBe('running')
+    expect(streams[0].track.stop).not.toHaveBeenCalled()
+    const gestureCallsBeforeFreeze = vi.mocked(onGestureFrame).mock.calls.length
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_100)
+      const frozenFrame = animationFrames.entries().next().value as
+        | [number, FrameRequestCallback]
+        | undefined
+      if (!frozenFrame) throw new Error('The running camera should request another frame.')
+      animationFrames.delete(frozenFrame[0])
+      frozenFrame[1](performance.now())
+    })
+
+    expect(runtime.status).toBe('error')
+    expect(streams[0].track.stop).toHaveBeenCalledOnce()
+    expect(onGestureFrame).toHaveBeenCalledTimes(gestureCallsBeforeFreeze + 1)
+    expect(onGestureFrame).toHaveBeenLastCalledWith(expect.objectContaining({ detected: false }))
+  })
+
+  it('retries vision startup after the lazy fileset loader fails', async () => {
+    const video = createVideo()
+    const { canvas } = createCanvas()
+    mediaPipe.resolveFileset
+      .mockRejectedValueOnce(new Error('WASM unavailable'))
+      .mockResolvedValueOnce({})
+
+    await act(async () => {
+      runtime.setVideoElement(video)
+      runtime.setCanvasElement(canvas)
+      await runtime.start()
+    })
+
+    expect(runtime.status).toBe('error')
+    expect(runtime.message).toBe(
+      'The local vision runtime could not load. Check your connection and retry.',
+    )
+    expect(getUserMedia).not.toHaveBeenCalled()
+
+    await act(async () => runtime.start())
+
+    expect(mediaPipe.resolveFileset).toHaveBeenCalledTimes(2)
+    expect(getUserMedia).toHaveBeenCalledOnce()
+    expect(runtime.status).toBe('running')
+    expect(video.srcObject).toBe(streams[0].stream)
   })
 
   it('releases gesture control once and exposes a recoverable error when video frames freeze', async () => {
