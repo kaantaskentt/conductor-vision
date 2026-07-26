@@ -4,6 +4,7 @@ export type FirstMixReadinessInput = Readonly<{
   cameraMessage: string
   handDetected: boolean
   gesturePhase: 'locked' | 'calibrating' | 'armed'
+  gestureReleaseRequired: boolean
 }>
 
 export type FirstMixReadinessStepId = 'tracks' | 'camera' | 'gesture'
@@ -84,6 +85,7 @@ export function deriveFirstMixReadiness({
   cameraMessage,
   handDetected,
   gesturePhase,
+  gestureReleaseRequired,
 }: FirstMixReadinessInput): FirstMixReadinessStep[] {
   const tracksComplete = bothTracksLoaded
   const cameraRunning = cameraStatus === 'running'
@@ -122,13 +124,15 @@ export function deriveFirstMixReadiness({
     {
       id: 'gesture',
       state: sequentialState(gestureComplete, gestureActive),
-      label: 'Open hand',
+      label: gestureReleaseRequired ? 'Release hand' : 'Open hand',
       detail: gestureComplete
         ? 'The selected control is armed and follows your hand.'
         : !cameraComplete
           ? handDetected
             ? 'Hand found; finish the earlier steps before grabbing a control.'
             : 'Hand control begins after the camera is ready.'
+          : gestureReleaseRequired
+            ? 'Close your hand once to release the previous control, then open it again.'
           : handDetected
             ? gesturePhase === 'calibrating'
               ? 'Hand found. Hold steady while the selected control calibrates.'
@@ -148,6 +152,7 @@ export function deriveFirstMixExperience({
   deckALoaded,
   deckBLoaded,
   selectedControl,
+  gestureReleaseRequired,
 }: FirstMixExperienceInput): FirstMixExperience {
   if (cameraStatus === 'error') {
     return {
@@ -236,6 +241,17 @@ export function deriveFirstMixExperience({
       progress: 'Step 3 of 3',
       title: 'Raise one open palm',
       detail: 'Keep it inside the frame. Nothing moves until pickup is ready.',
+      primaryAction: null,
+      secondaryAction: null,
+    }
+  }
+
+  if (gestureReleaseRequired) {
+    return {
+      stage: 'hand',
+      progress: 'Safe handoff',
+      title: 'Close your hand once',
+      detail: 'Then open your palm to grab the newly selected control without a jump.',
       primaryAction: null,
       secondaryAction: null,
     }

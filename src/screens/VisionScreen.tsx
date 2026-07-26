@@ -327,9 +327,9 @@ function DetectionInspector({ analysis }: { analysis: VisionAnalysis }) {
       icon: ScanFace,
     },
     {
-      label: 'Motion',
+      label: 'Frame change',
       value: `${analysis.motionScore}`,
-      detail: analysis.motionDirection,
+      detail: analysis.changeRegion,
       icon: Activity,
     },
   ]
@@ -384,12 +384,16 @@ function MotionCard({ analysis }: { analysis: VisionAnalysis }) {
     <article className="detail-card motion-card">
       <div className="panel-heading">
         <div>
-          <span>Motion history</span>
-          <strong>{analysis.motionDirection}</strong>
+          <span>Frame-change history</span>
+          <strong>{analysis.changeRegion}</strong>
         </div>
-        <b>{analysis.motionChangedPercent}% changing</b>
+        <b>{analysis.motionChangedPercent}% pixels changing</b>
       </div>
-      <svg viewBox="0 0 100 48" preserveAspectRatio="none" aria-label="Recent motion level">
+      <svg
+        viewBox="0 0 100 48"
+        preserveAspectRatio="none"
+        aria-label="Recent frame-change level"
+      >
         <defs>
           <linearGradient id="motion-fill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#7c4dff" stopOpacity="0.45" />
@@ -465,7 +469,7 @@ export function VisionScreen({
       <PageIntro
         eyebrow="Vision"
         title="See what the camera understands."
-        description="Real-time hand landmarks, face signals, motion, and color sampling—processed locally in your browser."
+        description="Real-time hand landmarks, face signals, frame-change regions, and color sampling—processed locally in your browser."
         actions={<CameraActions status={vision.status} start={vision.start} stop={vision.stop} />}
       />
       <section className="vision-layout">

@@ -848,6 +848,13 @@ describe('Ultra Vision app golden path', () => {
     expect(buttonByName(container, 'Retry camera')).toBeTruthy()
 
     await act(async () => {
+      click(buttonByName(container, 'Vision'))
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain('Camera needs attention')
+    expect(buttonByName(container, 'Retry camera')).toBeTruthy()
+
+    await act(async () => {
       click(buttonByName(container, 'Retry camera'))
       await Promise.resolve()
       await Promise.resolve()

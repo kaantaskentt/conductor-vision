@@ -835,8 +835,12 @@ function GestureConsole({
           </strong>
         </div>
         <div className="gesture-heading-actions">
-          <span className={`gesture-state-pill ${mixer.gesturePhase}`}>
-            {mixer.gesturePhase === 'calibrating'
+          <span
+            className={`gesture-state-pill ${mixer.gestureReleaseRequired ? 'release-required' : mixer.gesturePhase}`}
+          >
+            {mixer.gestureReleaseRequired
+              ? 'Release hand'
+              : mixer.gesturePhase === 'calibrating'
               ? 'Calibrating'
               : mixer.gesturePhase === 'armed'
                 ? 'Armed'
@@ -874,8 +878,8 @@ function GestureConsole({
           <span>
             <SlidersHorizontal aria-hidden="true" />
             <span>
-              <strong>More Air Controls</strong>
-              <small>Choose deck, Volume, or Filter</small>
+              <strong>Choose Air Control</strong>
+              <small>Crossfader, Volume, or Filter</small>
             </span>
           </span>
           <ChevronDown aria-hidden="true" />
@@ -947,6 +951,7 @@ export function DjRoomScreen({
     cameraMessage: vision.message,
     handDetected: vision.analysis.hands.length > 0,
     gesturePhase: mixer.gesturePhase,
+    gestureReleaseRequired: mixer.gestureReleaseRequired,
   })
   const firstMixExperience = deriveFirstMixExperience({
     bothTracksLoaded,
@@ -954,6 +959,7 @@ export function DjRoomScreen({
     cameraMessage: vision.message,
     handDetected: vision.analysis.hands.length > 0,
     gesturePhase: mixer.gesturePhase,
+    gestureReleaseRequired: mixer.gestureReleaseRequired,
     anyPlaying,
     deckALoaded: mixer.decks.a.loaded,
     deckBLoaded: mixer.decks.b.loaded,

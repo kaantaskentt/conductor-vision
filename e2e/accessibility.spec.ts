@@ -93,6 +93,71 @@ test('camera-off Vision workspace meets WCAG A/AA', async ({ page }) => {
   await expectNoWcagViolations(page, 'Camera-off Vision workspace')
 })
 
+test('390px Vision permission error keeps its recovery visible', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.addInitScript(() => {
+    const auditWindow = window as Window & { __ultraVisionCameraAttempts?: number }
+    auditWindow.__ultraVisionCameraAttempts = 0
+    Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {
+      configurable: true,
+      value: () => {
+        auditWindow.__ultraVisionCameraAttempts =
+          (auditWindow.__ultraVisionCameraAttempts ?? 0) + 1
+        return Promise.reject(new DOMException('Denied by test', 'NotAllowedError'))
+      },
+    })
+  })
+  await page.goto('/')
+  await loadGeneratedDemo(page)
+  await page.getByRole('button', { name: 'Vision' }).click()
+  await page.getByRole('button', { name: 'Start camera' }).click()
+
+  const recoveryMessage = page.getByText(
+    'Camera permission was blocked. Allow access in your browser, then try again.',
+    { exact: true },
+  ).first()
+  await expect(page.locator('.camera-stage')).toHaveAttribute('data-camera-status', 'error')
+  await expect(recoveryMessage).toBeVisible()
+  const retry = page.getByRole('button', { name: 'Retry camera' })
+  await expect(retry).toBeVisible()
+  await expect.poll(() => page.evaluate(() =>
+    (window as Window & { __ultraVisionCameraAttempts?: number })
+      .__ultraVisionCameraAttempts ?? 0,
+  )).toBe(1)
+
+  await retry.click()
+  await expect.poll(() => page.evaluate(() =>
+    (window as Window & { __ultraVisionCameraAttempts?: number })
+      .__ultraVisionCameraAttempts ?? 0,
+  )).toBe(2)
+  await expect(page.locator('.camera-stage')).toHaveAttribute('data-camera-status', 'error')
+  await expect(recoveryMessage).toBeVisible()
+  await expectNoWcagViolations(page, '390px Vision permission error')
+  await page.getByRole('button', { name: 'DJ Room' }).click()
+  const djRecoveryMessage = page.locator('.dj-vision-layout .camera-empty p')
+  await expect(djRecoveryMessage).toHaveText(
+    'Camera permission was blocked. Allow access in your browser, then try again.',
+  )
+  await expect(djRecoveryMessage).toBeVisible()
+  const djRecoveryFit = await djRecoveryMessage.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      horizontalFit: element.scrollWidth <= element.clientWidth,
+      verticalFit: element.scrollHeight <= element.clientHeight,
+      whiteSpace: style.whiteSpace,
+      overflow: style.overflow,
+      overflowWrap: style.overflowWrap,
+    }
+  })
+  expect(djRecoveryFit, JSON.stringify(djRecoveryFit)).toMatchObject({
+    horizontalFit: true,
+    verticalFit: true,
+  })
+  await expectNoWcagViolations(page, '390px DJ Room permission error')
+})
+
 test('390px loaded-demo DJ Room meets WCAG A/AA', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')

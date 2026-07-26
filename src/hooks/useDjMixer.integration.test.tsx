@@ -473,6 +473,7 @@ describe('DJ mixer filter gesture integration', () => {
     await act(async () => current.resetControl('crossfader'))
     expect(current.crossfader).toBe(DJ_NEUTRAL_VALUES.crossfader)
     expect(current.gesturePhase).toBe('locked')
+    expect(current.gestureReleaseRequired).toBe(true)
 
     await act(async () => {
       vi.advanceTimersByTime(80)
@@ -481,8 +482,13 @@ describe('DJ mixer filter gesture integration', () => {
     expect(current.crossfader).toBe(DJ_NEUTRAL_VALUES.crossfader)
     expect(current.gestureStatus).toBe('Close your fist once, then open your palm to grab')
 
-    await act(async () => current.handleGestureFrame(closedHand()))
+    await act(async () => {
+      current.handleGestureFrame(closedHand())
+      vi.advanceTimersByTime(GESTURE_CLUTCH_FIST_RELEASE_MS)
+      current.handleGestureFrame(closedHand())
+    })
     expect(current.gestureStatus).toBe('Released · open your palm to grab the selected control')
+    expect(current.gestureReleaseRequired).toBe(false)
 
     await act(async () => current.handleGestureFrame(openHand(0, { x: 0.1 })))
     expect(current.crossfader).toBe(DJ_NEUTRAL_VALUES.crossfader)
@@ -495,6 +501,56 @@ describe('DJ mixer filter gesture integration', () => {
       current.handleGestureFrame(openHand(0, { x: 0.4 }))
     })
     expect(current.crossfader).toBeGreaterThan(0)
+  })
+
+  it('announces the required fist release immediately when switching an armed control', async () => {
+    await act(async () => current.selectControl('volume', 'a'))
+    await act(async () => current.handleGestureFrame(openHand(0, { y: 0.5 })))
+    expect(current.gesturePhase).toBe('armed')
+
+    await act(async () => current.selectControl('filter', 'a'))
+    expect(current.gesturePhase).toBe('locked')
+    expect(current.gestureReleaseRequired).toBe(true)
+    expect(current.gestureStatus).toBe(
+      'Close your fist once, then open your palm to grab the new control',
+    )
+
+    await act(async () => current.handleGestureFrame(noHand))
+    expect(current.gestureReleaseRequired).toBe(true)
+    expect(current.gestureStatus).toBe(
+      'Keep your hand out of view to release the previous control',
+    )
+
+    await act(async () => {
+      vi.advanceTimersByTime(GESTURE_CLUTCH_LOST_RELEASE_MS - 1)
+      current.handleGestureFrame(openHand(0.5))
+    })
+    expect(current.gestureReleaseRequired).toBe(true)
+    expect(current.gestureStatus).toBe('Close your fist once, then open your palm to grab')
+
+    await act(async () => current.handleGestureFrame(closedHand()))
+    expect(current.gestureReleaseRequired).toBe(true)
+    expect(current.gestureStatus).toBe(
+      'Keep your fist closed to release the previous control',
+    )
+
+    await act(async () => {
+      vi.advanceTimersByTime(GESTURE_CLUTCH_FIST_RELEASE_MS - 1)
+      current.handleGestureFrame(openHand(0.5))
+    })
+    expect(current.gestureReleaseRequired).toBe(true)
+
+    await act(async () => {
+      current.handleGestureFrame(closedHand())
+      vi.advanceTimersByTime(GESTURE_CLUTCH_FIST_RELEASE_MS)
+      current.handleGestureFrame(closedHand())
+    })
+    expect(current.gestureReleaseRequired).toBe(false)
+    expect(current.gestureStatus).toBe('Released · open your palm to grab the selected control')
+
+    await act(async () => current.handleGestureFrame(openHand(0.5)))
+    expect(current.gesturePhase).toBe('armed')
+    expect(current.decks.a.filter).toBe(DJ_NEUTRAL_VALUES.filter)
   })
 
   it('lets a manual deck move take ownership from an armed gesture', async () => {

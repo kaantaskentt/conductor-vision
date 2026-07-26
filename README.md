@@ -36,9 +36,10 @@ No account, API key, database, backend, or audio files are required for the firs
 1. Open the [live app](https://ultra-vision.vercel.app) and choose **DJ Room**.
 2. Select **Load instant demo** to generate two short, copyright-safe tracks locally.
 3. Press **Start performance** to start both decks and local hand tracking together—or choose **Play without camera**.
-4. Raise one open palm, then use **More Air Controls** to route movement to the crossfader, a deck level, or its filter.
+4. Raise one open palm, then use **Choose Air Control** to route movement to the crossfader, a deck level, or its filter.
 
 Close your hand to lock the crossfader or volume position; Filter instead returns to its neutral midpoint after release. A newly detected hand grabs the current value without moving it, then responds only to intentional movement.
+When you change controls while your palm is still open, the interface asks for one close-and-reopen handoff before the new control can move.
 
 ## What it can do
 
@@ -47,7 +48,7 @@ Close your hand to lock the crossfader or volume position; Filter instead return
 - **First Mix cockpit** — move from a generated demo to music plus hand controls in two clear actions, with a thumb-reachable performance bar on mobile.
 - **Intentional gesture routing** — send an open palm to the crossfader or one deck's level or filter. Relative pickup prevents first-frame jumps, brief landmark flicker stays latched, and a deliberate fist releases the control.
 - **BPM tools** — estimate BPM locally, tap a correction, and use one reversible BPM Sync control to match playback rates.
-- **Vision workspace** — inspect hand landmarks, raised fingers, face signals, motion direction, and color coverage.
+- **Vision workspace** — inspect hand landmarks, raised fingers, face signals, frame-change regions, and color coverage.
 - **Pixel Studio** — study color similarity and luminance from an upload or captured frame with transparent, deterministic calculations.
 - **Local media** — camera frames, captured images, and uploaded tracks are not sent to an application backend.
 

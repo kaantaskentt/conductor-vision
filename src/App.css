@@ -2551,6 +2551,13 @@ input[type='range'] {
   box-shadow: 0 0 0 4px rgba(105, 212, 234, 0.05);
 }
 
+.gesture-state-pill.release-required {
+  border-color: rgba(245, 177, 82, 0.52);
+  background: rgba(245, 177, 82, 0.12);
+  color: #f5b152;
+  box-shadow: 0 0 0 4px rgba(245, 177, 82, 0.05);
+}
+
 .gesture-heading-actions button {
   display: inline-flex;
   min-height: 44px;
@@ -3367,6 +3374,16 @@ input[type='range'] {
     white-space: nowrap;
   }
 
+  .dj-vision-layout .camera-stage.status-error .camera-empty p,
+  .dj-vision-layout.activated .camera-stage.status-error .camera-empty p {
+    display: block;
+    overflow: visible;
+    font-size: 10px;
+    line-height: 1.35;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
   .camera-empty {
     padding: 30px 24px;
   }
@@ -3385,8 +3402,19 @@ input[type='range'] {
     display: none;
   }
 
+  .camera-stage.status-error .camera-empty p {
+    display: block;
+    margin: 7px 0 10px;
+    font-size: 11px;
+    line-height: 1.45;
+  }
+
   .camera-empty span {
     margin-top: 12px;
+  }
+
+  .camera-stage.status-error .camera-empty span {
+    margin-top: 0;
   }
 
   .stage-corners {

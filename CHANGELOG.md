@@ -25,6 +25,9 @@ All notable changes to Ultra Vision will be documented here. The project follows
 ### Fixed
 
 - Released gesture control exactly once and exposed a recoverable restart path when camera frames stop advancing.
+- Made an armed control switch immediately show the required close-and-reopen handoff instead of appearing unresponsive.
+- Kept mobile camera recovery instructions visible and labeled the recovery action as Retry camera.
+- Replaced the false motion-direction claim with truthful, mirrored frame-change regions.
 - Kept hand tracking and the owned camera stream live when optional face analysis fails.
 - Prevented mobile quick-deck waveforms and desktop first-mix labels from clipping their controls.
 - Prevented a newly detected hand from jumping the crossfader, channel level, or filter.

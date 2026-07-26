@@ -47,6 +47,37 @@ describe('vision utilities', () => {
     expect(second.pixelAnalysis.targetCoverage).toBe(0)
     expect(second.pixelAnalysis.motionChangedPercent).toBe(100)
     expect(second.pixelAnalysis.motionScore).toBe(100)
+    expect(second.pixelAnalysis.changeRegion).toBe('Change across frame')
+  })
+
+  it('reports the visible mirrored region without claiming a movement direction', () => {
+    const previous = imageData(4, 2, Array.from({ length: 8 }, () => [0, 0, 0, 255]).flat())
+    const changedOnRight = imageData(4, 2, [
+      0, 0, 0, 255,
+      0, 0, 0, 255,
+      255, 255, 255, 255,
+      255, 255, 255, 255,
+      0, 0, 0, 255,
+      0, 0, 0, 255,
+      255, 255, 255, 255,
+      255, 255, 255, 255,
+    ])
+
+    const baseline = analyzePixels(previous, null, 'purple')
+    const result = analyzePixels(changedOnRight, baseline.gray, 'purple')
+
+    expect(result.pixelAnalysis.changeRegion).toBe('Change concentrated left')
+    expect(result.pixelAnalysis.changeRegion).not.toContain('Moving')
+  })
+
+  it('distinguishes a localized center change from a frame-wide change', () => {
+    const black = Array.from({ length: 25 }, () => [0, 0, 0, 255]).flat()
+    const centered = [...black]
+    centered.splice(12 * 4, 4, 255, 255, 255, 255)
+    const baseline = analyzePixels(imageData(5, 5, black), null, 'purple')
+    const result = analyzePixels(imageData(5, 5, centered), baseline.gray, 'purple')
+
+    expect(result.pixelAnalysis.changeRegion).toBe('Change near center')
   })
 
   it('creates a complete, stable idle state', () => {
@@ -54,6 +85,7 @@ describe('vision utilities', () => {
     expect(state.targetHex).toBe('#2dbedc')
     expect(state.motionHistory).toHaveLength(40)
     expect(state.hands).toEqual([])
+    expect(state.changeRegion).toBe('Frame stable')
   })
 
   it('keeps control on the nearest hand when detector ordering changes', () => {

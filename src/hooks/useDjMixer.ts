@@ -3,6 +3,8 @@ import { equalPowerCrossfade } from '../lib/djAudio'
 import {
   createFilterGestureState,
   createGestureClutchState,
+  GESTURE_CLUTCH_FIST_RELEASE_MS,
+  GESTURE_CLUTCH_LOST_RELEASE_MS,
   transitionGestureClutch,
   transitionFilterGesture,
   type FilterGestureState,
@@ -387,6 +389,7 @@ export function useDjMixer() {
   const [gesturePhase, setGesturePhase] = useState<'locked' | 'calibrating' | 'armed'>(
     'locked',
   )
+  const [gestureReleaseRequired, setGestureReleaseRequired] = useState(false)
   const [demoLoading, setDemoLoading] = useState(false)
   const [bpmSync, setBpmSync] = useState<BpmSyncSnapshot | null>(null)
   const [bpmSyncMessage, setBpmSyncMessage] = useState(
@@ -413,6 +416,10 @@ export function useDjMixer() {
   const lastGestureUpdateAtRef = useRef(0)
   const gestureEngagedRef = useRef(false)
   const gestureRequiresReleaseRef = useRef(false)
+  const gestureReleasePendingRef = useRef<{
+    reason: 'fist' | 'lost'
+    releaseAt: number
+  } | null>(null)
   const smoothedGestureRef = useRef<{
     control: DjControl
     deck: DeckId | 'master'
@@ -466,13 +473,19 @@ export function useDjMixer() {
       const wasEngaged = gestureClutchRef.current.phase !== 'locked'
       cancelFilterRelease()
       gestureEngagedRef.current = false
-      if (wasEngaged) gestureRequiresReleaseRef.current = true
+      if (wasEngaged) {
+        gestureRequiresReleaseRef.current = true
+        gestureReleasePendingRef.current = null
+      }
+      const requiresRelease = gestureRequiresReleaseRef.current
       gestureClutchRef.current = createGestureClutchState()
       positionGestureRef.current = null
       filterGestureRef.current = createFilterGestureState()
       smoothedGestureRef.current = null
       setGesturePhase('locked')
+      setGestureReleaseRequired(requiresRelease)
       if (message) setGestureStatus(message)
+      return requiresRelease
     },
     [cancelFilterRelease],
   )
@@ -924,6 +937,8 @@ export function useDjMixer() {
       cancelFilterRelease()
       gestureEngagedRef.current = false
       gestureRequiresReleaseRef.current = false
+      gestureReleasePendingRef.current = null
+      setGestureReleaseRequired(false)
       gestureClutchRef.current = createGestureClutchState()
       positionGestureRef.current = null
       filterGestureRef.current = createFilterGestureState()
@@ -1176,7 +1191,7 @@ export function useDjMixer() {
 
   const selectControl = useCallback(
     (control: DjControl, deck: DeckId = activeDeck) => {
-      disarmGesture()
+      const requiresRelease = disarmGesture()
       if (
         selectedControl === 'filter' &&
         (control !== 'filter' || deck !== activeDeck)
@@ -1186,7 +1201,9 @@ export function useDjMixer() {
       setSelectedControl(control)
       setActiveDeck(deck)
       setGestureStatus(
-        control === 'crossfader'
+        requiresRelease
+          ? 'Close your fist once, then open your palm to grab the new control'
+          : control === 'crossfader'
           ? 'Open your hand, hold steady, then move left or right'
           : control === 'filter'
             ? `Open your palm to grab ${deckLabel(deck)} filter · rotate · fist releases`
@@ -1251,15 +1268,40 @@ export function useDjMixer() {
       }
 
       if (gestureRequiresReleaseRef.current) {
-        if (!frame.detected || frame.openFingers <= 1) {
-          gestureRequiresReleaseRef.current = false
-          gestureClutchRef.current = createGestureClutchState()
-          setGestureStatus('Released · open your palm to grab the selected control')
+        const releasedPose = !frame.detected || frame.openFingers <= 1
+        if (!releasedPose) {
+          gestureReleasePendingRef.current = null
+          gestureEngagedRef.current = false
+          setGesturePhase('locked')
+          setGestureStatus('Close your fist once, then open your palm to grab')
           return
         }
-        gestureEngagedRef.current = false
-        setGesturePhase('locked')
-        setGestureStatus('Close your fist once, then open your palm to grab')
+
+        const reason = frame.detected ? 'fist' : 'lost'
+        const pending = gestureReleasePendingRef.current
+        if (!pending || pending.reason !== reason) {
+          gestureReleasePendingRef.current = {
+            reason,
+            releaseAt:
+              now +
+              (reason === 'fist'
+                ? GESTURE_CLUTCH_FIST_RELEASE_MS
+                : GESTURE_CLUTCH_LOST_RELEASE_MS),
+          }
+          setGestureStatus(
+            reason === 'fist'
+              ? 'Keep your fist closed to release the previous control'
+              : 'Keep your hand out of view to release the previous control',
+          )
+          return
+        }
+
+        if (now < pending.releaseAt) return
+        gestureRequiresReleaseRef.current = false
+        gestureReleasePendingRef.current = null
+        setGestureReleaseRequired(false)
+        gestureClutchRef.current = createGestureClutchState()
+        setGestureStatus('Released · open your palm to grab the selected control')
         return
       }
 
@@ -1533,6 +1575,7 @@ export function useDjMixer() {
     selectedControl,
     gestureStatus,
     gesturePhase,
+    gestureReleaseRequired,
     gestureEngaged: gesturePhase === 'armed',
     demoLoading,
     bpmSyncActive: Boolean(bpmSync),

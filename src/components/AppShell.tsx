@@ -178,7 +178,13 @@ export function CameraActions({
       onClick={active ? stop : start}
     >
       <Camera aria-hidden="true" />
-      {loading ? 'Cancel camera' : running ? 'Stop camera' : 'Start camera'}
+      {loading
+        ? 'Cancel camera'
+        : running
+          ? 'Stop camera'
+          : status === 'error'
+            ? 'Retry camera'
+            : 'Start camera'}
     </button>
   )
 }

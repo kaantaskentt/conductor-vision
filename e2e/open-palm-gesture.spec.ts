@@ -18,6 +18,12 @@ test('synthetic open palm reaches the mixer without a pickup jump', async ({ pag
     .toBeVisible()
   await expect(crossfader).toHaveValue('0')
 
+  await page.getByText('Choose Air Control', { exact: true }).click()
+  await page.getByRole('button', { name: /^Filter\./ }).click()
+  await expect(page.locator('.gesture-state-pill')).toHaveText('Release hand')
+  await expect(page.getByRole('heading', { name: 'Close your hand once' })).toBeVisible()
+  await expect(crossfader).toHaveValue('0')
+
   await page.getByRole('button', { name: 'Stop camera' }).click()
   await expect(page.locator('.camera-stage')).toHaveAttribute('data-camera-status', 'idle')
   await expect(page.locator('.gesture-state-pill')).toHaveText('Locked')

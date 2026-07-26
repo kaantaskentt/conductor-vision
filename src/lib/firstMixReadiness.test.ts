@@ -14,6 +14,7 @@ function derive(overrides: Partial<FirstMixReadinessInput> = {}) {
     cameraMessage: 'Camera is off.',
     handDetected: false,
     gesturePhase: 'locked',
+    gestureReleaseRequired: false,
     ...overrides,
   })
 }
@@ -29,6 +30,7 @@ function experience(overrides: Partial<FirstMixExperienceInput> = {}) {
     cameraMessage: 'Camera is off.',
     handDetected: false,
     gesturePhase: 'locked',
+    gestureReleaseRequired: false,
     anyPlaying: false,
     deckALoaded: false,
     deckBLoaded: false,
@@ -161,6 +163,29 @@ describe('first-mix readiness', () => {
         gesturePhase: 'calibrating',
       })[2].detail,
     ).toBe('Hand found. Hold steady while the selected control calibrates.')
+  })
+
+  it('makes the release handshake explicit before a newly selected control can arm', () => {
+    const input = {
+      bothTracksLoaded: true,
+      cameraStatus: 'running' as const,
+      handDetected: true,
+      gestureReleaseRequired: true,
+    }
+
+    expect(derive(input)[2]).toMatchObject({
+      label: 'Release hand',
+      detail: 'Close your hand once to release the previous control, then open it again.',
+    })
+    expect(experience({
+      ...input,
+      deckALoaded: true,
+      deckBLoaded: true,
+      anyPlaying: true,
+    })).toMatchObject({
+      progress: 'Safe handoff',
+      title: 'Close your hand once',
+    })
   })
 })
 
