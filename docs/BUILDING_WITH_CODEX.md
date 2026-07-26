@@ -52,7 +52,7 @@ The important part is the order. A passing unit test is not enough for a camera 
 
 At commit `20b9971`, the branch had 77 passing deterministic and React integration tests. Coverage was 62.08% statements, 48% branches, 51.56% functions, and 63.33% lines; CI, CodeQL, lint, build, and the high-severity dependency audit were green. Those numbers are a historical snapshot, not a substitute for running the current `npm run check` command.
 
-The current launch candidate has 146 passing unit and integration tests with 83.34% statement, 77.02% branch, 80.87% function, and 85.41% line coverage. A separate real-browser camera contract exercises the production MediaStream, MediaPipe, canvas, capture, teardown, and restart boundary. The same launch gate also passes lint, the production build, and the full dependency audit with zero known vulnerabilities.
+The current launch candidate has 152 passing unit and integration tests with 85.18% statement, 79.08% branch, 82.13% function, and 87.19% line coverage. A separate real-browser camera contract exercises the production MediaStream, MediaPipe, canvas, capture, teardown, and restart boundary. The same launch gate also passes lint, the production build, and the full dependency audit with zero known vulnerabilities.
 
 ## Assumptions that failed
 

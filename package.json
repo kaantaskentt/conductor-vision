@@ -20,7 +20,6 @@
     "web-audio",
     "dj"
   ],
-  "packageManager": "npm@10.9.4",
   "engines": {
     "node": ">=20.19.0 <21 || >=22.12.0"
   },

@@ -10,9 +10,13 @@ permissions:
 
 jobs:
   quality:
-    name: Test, lint, and build
+    name: Test, lint, and build (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20.19.0, 22.12.0]
 
     steps:
       - name: Check out repository
@@ -23,7 +27,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
 
       - name: Install dependencies
@@ -39,6 +43,7 @@ jobs:
         run: npm run build
 
       - name: Audit all dependencies
+        if: matrix.node-version == '22.12.0'
         run: npm audit --audit-level=high
 
   camera:
@@ -55,7 +60,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: 22.12.0
           cache: npm
 
       - name: Install dependencies

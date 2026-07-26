@@ -18,6 +18,9 @@ All notable changes to Ultra Vision will be documented here. The project follows
 
 ### Fixed
 
+- Released gesture control exactly once and exposed a recoverable restart path when camera frames stop advancing.
+- Kept hand tracking and the owned camera stream live when optional face analysis fails.
+- Prevented mobile quick-deck waveforms and desktop first-mix labels from clipping their controls.
 - Prevented a newly detected hand from jumping the crossfader, channel level, or filter.
 - Invalidated the Filter wrist baseline after fist or tracking loss so reacquisition always calibrates before moving audio.
 - Made Filter return to its neutral 50% position after hand release.
@@ -35,6 +38,9 @@ All notable changes to Ultra Vision will be documented here. The project follows
 
 ### Changed
 
+- Started the camera as soon as hand tracking is ready, then loaded optional face analysis in the background.
+- Paused deck-meter animation while music is stopped or the page is hidden, and cleared stopped levels to zero.
+- Ratcheted coverage floors near the measured suite and now exercise both advertised Node.js release lines in CI.
 - Pinned CI and CodeQL actions to reviewed immutable release commits.
 - Renamed misleading phrase controls to track quarters until real beat-grid cues exist.
 - Moved deck meters after channel and crossfader gain and added a master limiter.

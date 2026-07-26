@@ -11,9 +11,9 @@ npm run check
 
 ## Deterministic tests
 
-Unit tests cover vision math, pixel studies, gesture pickup/release, camera-overlay remounts, audio curves, serialized and size-bounded BPM analysis, file validation, generated demo tracks, verified MediaPipe asset provenance, and the bounded Air Mix Replay recorder lifecycle. React integration tests mount the real mixer and camera hooks to verify timed Filter release, Web Audio parameters, the isolated post-master recording tap, live-stream handoff, overlay remounts, and camera restart. Prefer generated signals and landmark traces over copyrighted or personally identifying fixtures.
+Unit tests cover vision math, pixel studies, gesture pickup/release, camera-overlay remounts, audio curves, serialized and size-bounded BPM analysis, file validation, generated demo tracks, verified MediaPipe asset provenance, and the bounded Air Mix Replay recorder lifecycle. React integration tests mount the real mixer and camera hooks to verify timed Filter release, Web Audio parameters, the isolated post-master recording tap, live-stream handoff, frozen-frame release, optional face-analysis failure, overlay remounts, and camera restart. Prefer generated signals and landmark-coordinate cases over copyrighted or personally identifying fixtures.
 
-Coverage cannot fall below the checked-in project floor: 50% statements and lines, 40% functions, and 35% branches.
+Coverage cannot fall below the checked-in project floor: 80% statements, 72% branches, 76% functions, and 82% lines.
 
 ## Real-browser camera and mobile contracts
 
@@ -60,7 +60,7 @@ For each browser, verify:
 
 The harness has three layers:
 
-1. JSON landmark traces and React integration tests drive pure gesture, permission, recovery, and lifecycle logic on every pull request.
+1. Generated landmark-coordinate cases and React integration tests drive pure gesture, permission, recovery, and lifecycle logic on every pull request. A standalone JSON trace corpus remains roadmap work.
 2. The production-build Chromium contract runs a zero-hand test pattern through real MediaPipe and the mobile First Mix checks on every pull request.
 3. The documented generated open-palm candidate remains a `fixme` until it detects reliably; a future measured detector-quality corpus can extend it only after representation, provenance, and review rules are defined.
 
