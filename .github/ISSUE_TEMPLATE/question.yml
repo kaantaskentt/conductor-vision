@@ -1,0 +1,53 @@
+name: Setup or contribution question
+description: Ask about setup, usage, testing, architecture, or choosing a contribution.
+title: "[Question]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for asking. Public issues are visible to everyone. Do not upload private camera frames, copyrighted audio, secrets, browser profiles, or personally identifying logs.
+
+        For an unpatched security vulnerability, stop here and use [private vulnerability reporting](https://github.com/kaantaskentt/ultra-vision/security/advisories/new).
+  - type: dropdown
+    id: topic
+    attributes:
+      label: Question area
+      options:
+        - Local setup
+        - Using DJ Room or Vision
+        - Tests and development workflow
+        - Choosing or scoping a contribution
+        - Architecture or documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: What would you like help with?
+      description: State the outcome you want and where you are blocked.
+      placeholder: I am trying to… I expected… I am blocked because…
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: Include commands, documentation, or issue links. Redact private data.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment, if relevant
+      description: Browser, operating system, and Node.js version are usually enough.
+      placeholder: Chrome 138, macOS 15, Node.js 22.12
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Public issue safety
+      options:
+        - label: I removed private camera/media, copyrighted audio, secrets, and personally identifying data.
+          required: true
+        - label: This is not an unpatched security vulnerability.
+          required: true

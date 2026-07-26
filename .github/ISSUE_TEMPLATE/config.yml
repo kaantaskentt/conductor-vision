@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Setup and contribution guide
+    url: https://github.com/kaantaskentt/ultra-vision/blob/main/SUPPORT.md
+    about: Read the current routes for questions, bugs, proposals, and private security reports.
   - name: Report a security vulnerability
     url: https://github.com/kaantaskentt/ultra-vision/security/advisories/new
     about: Please report security issues privately.

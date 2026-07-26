@@ -14,6 +14,12 @@ All notable changes to Ultra Vision will be documented here. The project follows
 - Self-hosted, lock-pinned MediaPipe WASM plus byte-length and SHA-256 verification for model downloads.
 - A production-build Chromium camera contract covering real MediaPipe startup, tab handoff, local capture, stop, and restart without personal camera imagery.
 - A dedicated one-worker camera CI job with synthetic-only failure diagnostics.
+- A generated open-palm production-browser contract that proves real MediaPipe
+  reaches gesture pickup without moving the neutral crossfader.
+- A required browser release gate for keyboard focus, WCAG A/AA checks, mobile
+  reflow, camera lifecycle, and the generated-hand happy path.
+- An enforced initial-JavaScript bundle budget and a setup-question issue route
+  for first-time contributors.
 - Contributor guidance for Codex and other coding agents.
 
 ### Fixed
@@ -35,6 +41,10 @@ All notable changes to Ultra Vision will be documented here. The project follows
 - Limited assistive announcements to discrete readiness and gesture-state changes.
 - Replaced private camera evidence and removed screenshots of retired Tempo and Phrase Jump controls.
 - Added recovery when a vision frame fails during processing.
+- Kept camera tracking near a 30 FPS inference budget without weakening the
+  frozen-frame watchdog, including retry after a failed lazy model load.
+- Cancelled in-progress demo synthesis when a newer local track choice or room
+  change supersedes it, so stale generated audio cannot overwrite user intent.
 
 ### Changed
 
@@ -46,3 +56,7 @@ All notable changes to Ultra Vision will be documented here. The project follows
 - Moved deck meters after channel and crossfader gain and added a master limiter.
 - Rebuilt DJ Room around a compact camera-first layout, hardware-style knobs, and a master-first mobile order.
 - Clarified that the live deck display is analyser signal history rather than a precomputed track waveform or beat grid.
+- Deferred MediaPipe until camera use and moved demo synthesis into cooperative,
+  abortable work slices so camera-off startup and first interaction stay responsive.
+- Refreshed the desktop, mobile, and camera-off Vision screenshots and compressed
+  repository artwork without changing its dimensions or intended visual content.

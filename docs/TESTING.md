@@ -7,7 +7,7 @@ npm ci
 npm run check
 ```
 
-`npm run check` runs the unit and integration suite with coverage, lint, the production build, and the high-severity dependency audit. Use `npm test` for a faster feedback loop while developing. Run the real-browser camera contract separately after installing Chromium as described below.
+`npm run check` runs the unit and integration suite with coverage, lint, a production build, the initial-JavaScript budget, and the high-severity dependency audit. Use `npm test` for a faster feedback loop while developing. Run the real-browser camera contract separately after installing Chromium as described below.
 
 ## Deterministic tests
 
@@ -17,14 +17,22 @@ Coverage cannot fall below the checked-in project floor: 80% statements, 72% bra
 
 ## Real-browser camera and mobile contracts
 
-Install Ultra Vision's pinned Chromium build once, then run the camera contract:
+Install Ultra Vision's pinned Chromium build once, then run the required browser gate:
 
 ```bash
 npx playwright install chromium
-npm run test:camera
+npm run test:browser
 ```
 
-The command builds and serves the production application on `127.0.0.1`, grants camera access to Chromium's synthetic device, and runs the real MediaPipe JavaScript, WASM, and verified model pipeline. It also exercises the First Mix experience at phone widths. It proves:
+Focused commands remain available while developing:
+
+```bash
+npm run test:camera
+npm run test:camera:hand
+npm run test:accessibility
+```
+
+The required command builds and serves the production application once on `127.0.0.1`, then runs the real MediaPipe JavaScript, WASM, verified model pipeline, generated positive palm, mobile First Mix checks, keyboard path, and automated accessibility scans. It proves:
 
 - camera startup reaches a live MediaStream and decoded video frames;
 - MediaPipe processes frames and sizes the landmark canvas to the video;
@@ -35,10 +43,29 @@ The command builds and serves the production application on `127.0.0.1`, grants 
 - application page errors, unexpected console errors, failed requests, and unapproved external origins fail the test;
 - the generated demo reaches manual playback without requesting camera access;
 - generated demo tracks loop so a cold vision-model download cannot end the demo before hand controls are ready;
-- the mobile performance bar remains reachable after scrolling, exposes 44px controls, and has no horizontal overflow at 390 CSS pixels; and
-- the first-mix and performance controls reflow without horizontal overflow at 320 CSS pixels.
+- the mobile performance bar remains reachable after scrolling, exposes 44px controls, and has no horizontal overflow at 390 CSS pixels;
+- the first-mix and performance controls reflow without horizontal overflow at 320 CSS pixels;
+- the primary tabs and first-mix CTA are reachable in keyboard order;
+- cooperative demo generation creates no browser long task of 50 ms or more; and
+- the camera-off DJ Room, loaded demo, camera-off Vision workspace, and 390px loaded state have no automated WCAG A/AA violations reported by axe-core.
 
-The required harness uses Chromium's non-personal test pattern as a zero-hand negative case. A separate generated open-palm candidate is documented in [`e2e/fixtures/README.md`](../e2e/fixtures/README.md), but its test is intentionally marked `fixme`: the current single-frame fixture reaches the live pipeline without producing stable hand detection. It is excluded from `npm run test:camera` and must not be cited as passing evidence. The required contract does not prove hand-detection quality, a physical device's permission UX, Safari or Firefox behavior, deployed `vercel.json` headers, GPU performance, long-session stability, or accuracy across lighting, motion, devices, and people. Those remain separate checks. The contract deliberately exercises the production model URLs, so a sustained upstream outage will also fail the check; CI retries once to distinguish a transient network fault. It runs with one worker and uploads a trace and synthetic-only failure screenshot when it fails.
+The focused `npm run test:camera` harness uses Chromium's non-personal test
+pattern as a zero-hand negative case. `npm run test:camera:hand` is its positive
+companion: a generated, provenance-documented open palm is streamed through
+Chromium's file-backed camera and the shipped MediaPipe model, then the test
+confirms that the crossfader becomes armed without jumping away from center. The
+required `npm run test:browser` command runs both focused camera projects plus
+the accessibility project in one Playwright invocation so the production build
+is shared while each project's evidence remains explicit.
+
+Neither contract proves general hand-detection quality, a physical device's
+permission UX, Safari or Firefox behavior, deployed `vercel.json` headers, GPU
+performance, long-session stability, or accuracy across lighting, motion,
+devices, and people. Those remain separate checks. The contracts deliberately
+exercise the production model URLs, so a sustained upstream outage will also
+fail the check; CI retries once to distinguish a transient network fault. They
+run with one worker and upload a trace and synthetic-only failure screenshot
+when they fail.
 
 ## Manual browser matrix
 
@@ -58,17 +85,27 @@ For each browser, verify:
 
 ## Camera automation strategy
 
-The harness has three layers:
+The harness has four layers:
 
 1. Generated landmark-coordinate cases and React integration tests drive pure gesture, permission, recovery, and lifecycle logic on every pull request. A standalone JSON trace corpus remains roadmap work.
 2. The production-build Chromium contract runs a zero-hand test pattern through real MediaPipe and the mobile First Mix checks on every pull request.
-3. The documented generated open-palm candidate remains a `fixme` until it detects reliably; a future measured detector-quality corpus can extend it only after representation, provenance, and review rules are defined.
+3. The generated open-palm companion runs one privacy-safe positive frame through
+   the real shipped model and verifies no-jump pickup. A future measured
+   detector-quality corpus can extend it only after representation, provenance,
+   and review rules are defined.
+4. The axe-core project scans representative desktop and mobile camera-off states
+   against WCAG A/AA rules and proves the primary keyboard path. Manual assistive
+   technology and physical-device checks remain separate release evidence.
 
 Do not commit a contributor's face or room recording. Crop or generate hand-only fixtures and document their provenance.
 
 ## Performance targets
 
-These are release targets until measured and published:
+The production build keeps initial JavaScript below 96 KiB gzip and requires MediaPipe to remain in a deferred chunk. This protects the camera-off first mix from paying the computer-vision parsing cost before a user asks for hand tracking.
+
+The camera requests at most 30 FPS and the runtime independently caps model inference at 30 FPS even if a device supplies frames faster. Faster video timestamps still refresh the stall watchdog, so intentionally skipped inference frames cannot be mistaken for a frozen camera.
+
+The following runtime targets still require measured device evidence:
 
 - at least 24 camera frames per second on a current laptop;
 - p95 gesture-to-control response below 100 ms;

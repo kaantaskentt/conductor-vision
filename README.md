@@ -57,8 +57,8 @@ BPM Sync matches tempo; it does not claim automatic beat-grid, downbeat, or phas
 
 | Vision | DJ Room |
 | --- | --- |
-| ![Ultra Vision real-time vision analysis](./docs/design/ultra-vision-analysis.jpg) | ![Ultra Vision privacy-safe first-mix readiness flow](./docs/design/ultra-vision-readiness.jpg) |
-| Inspect live landmarks, motion, face signals, and pixel studies. | Choose one mix control, grab it with an open palm, then perform with movement. |
+| ![Ultra Vision camera-off Vision workspace](./docs/design/ultra-vision-analysis.jpg) | ![Ultra Vision privacy-safe first-mix readiness flow](./docs/design/ultra-vision-readiness.jpg) |
+| Start the camera to inspect live landmarks, motion, face signals, and pixel studies. | Choose one mix control, grab it with an open palm, then perform with movement. |
 
 The interface reflows from desktop down to phone-sized viewports. Real camera and audio behavior still depends on the browser and device; the maintained test matrix lives in [docs/TESTING.md](./docs/TESTING.md).
 
@@ -116,16 +116,16 @@ Run the same complete local gate expected before a pull request:
 npm run check
 ```
 
-That command runs the test suite with coverage floors, lint, a production build, and a full dependency audit at the high-severity threshold. CI and CodeQL run on every pull request.
+That command runs the test suite with coverage floors, lint, a production build with an enforced initial-JavaScript budget, and a full dependency audit at the high-severity threshold. MediaPipe is loaded only when camera tracking is requested, so a camera-off first mix does not pay its parsing cost. CI and CodeQL run on every pull request.
 
 Camera-runtime changes also have a hardware-free production-browser contract:
 
 ```bash
 npx playwright install chromium
-npm run test:camera
+npm run test:browser
 ```
 
-It starts the production build with Chromium's synthetic camera and exercises the real MediaStream, MediaPipe WASM/model, canvas handoff, local capture, stop, and restart paths. It does not record a contributor or claim physical-camera accuracy.
+It starts one production build and runs Chromium contracts for the real MediaStream and MediaPipe lifecycle, a generated open-palm pickup, mobile reflow, keyboard focus, and WCAG A/AA checks across the camera-off DJ Room, loaded demo, Vision workspace, and 390px loaded state. It does not record a contributor or claim broad physical-camera accuracy.
 
 - Camera and uploaded media are processed in the active browser tab.
 - File types and sizes are checked before object URLs are created.

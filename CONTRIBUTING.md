@@ -4,9 +4,20 @@ Thanks for helping make camera-driven music interaction safer, clearer, and more
 
 ## Find a useful starting point
 
-- Browse [`good first issue`](https://github.com/kaantaskentt/ultra-vision/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) tasks for bounded contributions.
-- Use the [issue chooser](https://github.com/kaantaskentt/ultra-vision/issues/new/choose) for a reproducible bug or focused feature proposal.
-- Comment on an existing issue before beginning a large product, audio, camera, or model change so the intended outcome and privacy boundary are clear.
+- Read the unchecked [roadmap](./ROADMAP.md) outcomes and choose the smallest
+  useful slice that matches your skills.
+- Check existing issues, then use the
+  [issue chooser](https://github.com/kaantaskentt/ultra-vision/issues/new/choose)
+  for a reproducible bug, focused feature proposal, setup question, or
+  contribution-scoping question.
+- Before beginning a large product, audio, camera, or model change, open a focused
+  proposal so maintainers can confirm the outcome, evidence plan, and privacy
+  boundary.
+
+There may not always be a pre-labeled starter issue. If you want a bounded first
+contribution, choose **Setup or contribution question** in the issue chooser,
+share the area you want to learn, and ask for help reducing one roadmap outcome
+to a reviewable pull request.
 
 You do not need a camera to contribute. Vision math, gesture state, generated audio, replay lifecycle, documentation, accessibility, and much of the interface can be developed with deterministic inputs.
 
@@ -37,14 +48,18 @@ npm run check
 
 It runs tests with coverage thresholds, lint, the production build, and the high-severity dependency audit.
 
-If your change touches camera startup, MediaPipe assets, video/canvas ownership, capture, or teardown, install Chromium once and run the production-browser contract too:
+If your change touches camera startup, MediaPipe assets, video/canvas ownership,
+capture, teardown, or a visible interaction, install Chromium once and run the
+complete production-browser contract too:
 
 ```bash
 npx playwright install chromium
-npm run test:camera
+npm run test:browser
 ```
 
-This uses a synthetic camera and does not need access to your webcam.
+This uses synthetic cameras and does not need access to your webcam. Focused
+camera, generated-hand, and accessibility commands are documented in
+[docs/TESTING.md](./docs/TESTING.md).
 
 ## Where to work
 
@@ -84,7 +99,8 @@ See [docs/TESTING.md](./docs/TESTING.md) for the browser matrix, deterministic c
 1. Reproduce the problem or state the user outcome.
 2. Add or update a deterministic test before changing camera, gesture, audio, or replay behavior.
 3. Keep the diff focused and update documentation when the shipped behavior or limitation changes.
-4. Run `npm run check`, plus `npm run test:camera` when the camera/runtime boundary changed.
+4. Run `npm run check`, plus `npm run test:browser` when the camera/runtime
+   boundary or a visible interaction changed.
 5. Open a pull request and point reviewers to the best file to inspect first.
 
 For a visible change, attach current evidence at 1280×720 and 390×844. For camera or audio work, include either deterministic fixture evidence or a short description of the real-device flow tested. Do not upload private frames or copyrighted music as evidence.

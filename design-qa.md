@@ -34,6 +34,15 @@ The two committed screenshots are synthetic, camera-off product evidence and rem
 - Accessibility: the artwork and data-only waveform cues are decorative; track identity remains available in the heading; focus behavior, reduced-motion rules, labels, and visible mobile target sizing are preserved.
 - Browser diagnostics: no warning or error console entries were present in the final loaded state.
 
+### Release refresh
+
+- Re-captured the committed desktop, mobile, and Vision workspace evidence from
+  the current source at `1280×720`, `390×844`, and `1280×720` respectively.
+- Re-ran the single-build browser gate across the camera lifecycle, generated
+  open palm, loaded demo, keyboard focus, WCAG A/AA, and mobile reflow states.
+- Observed no horizontal overflow, relevant console errors, accessibility
+  violations, or demo-generation long task at or above 50 ms.
+
 No actionable `P0`, `P1`, or `P2` design findings remain. A future `P3` enhancement is a short, reduced-motion-aware trail made from recent real landmark frames while the camera is live; the shipped camera-off artwork does not pretend to be live detection.
 
 Final result: passed

@@ -13,7 +13,7 @@
 ## Verification
 
 - [ ] `npm run check`
-- [ ] `npm run test:camera` when camera, MediaPipe, video/canvas, or capture behavior changed
+- [ ] `npm run test:browser` when camera, MediaPipe, video/canvas, capture, or visible interaction behavior changed
 - [ ] New or changed behavior has a deterministic test, or the reason it cannot is explained below
 - [ ] The failure and recovery path was exercised
 - [ ] 1280×720 and 390×844 were checked when the interface changed
