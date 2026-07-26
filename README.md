@@ -45,7 +45,7 @@ When you change controls while your palm is still open, the interface asks for o
 
 - **Instant demo set** — generate two original rhythmic loops locally and reach a playable mix without finding audio files.
 - **Two-deck DJ Room** — control independent transports, hardware-style level and bipolar filter knobs, live analyser signal history, track-quarter jumps, post-fader meters, a master limiter, and an equal-power crossfader.
-- **First Mix cockpit** — move from a generated demo to music plus hand controls in two clear actions, with a thumb-reachable performance bar on mobile.
+- **First Mix cockpit** — move from a generated demo to music plus hand controls in two clear actions, with a thumb-reachable performance bar on mobile and the detailed console one tap away in Full mixer.
 - **Intentional gesture routing** — send an open palm to the crossfader or one deck's level or filter. Relative pickup prevents first-frame jumps, brief landmark flicker stays latched, and a deliberate fist releases the control.
 - **BPM tools** — estimate BPM locally, tap a correction, and use one reversible BPM Sync control to match playback rates.
 - **Vision workspace** — inspect hand landmarks, raised fingers, face signals, frame-change regions, and color coverage.

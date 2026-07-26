@@ -82,6 +82,17 @@ test('loaded-demo DJ Room stays responsive and meets WCAG A/AA', async ({ page }
   })
   expect(longTasks, `Demo loading created long tasks: ${longTasks.join(', ')} ms`).toEqual([])
   await expectNoWcagViolations(page, 'Loaded-demo DJ Room')
+
+  const fullMixer = page.locator('.full-mixer-disclosure')
+  const fullMixerSummary = page.locator('summary[aria-controls="mixer-decks"]')
+  await expect(fullMixerSummary).toHaveAttribute('aria-expanded', 'false')
+  await fullMixerSummary.focus()
+  await expect(fullMixerSummary).toBeFocused()
+  await fullMixerSummary.press('Enter')
+  await expect(fullMixer).toHaveAttribute('open', '')
+  await expect(fullMixerSummary).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByRole('region', { name: 'Two-deck mixer' })).toBeVisible()
+  await expectNoWcagViolations(page, 'Expanded full mixer')
 })
 
 test('camera-off Vision workspace meets WCAG A/AA', async ({ page }) => {

@@ -51,6 +51,7 @@ All notable changes to Ultra Vision will be documented here. The project follows
 
 ### Changed
 
+- Collapsed the detailed two-deck console into a keyboard-accessible Full mixer drawer so the camera, Air Controls, and compact performance bar remain the default first-mix workspace without resetting live mixer state.
 - Started the camera as soon as hand tracking is ready, then loaded optional face analysis in the background.
 - Paused deck-meter animation while music is stopped or the page is hidden, and cleared stopped levels to zero.
 - Ratcheted coverage floors near the measured suite and now exercise both advertised Node.js release lines in CI.

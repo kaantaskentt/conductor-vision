@@ -943,8 +943,10 @@ export function DjRoomScreen({
 }) {
   const deckAInputRef = useRef<HTMLInputElement | null>(null)
   const deckBInputRef = useRef<HTMLInputElement | null>(null)
+  const [fullMixerOpen, setFullMixerOpen] = useState(false)
   const bothTracksLoaded = mixer.decks.a.loaded && mixer.decks.b.loaded
   const anyPlaying = mixer.decks.a.playing || mixer.decks.b.playing
+  const loadedDeckCount = Number(mixer.decks.a.loaded) + Number(mixer.decks.b.loaded)
   const firstMixSteps = deriveFirstMixReadiness({
     bothTracksLoaded,
     cameraStatus: vision.status,
@@ -1045,11 +1047,40 @@ export function DjRoomScreen({
         <GestureConsole mixer={mixer} vision={vision} />
       </section>
 
-      <section id="mixer-decks" className="dj-console" aria-label="Two-deck mixer">
-        <DeckPanel id="a" mixer={mixer} onUpload={() => deckAInputRef.current?.click()} />
-        <MixerConsole mixer={mixer} />
-        <DeckPanel id="b" mixer={mixer} onUpload={() => deckBInputRef.current?.click()} />
-      </section>
+      <details
+        className="full-mixer-disclosure"
+        open={fullMixerOpen}
+      >
+        <summary
+          aria-controls="mixer-decks"
+          aria-expanded={fullMixerOpen}
+          onClick={(event) => {
+            event.preventDefault()
+            setFullMixerOpen((open) => !open)
+          }}
+        >
+          <span className="full-mixer-icon">
+            <SlidersHorizontal aria-hidden="true" />
+          </span>
+          <span className="full-mixer-copy">
+            <strong>Full mixer</strong>
+            <small>Tracks, levels, filters, and track tools</small>
+          </span>
+          <span className="full-mixer-state">
+            {loadedDeckCount === 2
+              ? '2 decks ready'
+              : loadedDeckCount === 1
+                ? '1 deck ready'
+                : 'Load or tune decks'}
+          </span>
+          <ChevronDown aria-hidden="true" />
+        </summary>
+        <section id="mixer-decks" className="dj-console" aria-label="Two-deck mixer">
+          <DeckPanel id="a" mixer={mixer} onUpload={() => deckAInputRef.current?.click()} />
+          <MixerConsole mixer={mixer} />
+          <DeckPanel id="b" mixer={mixer} onUpload={() => deckBInputRef.current?.click()} />
+        </section>
+      </details>
     </>
   )
 }

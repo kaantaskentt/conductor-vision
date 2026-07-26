@@ -302,6 +302,16 @@ describe('Ultra Vision app golden path', () => {
     expect(details.open).toBe(true)
   }
 
+  async function openFullMixer() {
+    const details = container.querySelector<HTMLDetailsElement>('.full-mixer-disclosure')
+    const summary = details?.querySelector('summary')
+    if (!details || !summary) throw new Error('Full mixer disclosure was not rendered.')
+    await act(async () => click(summary))
+    expect(details.open).toBe(true)
+    expect(summary.getAttribute('aria-expanded')).toBe('true')
+    return { details, summary }
+  }
+
   it('loads the instant demo, keeps controls usable, and preserves the mix across tabs', async () => {
     expect(container.querySelector('h1')?.textContent).toBe('Mix with your hands.')
     expect(container.querySelector('.air-mix-backdrop')).toBeNull()
@@ -330,6 +340,10 @@ describe('Ultra Vision app golden path', () => {
     expect(container.textContent).toContain('Tracks ready. Start the performance.')
     expect(buttonByName(container, 'Start performance')).toBeTruthy()
     expect(container.querySelector('.performance-bar')).toBeTruthy()
+    expect(container.querySelector<HTMLDetailsElement>('.full-mixer-disclosure')?.open).toBe(false)
+    expect(container.querySelector('.full-mixer-copy')?.textContent).toContain(
+      'Tracks, levels, filters, and track tools',
+    )
     const deckAMeter = container.querySelector('meter[aria-label="Deck A audio level"]')
     const masterAMeter = container.querySelector(
       'meter[aria-label="Deck A master audio level"]',
@@ -339,6 +353,7 @@ describe('Ultra Vision app golden path', () => {
     expect(deckAMeter?.getAttribute('value')).toBe('0')
     expect(masterAMeter?.getAttribute('value')).toBe('0')
 
+    await openFullMixer()
     const filter = container.querySelector<HTMLInputElement>(
       'input[aria-label="Deck A bipolar filter"]',
     )
@@ -368,9 +383,51 @@ describe('Ultra Vision app golden path', () => {
 
     await act(async () => click(buttonByName(container, 'DJ Room')))
     expect(container.textContent).toContain('Neon Pulse')
+    expect(container.querySelector<HTMLDetailsElement>('.full-mixer-disclosure')?.open).toBe(false)
     expect(container.querySelector<HTMLInputElement>(
       'input[aria-label="Deck A bipolar filter"]',
     )?.value).toBe('50')
+  })
+
+  it('keeps the full mixer closed by default and preserves mixer state across disclosure toggles', async () => {
+    const initialDetails = container.querySelector<HTMLDetailsElement>('.full-mixer-disclosure')
+    const initialSummary = initialDetails?.querySelector('summary')
+    if (!initialDetails || !initialSummary) throw new Error('Full mixer disclosure was not rendered.')
+    expect(initialDetails.open).toBe(false)
+    expect(initialSummary.getAttribute('aria-expanded')).toBe('false')
+    expect(initialSummary.textContent).toContain('Load or tune decks')
+
+    await loadDemoSet()
+    expect(initialDetails.open).toBe(false)
+    expect(initialSummary.textContent).toContain('2 decks ready')
+
+    const { details, summary } = await openFullMixer()
+    const filter = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Deck A bipolar filter"]',
+    )
+    const crossfader = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Master crossfader"]',
+    )
+    if (!filter || !crossfader) throw new Error('Full mixer controls were not rendered.')
+
+    await act(async () => {
+      setRangeValue(filter, '76')
+      setRangeValue(crossfader, '-42')
+    })
+    expect(filter.value).toBe('76')
+    expect(crossfader.value).toBe('-42')
+
+    await act(async () => click(summary))
+    expect(details.open).toBe(false)
+    expect(summary.getAttribute('aria-expanded')).toBe('false')
+    expect(filter.value).toBe('76')
+    expect(crossfader.value).toBe('-42')
+
+    await act(async () => click(summary))
+    expect(details.open).toBe(true)
+    expect(summary.getAttribute('aria-expanded')).toBe('true')
+    expect(filter.value).toBe('76')
+    expect(crossfader.value).toBe('-42')
   })
 
   it('keeps the first-mix path visible while tucking away secondary deck tools', () => {
@@ -391,6 +448,10 @@ describe('Ultra Vision app golden path', () => {
 
     const airControls = container.querySelector<HTMLDetailsElement>('.gesture-control-disclosure')
     expect(airControls?.open).toBe(false)
+
+    const fullMixer = container.querySelector<HTMLDetailsElement>('.full-mixer-disclosure')
+    expect(fullMixer?.open).toBe(false)
+    expect(fullMixer?.querySelector('summary')?.getAttribute('aria-expanded')).toBe('false')
 
     expect(container.querySelectorAll('.gesture-modes button')).toHaveLength(3)
     expect(container.querySelector<HTMLButtonElement>('.gesture-modes button.active')?.textContent)

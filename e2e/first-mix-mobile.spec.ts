@@ -39,6 +39,16 @@ test('mobile first mix keeps stage controls reachable without zooming out', asyn
   await expect(performanceBar).toBeInViewport()
   await expectNoHorizontalOverflow(page)
 
+  const fullMixer = page.locator('.full-mixer-disclosure')
+  const fullMixerSummary = page.locator('summary[aria-controls="mixer-decks"]')
+  await expect(fullMixer).not.toHaveAttribute('open', '')
+  await expect(fullMixerSummary).toHaveAttribute('aria-expanded', 'false')
+  await expect(fullMixerSummary).toContainText('Tracks, levels, filters, and track tools')
+  await expect(page.getByRole('slider', {
+    name: 'Master crossfader',
+    exact: true,
+  })).toHaveCount(0)
+
   const deckA = performanceBar.getByRole('button', { name: /Play Deck A/ })
   const deckB = performanceBar.getByRole('button', { name: /Play Deck B/ })
   await expect(deckA).toHaveAccessibleName(/Play Deck A, Neon Pulse, 120\.0 BPM/)
@@ -68,7 +78,14 @@ test('mobile first mix keeps stage controls reachable without zooming out', asyn
   await expect(sync).toHaveAttribute('aria-pressed', 'false')
 
   const crossfader = performanceBar.getByRole('slider', { name: 'Quick master crossfader' })
+  await fullMixerSummary.scrollIntoViewIfNeeded()
+  await fullMixerSummary.focus()
+  await expect(fullMixerSummary).toBeFocused()
+  await fullMixerSummary.press('Enter')
+  await expect(fullMixer).toHaveAttribute('open', '')
+  await expect(fullMixerSummary).toHaveAttribute('aria-expanded', 'true')
   const mainCrossfader = page.getByRole('slider', { name: 'Master crossfader', exact: true })
+  await expect(mainCrossfader).toBeVisible()
   const crossfaderBox = await crossfader.boundingBox()
   expect(crossfaderBox).not.toBeNull()
   await page.mouse.click(
@@ -94,6 +111,16 @@ test('mobile first mix keeps stage controls reachable without zooming out', asyn
   expect(dockBox!.x + dockBox!.width).toBeLessThanOrEqual(390)
   expect(dockBox!.y + dockBox!.height).toBeLessThanOrEqual(844)
   await expectNoHorizontalOverflow(page)
+
+  await fullMixerSummary.scrollIntoViewIfNeeded()
+  await fullMixerSummary.focus()
+  await fullMixerSummary.press('Enter')
+  await expect(fullMixer).not.toHaveAttribute('open', '')
+  await expect(fullMixerSummary).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByRole('slider', {
+    name: 'Master crossfader',
+    exact: true,
+  })).toHaveCount(0)
 })
 
 test('performance controls reflow at 320 CSS pixels', async ({ page }) => {
