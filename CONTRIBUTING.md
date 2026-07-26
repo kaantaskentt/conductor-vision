@@ -21,7 +21,7 @@ npm ci
 npm run dev
 ```
 
-Open the local Vite URL. Camera access requires `localhost` or HTTPS. Choose **Try demo set** in DJ Room to exercise both decks without supplying private or copyrighted audio.
+Open the local Vite URL. Camera access requires `localhost` or HTTPS. Choose **Load instant demo** in DJ Room to exercise both decks without supplying private or copyrighted audio.
 
 Run a fast test pass while working:
 

@@ -42,7 +42,7 @@ jobs:
         run: npm audit --audit-level=high
 
   camera:
-    name: Real-browser camera lifecycle
+    name: Camera lifecycle and mobile UX
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -64,14 +64,14 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run production camera contract
+      - name: Run production browser contracts
         run: npm run test:camera
 
       - name: Upload camera diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: camera-lifecycle-${{ github.run_attempt }}
+          name: browser-contract-${{ github.run_attempt }}
           path: output/playwright
           if-no-files-found: ignore
           retention-days: 7

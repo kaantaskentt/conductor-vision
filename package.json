@@ -34,6 +34,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:camera": "playwright test --project=chromium-camera",
+    "test:camera:hand": "playwright test --project=chromium-open-palm",
     "test:camera:headed": "playwright test --project=chromium-camera --headed"
   },
   "dependencies": {

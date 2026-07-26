@@ -268,28 +268,49 @@ describe('Ultra Vision app golden path', () => {
 
   async function loadDemoSet() {
     await act(async () => {
-      click(buttonByName(container, 'Try demo set'))
+      click(buttonByName(container, 'Load instant demo'))
       animationQueue.shift()?.(16)
       await Promise.resolve()
       await Promise.resolve()
     })
   }
 
+  async function openAirControls() {
+    const details = container.querySelector<HTMLDetailsElement>('.gesture-control-disclosure')
+    const summary = details?.querySelector('summary')
+    if (!details || !summary) throw new Error('Air Controls disclosure was not rendered.')
+    await act(async () => click(summary))
+    expect(details.open).toBe(true)
+  }
+
   it('loads the instant demo, keeps controls usable, and preserves the mix across tabs', async () => {
     expect(container.querySelector('h1')?.textContent).toBe('Mix with your hands.')
+    expect(container.querySelector('.air-mix-backdrop')).toBeNull()
     expect((buttonByName(container, 'Start both') as HTMLButtonElement).disabled).toBe(true)
 
     await loadDemoSet()
 
+    expect(container.querySelector('#air-mix-title')?.textContent).toContain('Neon Pulse')
+    expect(container.querySelector('#air-mix-title')?.textContent).toContain('mixed with')
+    expect(container.querySelector('#air-mix-title')?.textContent).toContain('Midnight Circuit')
+    expect(container.querySelector('.air-mix-meta')?.textContent).toContain(
+      'Playheads A 00:00 · B 00:00',
+    )
+    expect(container.querySelector('.air-mix-backdrop img')?.getAttribute('alt')).toBe('')
+    expect(container.querySelector('.air-mix-backdrop img')?.getAttribute('draggable')).toBe('false')
+    expect(container.querySelectorAll('.air-mix-stage-waveform > div')).toHaveLength(2)
+    expect(container.querySelectorAll('button[aria-label="Toggle BPM Sync"]')).toHaveLength(1)
     expect(container.textContent).toContain('Neon Pulse')
     expect(container.textContent).toContain('Midnight Circuit')
     expect(container.textContent).toContain('Two decks ready')
     expect((buttonByName(container, 'Start both') as HTMLButtonElement).disabled).toBe(false)
     expect(scrollIntoView).not.toHaveBeenCalled()
     expect(
-      [...container.querySelectorAll('.dj-quick-start li')].map((step) => step.className),
+      [...container.querySelectorAll('.first-mix-progress li')].map((step) => step.className),
     ).toEqual(['complete', 'active', 'pending'])
-    expect(container.textContent).toContain('Start local hand tracking when you are ready.')
+    expect(container.textContent).toContain('Tracks ready. Start the performance.')
+    expect(buttonByName(container, 'Start performance')).toBeTruthy()
+    expect(container.querySelector('.performance-bar')).toBeTruthy()
 
     const filter = container.querySelector<HTMLInputElement>(
       'input[aria-label="Deck A bipolar filter"]',
@@ -326,12 +347,11 @@ describe('Ultra Vision app golden path', () => {
   })
 
   it('keeps the first-mix path visible while tucking away secondary deck tools', () => {
-    expect(container.textContent).toContain('Your first mix')
+    expect(container.textContent).toContain('Start with the instant demo')
     expect(container.textContent).toContain('Load tracks')
-    expect(container.textContent).toContain('Camera comes next after both tracks are ready.')
-    expect(container.textContent).toContain('Hand control begins after the camera is ready.')
+    expect(buttonByName(container, 'Load instant demo')).toBeTruthy()
     expect(
-      [...container.querySelectorAll('.dj-quick-start li')].map((step) => step.className),
+      [...container.querySelectorAll('.first-mix-progress li')].map((step) => step.className),
     ).toEqual(['active', 'pending', 'pending'])
 
     const waveforms = [...container.querySelectorAll('.deck-waveform')]
@@ -341,6 +361,9 @@ describe('Ultra Vision app golden path', () => {
     const trackTools = [...container.querySelectorAll<HTMLDetailsElement>('.deck-tools')]
     expect(trackTools).toHaveLength(2)
     expect(trackTools.every((details) => !details.open)).toBe(true)
+
+    const airControls = container.querySelector<HTMLDetailsElement>('.gesture-control-disclosure')
+    expect(airControls?.open).toBe(false)
 
     expect(container.querySelectorAll('.gesture-modes button')).toHaveLength(3)
     expect(container.querySelector<HTMLButtonElement>('.gesture-modes button.active')?.textContent)
@@ -358,11 +381,70 @@ describe('Ultra Vision app golden path', () => {
     )
     expect(container.querySelectorAll('output[aria-live="polite"]')).toHaveLength(1)
     expect(container.querySelector('output[aria-live="polite"]')?.textContent).toContain(
-      'First mix step: Load tracks',
+      'First mix: Start with the instant demo',
     )
   })
 
+  it('launches music and camera together from the two-step first-mix path', async () => {
+    const { stream, track } = createStream()
+    getUserMedia.mockResolvedValue(stream)
+    await loadDemoSet()
+
+    await act(async () => {
+      click(buttonByName(container, 'Start performance'))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(getUserMedia).toHaveBeenCalledTimes(1)
+    expect([...container.querySelectorAll('audio')].every((audio) => !audio.paused)).toBe(true)
+    expect(buttonByName(container, 'Stop camera')).toBeTruthy()
+    expect(container.textContent).toContain('Raise one open palm')
+
+    const pauseMix = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Pause both decks from performance bar"]',
+    )
+    if (!pauseMix) throw new Error('Quick Pause mix was not rendered.')
+    await act(async () => click(pauseMix))
+    expect(buttonByName(container, 'Start music')).toBeTruthy()
+
+    await act(async () => {
+      click(buttonByName(container, 'Start music'))
+      await Promise.resolve()
+    })
+    expect([...container.querySelectorAll('audio')].every((audio) => !audio.paused)).toBe(true)
+
+    await act(async () => click(buttonByName(container, 'Stop camera')))
+    expect(track.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps camera controls honest when the browser blocks audio autoplay', async () => {
+    const { stream, track } = createStream()
+    getUserMedia.mockResolvedValue(stream)
+    vi.mocked(HTMLMediaElement.prototype.play).mockRejectedValueOnce(
+      new DOMException('Autoplay blocked', 'NotAllowedError'),
+    )
+    await loadDemoSet()
+
+    await act(async () => {
+      click(buttonByName(container, 'Start performance'))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(buttonByName(container, 'Stop camera')).toBeTruthy()
+    expect(buttonByName(container, 'Start music')).toBeTruthy()
+    expect(container.textContent).toContain('Hand controls ready. Start the music.')
+    expect([...container.querySelectorAll('audio')].every((audio) => audio.paused)).toBe(true)
+
+    await act(async () => click(buttonByName(container, 'Stop camera')))
+    expect(track.stop).toHaveBeenCalledTimes(1)
+  })
+
   it('reveals deck routing only for deck controls and keeps Shift as keyboard fine control', async () => {
+    await openAirControls()
     await act(async () => click(buttonByName(container, 'Volume')))
 
     expect(container.querySelector('[aria-label="Gesture deck target"]')).toBeTruthy()
@@ -392,22 +474,35 @@ describe('Ultra Vision app golden path', () => {
 
   it('toggles BPM Sync reversibly from the user-facing control', async () => {
     await loadDemoSet()
-    const sync = container.querySelector<HTMLButtonElement>('.bpm-sync-toggle')
+    const sync = container.querySelector<HTMLButtonElement>('.performance-sync')
     if (!sync) throw new Error('BPM Sync was not rendered.')
+    expect(container.querySelectorAll('button[aria-label="Toggle BPM Sync"]')).toHaveLength(1)
+    const status = container.querySelector<HTMLElement>('.bpm-sync-status')
+    if (!status) throw new Error('BPM Sync status was not rendered.')
+    expect(status.textContent).toContain('OFF')
 
     await act(async () => click(sync))
     expect(sync.getAttribute('aria-pressed')).toBe('true')
-    expect(sync.textContent).toContain('ON')
+    expect(sync.textContent).toContain('BPM matched')
+    expect(status.textContent).toContain('ON')
+    expect(status.textContent).toContain('BPM matched')
+    expect(container.querySelector('.air-mix-meta')?.textContent).toContain(
+      '120 BPM · TEMPO MATCH',
+    )
+    expect(container.textContent).toContain(
+      'Tempo matched to 120.0 BPM · align the downbeat manually',
+    )
     expect(container.textContent).toContain('Deck B follows Deck A at 120.0 BPM')
 
     await act(async () => click(sync))
     expect(sync.getAttribute('aria-pressed')).toBe('false')
-    expect(sync.textContent).toContain('OFF')
+    expect(status.textContent).toContain('OFF')
     expect(container.textContent).toContain('Original BPMs restored')
   })
 
   it('starts both demo decks and pauses them again through the master control', async () => {
     await loadDemoSet()
+    expect([...container.querySelectorAll('audio')].every((audio) => audio.loop)).toBe(true)
 
     await act(async () => {
       click(buttonByName(container, 'Start both'))
@@ -421,12 +516,57 @@ describe('Ultra Vision app golden path', () => {
     expect([...container.querySelectorAll('audio')].every((audio) => audio.paused)).toBe(true)
   })
 
+  it('keeps the essential manual mix controls together in the performance bar', async () => {
+    await loadDemoSet()
+
+    await act(async () => {
+      click(buttonByName(container, 'Play without camera'))
+      await Promise.resolve()
+    })
+    expect(getUserMedia).not.toHaveBeenCalled()
+    expect([...container.querySelectorAll('audio')].every((audio) => !audio.paused)).toBe(true)
+
+    const bar = container.querySelector<HTMLElement>('.performance-bar')
+    const quickFader = bar?.querySelector<HTMLInputElement>(
+      'input[aria-label="Quick master crossfader"]',
+    )
+    const mainFader = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Master crossfader"]',
+    )
+    if (!bar || !quickFader || !mainFader) throw new Error('Performance controls were not rendered.')
+
+    const quickSync = bar.querySelector<HTMLButtonElement>('.performance-sync')
+    if (!quickSync) throw new Error('Quick BPM Sync was not rendered.')
+    await act(async () => click(quickSync))
+    expect(quickSync.getAttribute('aria-pressed')).toBe('true')
+
+    await act(async () => setRangeValue(quickFader, '64'))
+    expect(quickFader.value).toBe('64')
+    expect(mainFader.value).toBe('64')
+
+    const center = [...bar.querySelectorAll('button')].find(
+      (button) => button.textContent?.trim() === 'Center',
+    )
+    if (!center) throw new Error('Quick crossfader Center was not rendered.')
+    await act(async () => click(center))
+    expect(quickFader.value).toBe('0')
+    expect(mainFader.value).toBe('0')
+
+    const pauseMix = bar.querySelector<HTMLButtonElement>(
+      'button[aria-label="Pause both decks from performance bar"]',
+    )
+    if (!pauseMix) throw new Error('Quick Pause mix was not rendered.')
+    await act(async () => click(pauseMix))
+    expect([...container.querySelectorAll('audio')].every((audio) => audio.paused)).toBe(true)
+  })
+
   it('keeps one local camera stream alive across both rooms and stops it explicitly', async () => {
     const { stream, track } = createStream()
     getUserMedia.mockResolvedValue(stream)
+    await loadDemoSet()
 
     await act(async () => {
-      click(buttonByName(container, 'Start camera'))
+      click(buttonByName(container, 'Start performance'))
       await Promise.resolve()
       await Promise.resolve()
       await Promise.resolve()
@@ -441,7 +581,7 @@ describe('Ultra Vision app golden path', () => {
       },
       audio: false,
     })
-    expect(animationQueue).toHaveLength(1)
+    expect(animationQueue.length).toBeGreaterThanOrEqual(1)
 
     await act(async () => {
       click(buttonByName(container, 'Vision'))
@@ -458,6 +598,64 @@ describe('Ultra Vision app golden path', () => {
     expect(container.textContent).toContain('Camera is off')
   })
 
+  it('preserves a manually adjusted filter when camera input was never engaged', async () => {
+    const firstCamera = createStream()
+    const secondCamera = createStream()
+    const thirdCamera = createStream()
+    getUserMedia
+      .mockResolvedValueOnce(firstCamera.stream)
+      .mockResolvedValueOnce(secondCamera.stream)
+      .mockResolvedValueOnce(thirdCamera.stream)
+    await loadDemoSet()
+    await openAirControls()
+    await act(async () => click(buttonByName(container, 'Filter')))
+
+    const filter = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Deck A bipolar filter"]',
+    )
+    if (!filter) throw new Error('Deck A filter was not rendered.')
+
+    await act(async () => {
+      click(buttonByName(container, 'Start performance'))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => setRangeValue(filter, '84'))
+    expect(filter.value).toBe('84')
+
+    await act(async () => click(buttonByName(container, 'Stop camera')))
+    expect(filter.value).toBe('84')
+
+    await act(async () => {
+      click(buttonByName(container, 'Turn on hand controls'))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => setRangeValue(filter, '76'))
+    expect(filter.value).toBe('76')
+
+    await act(async () => secondCamera.track.dispatch('ended'))
+    expect(filter.value).toBe('76')
+    expect(container.textContent).toContain('The camera stopped unexpectedly')
+
+    await act(async () => {
+      click(buttonByName(container, 'Retry camera'))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => setRangeValue(filter, '68'))
+    expect(filter.value).toBe('68')
+
+    await act(async () => click(buttonByName(container, 'Vision')))
+    await act(async () => click(buttonByName(container, 'DJ Room')))
+    expect(container.querySelector<HTMLInputElement>(
+      'input[aria-label="Deck A bipolar filter"]',
+    )?.value).toBe('68')
+  })
+
   it('announces camera preparation while model loading is still in progress', async () => {
     const { stream, track } = createStream()
     let resolveHandModel: ((value: unknown) => void) | undefined
@@ -467,18 +665,20 @@ describe('Ultra Vision app golden path', () => {
       }),
     )
     getUserMedia.mockResolvedValue(stream)
+    await loadDemoSet()
 
     await act(async () => {
-      click(buttonByName(container, 'Start camera'))
+      click(buttonByName(container, 'Start performance'))
       await Promise.resolve()
     })
 
-    expect(container.querySelector('output[aria-live="polite"]')?.textContent).toContain(
-      'Loading hand tracking before the camera opens',
-    )
-    expect(container.querySelector('output[aria-live="polite"]')?.textContent).not.toContain(
-      'Camera is off',
-    )
+    const loadingAnnouncements = [...container.querySelectorAll('[aria-live="polite"]')]
+      .map((region) => region.textContent ?? '')
+    expect(loadingAnnouncements).toHaveLength(2)
+    expect(loadingAnnouncements.filter((text) =>
+      text.includes('Loading hand tracking before the camera opens'),
+    )).toHaveLength(1)
+    expect(loadingAnnouncements.join(' ')).not.toContain('Camera is off')
 
     await act(async () => {
       resolveHandModel?.({
@@ -500,9 +700,10 @@ describe('Ultra Vision app golden path', () => {
     getUserMedia
       .mockRejectedValueOnce(new DOMException('Denied', 'NotAllowedError'))
       .mockResolvedValueOnce(stream)
+    await loadDemoSet()
 
     await act(async () => {
-      click(buttonByName(container, 'Start camera'))
+      click(buttonByName(container, 'Start performance'))
       await Promise.resolve()
       await Promise.resolve()
       await Promise.resolve()
@@ -510,16 +711,17 @@ describe('Ultra Vision app golden path', () => {
     expect(container.textContent).toContain(
       'Camera permission was blocked. Allow access in your browser, then try again.',
     )
-    expect(container.querySelector('output[aria-live="polite"]')?.textContent).toContain(
+    const errorAnnouncements = [...container.querySelectorAll('[aria-live="polite"]')]
+      .map((region) => region.textContent ?? '')
+    expect(errorAnnouncements).toHaveLength(2)
+    expect(errorAnnouncements.filter((text) => text.includes(
       'Camera permission was blocked. Allow access in your browser, then try again.',
-    )
-    expect(container.querySelector('output[aria-live="polite"]')?.textContent).not.toContain(
-      'Camera is off',
-    )
-    expect(buttonByName(container, 'Start camera')).toBeTruthy()
+    ))).toHaveLength(1)
+    expect(errorAnnouncements.join(' ')).not.toContain('Camera is off')
+    expect(buttonByName(container, 'Retry camera')).toBeTruthy()
 
     await act(async () => {
-      click(buttonByName(container, 'Start camera'))
+      click(buttonByName(container, 'Retry camera'))
       await Promise.resolve()
       await Promise.resolve()
       await Promise.resolve()

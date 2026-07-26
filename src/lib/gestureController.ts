@@ -92,6 +92,14 @@ export function transitionGestureClutch(
     return { state, feedback: 'locked' }
   }
 
+  if (state.phase === 'release-pending' && event.now >= state.releaseAt) {
+    return {
+      state: createGestureClutchState(),
+      feedback: 'released',
+      releaseReason: state.reason,
+    }
+  }
+
   if (event.detected && event.openFingers > GESTURE_CLUTCH_RELEASE_FINGERS) {
     return {
       state: { phase: 'held' },
@@ -111,15 +119,7 @@ export function transitionGestureClutch(
     }
   }
 
-  if (event.now < state.releaseAt) {
-    return { state, feedback: 'release-pending', releaseReason: reason }
-  }
-
-  return {
-    state: createGestureClutchState(),
-    feedback: 'released',
-    releaseReason: reason,
-  }
+  return { state, feedback: 'release-pending', releaseReason: reason }
 }
 
 export function shortestAngleDelta(current: number, baseline: number) {

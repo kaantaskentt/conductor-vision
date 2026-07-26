@@ -34,9 +34,9 @@ No account, API key, database, backend, or audio files are required for the firs
 ## Try your first mix in 60 seconds
 
 1. Open the [live app](https://ultra-vision.vercel.app) and choose **DJ Room**.
-2. Select **Try demo set** to generate two short, copyright-safe tracks locally.
-3. Press **Start both** and move the center crossfader.
-4. Follow the live readiness strip: start the camera, allow access, then open your palm to grab the selected control without moving its current value.
+2. Select **Load instant demo** to generate two short, copyright-safe tracks locally.
+3. Press **Start performance** to start both decks and local hand tracking together—or choose **Play without camera**.
+4. Raise one open palm, then use **More Air Controls** to route movement to the crossfader, a deck level, or its filter.
 
 Close your hand to lock the crossfader or volume position; Filter instead returns to its neutral midpoint after release. A newly detected hand grabs the current value without moving it, then responds only to intentional movement.
 
@@ -44,6 +44,7 @@ Close your hand to lock the crossfader or volume position; Filter instead return
 
 - **Instant demo set** — generate two original rhythmic loops locally and reach a playable mix without finding audio files.
 - **Two-deck DJ Room** — control independent transports, hardware-style level and bipolar filter knobs, live analyser signal history, track-quarter jumps, post-fader meters, a master limiter, and an equal-power crossfader.
+- **First Mix cockpit** — move from a generated demo to music plus hand controls in two clear actions, with a thumb-reachable performance bar on mobile.
 - **Intentional gesture routing** — send an open palm to the crossfader or one deck's level or filter. Relative pickup prevents first-frame jumps, brief landmark flicker stays latched, and a deliberate fist releases the control.
 - **BPM tools** — estimate BPM locally, tap a correction, and use one reversible BPM Sync control to match playback rates.
 - **Vision workspace** — inspect hand landmarks, raised fingers, face signals, motion direction, and color coverage.
@@ -142,7 +143,7 @@ Read [Building Ultra Vision with Codex](./docs/BUILDING_WITH_CODEX.md) for the d
 
 ## Project status
 
-Ultra Vision is an active experimental project. Vision, two-deck mixing, and the real-browser camera lifecycle are functional and automated. Phase-aware sync, a provenance-safe hand-gesture model fixture, measured long-session performance, and the Replay Studio interface remain future work.
+Ultra Vision is an active experimental project. Vision, two-deck mixing, and the real-browser camera lifecycle are functional and automated. Phase-aware sync, a broader measured hand-gesture fixture corpus, measured long-session performance, and the Replay Studio interface remain future work.
 
 Read the [roadmap](./ROADMAP.md), [testing strategy](./docs/TESTING.md), and [contributor guide](./CONTRIBUTING.md). Focused issues and pull requests are welcome.
 

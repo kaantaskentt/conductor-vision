@@ -1,10 +1,26 @@
 import { defineConfig, devices } from '@playwright/test'
+import { fileURLToPath } from 'node:url'
 
 const isCi = Boolean(process.env.CI)
+const openPalmFixture = fileURLToPath(
+  new URL('./e2e/fixtures/open-palm.mjpeg', import.meta.url),
+)
+const cameraLaunchArgs = [
+  '--use-fake-ui-for-media-stream',
+  '--use-fake-device-for-media-stream',
+  '--use-gl=angle',
+  '--use-angle=swiftshader',
+  '--enable-unsafe-swiftshader',
+  '--ignore-gpu-blocklist',
+]
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: '**/camera-lifecycle.spec.ts',
+  testMatch: [
+    '**/camera-lifecycle.spec.ts',
+    '**/first-mix-mobile.spec.ts',
+    '**/open-palm-gesture.spec.ts',
+  ],
   fullyParallel: false,
   workers: 1,
   retries: isCi ? 1 : 0,
@@ -26,18 +42,27 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium-camera',
+      testMatch: ['**/camera-lifecycle.spec.ts', '**/first-mix-mobile.spec.ts'],
+      use: {
+        ...devices['Desktop Chrome'],
+        permissions: ['camera'],
+        viewport: { width: 1280, height: 720 },
+        launchOptions: {
+          args: cameraLaunchArgs,
+        },
+      },
+    },
+    {
+      name: 'chromium-open-palm',
+      testMatch: '**/open-palm-gesture.spec.ts',
       use: {
         ...devices['Desktop Chrome'],
         permissions: ['camera'],
         viewport: { width: 1280, height: 720 },
         launchOptions: {
           args: [
-            '--use-fake-ui-for-media-stream',
-            '--use-fake-device-for-media-stream',
-            '--use-gl=angle',
-            '--use-angle=swiftshader',
-            '--enable-unsafe-swiftshader',
-            '--ignore-gpu-blocklist',
+            ...cameraLaunchArgs,
+            `--use-file-for-fake-video-capture=${openPalmFixture}`,
           ],
         },
       },

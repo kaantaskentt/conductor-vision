@@ -101,6 +101,9 @@ test('production camera survives handoff, capture, stop, and restart', async ({ 
     )
   })
   page.on('requestfailed', (request) => {
+    if (request.url().startsWith('blob:') && request.failure()?.errorText === 'net::ERR_ABORTED') {
+      return
+    }
     runtimeProblems.push(
       `requestfailed: ${request.url()} (${request.failure()?.errorText ?? 'unknown error'})`,
     )
@@ -116,10 +119,14 @@ test('production camera survives handoff, capture, stop, and restart', async ({ 
   await expect(page.getByRole('heading', { name: 'Mix with your hands.' })).toBeVisible()
   await expect.poll(() => page.evaluate(() => window.isSecureContext)).toBe(true)
 
-  await page.getByRole('button', { name: 'Start camera' }).click()
+  await page.getByRole('button', { name: 'Load instant demo' }).click()
+  await page.getByRole('button', { name: 'Start performance' }).click()
 
   try {
     await expectLiveCamera(page)
+    await expect.poll(() => page.locator('audio').evaluateAll((audio) =>
+      audio.length === 2 && audio.every((track) => !(track as HTMLAudioElement).paused),
+    )).toBe(true)
     const djRoomProbe = await readCameraProbe(page)
     expect(djRoomProbe.streamId).not.toBeNull()
     expect(djRoomProbe.trackId).not.toBeNull()
@@ -155,8 +162,12 @@ test('production camera survives handoff, capture, stop, and restart', async ({ 
     expect((await readCameraProbe(page)).streamId).toBe(djRoomProbe.streamId)
 
     await page.getByRole('button', { name: 'Stop camera' }).click()
-    await expect(page.getByRole('button', { name: 'Start camera' })).toBeVisible()
+    const restartCamera = page.getByRole('button', {
+      name: /^(Turn on hand controls|Start performance)$/,
+    })
+    await expect(restartCamera).toBeVisible()
     await expect(page.getByText('Camera off', { exact: true }).first()).toBeVisible()
+    await expect(page.locator('.camera-stage')).toHaveAttribute('data-camera-status', 'idle')
     await expect.poll(async () => (await readCameraProbe(page)).streamId).toBeNull()
     await expect.poll(() =>
       page.evaluate(() =>
@@ -165,7 +176,7 @@ test('production camera survives handoff, capture, stop, and restart', async ({ 
       ),
     ).toBe('ended')
 
-    await page.getByRole('button', { name: 'Start camera' }).click()
+    await restartCamera.click()
     await expectLiveCamera(page)
     const restartedProbe = await readCameraProbe(page)
     expect(restartedProbe.streamId).not.toBe(djRoomProbe.streamId)

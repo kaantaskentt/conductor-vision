@@ -15,7 +15,7 @@ Unit tests cover vision math, pixel studies, gesture pickup/release, camera-over
 
 Coverage cannot fall below the checked-in project floor: 50% statements and lines, 40% functions, and 35% branches.
 
-## Real-browser camera contract
+## Real-browser camera and mobile contracts
 
 Install Ultra Vision's pinned Chromium build once, then run the camera contract:
 
@@ -24,21 +24,25 @@ npx playwright install chromium
 npm run test:camera
 ```
 
-The command builds and serves the production application on `127.0.0.1`, grants camera access to Chromium's synthetic device, and runs the real MediaPipe JavaScript, WASM, and verified model pipeline. It proves:
+The command builds and serves the production application on `127.0.0.1`, grants camera access to Chromium's synthetic device, and runs the real MediaPipe JavaScript, WASM, and verified model pipeline. It also exercises the First Mix experience at phone widths. It proves:
 
 - camera startup reaches a live MediaStream and decoded video frames;
 - MediaPipe processes frames and sizes the landmark canvas to the video;
 - Vision ↔ DJ Room remounts preserve the same owned stream and track;
 - a frame can be captured locally without an unexpected outbound request;
 - stop ends the original track and clears the video source;
-- restart creates a fresh live stream; and
-- application page errors, unexpected console errors, failed requests, and unapproved external origins fail the test.
+- restart creates a fresh live stream;
+- application page errors, unexpected console errors, failed requests, and unapproved external origins fail the test;
+- the generated demo reaches manual playback without requesting camera access;
+- generated demo tracks loop so a cold vision-model download cannot end the demo before hand controls are ready;
+- the mobile performance bar remains reachable after scrolling, exposes 44px controls, and has no horizontal overflow at 390 CSS pixels; and
+- the first-mix and performance controls reflow without horizontal overflow at 320 CSS pixels.
 
-The fixture is Chromium's non-personal test pattern. It does not prove hand-detection quality, a physical device's permission UX, Safari or Firefox behavior, deployed `vercel.json` headers, GPU performance, or long-session stability. Those remain separate checks. The contract deliberately exercises the production model URLs, so a sustained upstream outage will also fail the check; CI retries once to distinguish a transient network fault. It runs with one worker and uploads a trace and synthetic-only failure screenshot when it fails.
+The required harness uses Chromium's non-personal test pattern as a zero-hand negative case. A separate generated open-palm candidate is documented in [`e2e/fixtures/README.md`](../e2e/fixtures/README.md), but its test is intentionally marked `fixme`: the current single-frame fixture reaches the live pipeline without producing stable hand detection. It is excluded from `npm run test:camera` and must not be cited as passing evidence. The required contract does not prove hand-detection quality, a physical device's permission UX, Safari or Firefox behavior, deployed `vercel.json` headers, GPU performance, long-session stability, or accuracy across lighting, motion, devices, and people. Those remain separate checks. The contract deliberately exercises the production model URLs, so a sustained upstream outage will also fail the check; CI retries once to distinguish a transient network fault. It runs with one worker and uploads a trace and synthetic-only failure screenshot when it fails.
 
 ## Manual browser matrix
 
-At minimum, check the latest stable Chrome, Safari, and Firefox on desktop. Check a 390×844 mobile viewport for reflow even when camera support is desktop-only.
+At minimum, check the latest stable Chrome, Safari, and Firefox on desktop. Check 390×844 and 320×844 mobile viewports for reflow even when camera support is desktop-only.
 
 For each browser, verify:
 
@@ -57,8 +61,8 @@ For each browser, verify:
 The harness has three layers:
 
 1. JSON landmark traces and React integration tests drive pure gesture, permission, recovery, and lifecycle logic on every pull request.
-2. The production-build Chromium contract runs a synthetic camera through real MediaPipe on every pull request.
-3. A provenance-documented hand-only fake-camera clip for measured detector quality remains planned for scheduled CI.
+2. The production-build Chromium contract runs a zero-hand test pattern through real MediaPipe and the mobile First Mix checks on every pull request.
+3. The documented generated open-palm candidate remains a `fixme` until it detects reliably; a future measured detector-quality corpus can extend it only after representation, provenance, and review rules are defined.
 
 Do not commit a contributor's face or room recording. Crop or generate hand-only fixtures and document their provenance.
 

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { equalPowerCrossfade } from '../lib/djAudio'
 import {
   appendWaveformSample,
   bipolarFilterFrequencies,
@@ -7,7 +8,6 @@ import {
   channelGainFromPercent,
   chooseSyncMaster,
   createBpmAnalysisQueue,
-  equalPowerCrossfade,
   estimateBpmFromSamples,
   isGestureFrameEngaged,
   MAX_BPM_ANALYSIS_BYTES,

@@ -93,6 +93,24 @@ describe('gesture clutch', () => {
       'released',
     ])
   })
+
+  it('releases an expired pending session before a returning open hand can recover it', () => {
+    const trace = runClutchTrace([
+      { detected: true, openFingers: 5, now: 0 },
+      { detected: false, openFingers: 0, now: 40 },
+      {
+        detected: true,
+        openFingers: 5,
+        now: 40 + GESTURE_CLUTCH_LOST_RELEASE_MS,
+      },
+    ])
+
+    expect(trace.at(-1)).toEqual({
+      state: { phase: 'locked' },
+      feedback: 'released',
+      releaseReason: 'lost',
+    })
+  })
 })
 
 describe('filter gesture controller', () => {

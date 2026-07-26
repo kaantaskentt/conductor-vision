@@ -70,7 +70,7 @@ export function PageIntro({
   eyebrow: string
   title: string
   description: string
-  actions: ReactNode
+  actions?: ReactNode
   className?: string
 }) {
   return (
@@ -80,7 +80,7 @@ export function PageIntro({
         <h1>{title}</h1>
         <p className="page-description">{description}</p>
       </div>
-      <div className="page-actions">{actions}</div>
+      {actions ? <div className="page-actions">{actions}</div> : null}
     </section>
   )
 }
@@ -91,6 +91,7 @@ export function CameraStage({
   setVideoElement,
   setCanvasElement,
   compact = false,
+  backdrop,
   overlay,
 }: {
   status: CameraStatus
@@ -98,13 +99,22 @@ export function CameraStage({
   setVideoElement: (element: HTMLVideoElement | null) => void
   setCanvasElement: (element: HTMLCanvasElement | null) => void
   compact?: boolean
+  backdrop?: ReactNode
   overlay?: ReactNode
 }) {
   const isRunning = status === 'running'
   const isLoading = status === 'loading'
 
   return (
-    <div className={`camera-stage ${compact ? 'compact' : ''}`}>
+    <div
+      className={`camera-stage status-${status} ${compact ? 'compact' : ''}`.trim()}
+      data-camera-status={status}
+    >
+      {backdrop ? (
+        <div className="camera-stage-backdrop" aria-hidden="true">
+          {backdrop}
+        </div>
+      ) : null}
       <video
         ref={setVideoElement}
         className="camera-feed"
@@ -137,10 +147,10 @@ export function CameraStage({
         </div>
       ) : null}
       {isLoading && (
-        <output className="camera-loading" aria-live="polite">
+        <div className="camera-loading">
           <strong>Preparing local vision</strong>
           <span>{message}</span>
-        </output>
+        </div>
       )}
       {isRunning && overlay}
     </div>

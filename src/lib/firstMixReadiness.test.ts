@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  deriveFirstMixExperience,
   deriveFirstMixReadiness,
+  type FirstMixExperienceInput,
   type FirstMixReadinessInput,
   type FirstMixReadinessStepState,
 } from './firstMixReadiness'
@@ -20,6 +22,21 @@ function states(overrides: Partial<FirstMixReadinessInput> = {}) {
   return derive(overrides).map(({ state }) => state)
 }
 
+function experience(overrides: Partial<FirstMixExperienceInput> = {}) {
+  return deriveFirstMixExperience({
+    bothTracksLoaded: false,
+    cameraStatus: 'idle',
+    cameraMessage: 'Camera is off.',
+    handDetected: false,
+    gesturePhase: 'locked',
+    anyPlaying: false,
+    deckALoaded: false,
+    deckBLoaded: false,
+    selectedControl: 'crossfader',
+    ...overrides,
+  })
+}
+
 describe('first-mix readiness', () => {
   it('starts with track loading active and later steps pending', () => {
     const steps = derive()
@@ -34,7 +51,7 @@ describe('first-mix readiness', () => {
       {
         id: 'camera',
         state: 'pending',
-        label: 'Start camera',
+        label: 'Camera',
         detail: 'Camera comes next after both tracks are ready.',
       },
       {
@@ -144,5 +161,164 @@ describe('first-mix readiness', () => {
         gesturePhase: 'calibrating',
       })[2].detail,
     ).toBe('Hand found. Hold steady while the selected control calibrates.')
+  })
+})
+
+describe('first-mix experience director', () => {
+  it('starts with one instant-demo action and a quiet path to personal tracks', () => {
+    expect(experience()).toEqual({
+      stage: 'tracks',
+      progress: 'Step 1 of 3',
+      title: 'Start with the instant demo',
+      detail: 'Two generated tracks. Nothing uploads.',
+      primaryAction: 'load-demo',
+      secondaryAction: 'show-tracks',
+    })
+  })
+
+  it('keeps camera cancel and track setup available when camera starts before tracks', () => {
+    expect(experience({
+      cameraStatus: 'loading',
+      cameraMessage: 'Requesting camera permission…',
+    })).toEqual({
+      stage: 'camera',
+      progress: 'Preparing on device',
+      title: 'Preparing hand controls',
+      detail: 'Requesting camera permission…',
+      primaryAction: 'cancel-camera',
+      secondaryAction: 'show-tracks',
+    })
+  })
+
+  it('keeps camera retry and the missing-deck path available after an early failure', () => {
+    expect(experience({
+      cameraStatus: 'error',
+      cameraMessage: 'Camera permission was blocked.',
+      deckALoaded: true,
+    })).toEqual({
+      stage: 'recovery',
+      progress: 'Camera needs attention',
+      title: 'Camera blocked — you can keep setting up.',
+      detail: 'Camera permission was blocked.',
+      primaryAction: 'retry-camera',
+      secondaryAction: 'show-tracks',
+    })
+  })
+
+  it('offers one-click music plus camera after both decks are ready', () => {
+    expect(experience({
+      bothTracksLoaded: true,
+      deckALoaded: true,
+      deckBLoaded: true,
+    })).toMatchObject({
+      stage: 'launch',
+      title: 'Tracks ready. Start the performance.',
+      primaryAction: 'start-performance',
+      secondaryAction: 'play-manual',
+    })
+  })
+
+  it('moves from manual playback into local hand controls', () => {
+    expect(experience({
+      bothTracksLoaded: true,
+      deckALoaded: true,
+      deckBLoaded: true,
+      anyPlaying: true,
+    })).toMatchObject({
+      stage: 'camera',
+      title: 'Music live. Turn on hand controls.',
+      primaryAction: 'start-camera',
+      secondaryAction: null,
+    })
+  })
+
+  it('does not claim the performance is ready when camera starts but audio is paused', () => {
+    expect(experience({
+      bothTracksLoaded: true,
+      deckALoaded: true,
+      deckBLoaded: true,
+      cameraStatus: 'running',
+      anyPlaying: false,
+      handDetected: true,
+      gesturePhase: 'armed',
+    })).toEqual({
+      stage: 'launch',
+      progress: 'Music paused',
+      title: 'Hand controls ready. Start the music.',
+      detail: 'The camera can stay live while you restart both decks.',
+      primaryAction: 'play-manual',
+      secondaryAction: null,
+    })
+  })
+
+  it('keeps music usable when camera permission fails', () => {
+    expect(experience({
+      bothTracksLoaded: true,
+      deckALoaded: true,
+      deckBLoaded: true,
+      cameraStatus: 'error',
+      cameraMessage: 'Camera permission was blocked.',
+    })).toEqual({
+      stage: 'recovery',
+      progress: 'Manual mode ready',
+      title: 'Camera blocked — the music still works.',
+      detail: 'Camera permission was blocked.',
+      primaryAction: 'retry-camera',
+      secondaryAction: 'play-manual',
+    })
+  })
+
+  it('turns hand pickup into distinct find, hold, and live instructions', () => {
+    expect(experience({
+      bothTracksLoaded: true,
+      deckALoaded: true,
+      deckBLoaded: true,
+      cameraStatus: 'running',
+      anyPlaying: true,
+    })).toMatchObject({
+      stage: 'hand',
+      title: 'Raise one open palm',
+    })
+    expect(experience({
+      bothTracksLoaded: true,
+      deckALoaded: true,
+      deckBLoaded: true,
+      cameraStatus: 'running',
+      anyPlaying: true,
+      handDetected: true,
+      gesturePhase: 'calibrating',
+    })).toMatchObject({
+      stage: 'calibrating',
+      title: 'Hold steady — connecting without a jump',
+    })
+    expect(experience({
+      bothTracksLoaded: true,
+      deckALoaded: true,
+      deckBLoaded: true,
+      cameraStatus: 'running',
+      anyPlaying: true,
+      handDetected: true,
+      gesturePhase: 'armed',
+      selectedControl: 'filter',
+    })).toMatchObject({
+      stage: 'ready',
+      title: 'You’re live — rotate your wrist',
+      detail: 'Close your hand and the filter returns to 50%.',
+    })
+  })
+
+  it('guides personal-track loading to whichever deck is still empty', () => {
+    expect(experience({ deckALoaded: true })).toEqual({
+      stage: 'tracks',
+      progress: 'Step 1 of 3',
+      title: 'Deck A ready. Add Deck B.',
+      detail: 'Choose one more local track to unlock the performance controls.',
+      primaryAction: 'show-tracks',
+      secondaryAction: null,
+    })
+    expect(experience({ deckBLoaded: true })).toMatchObject({
+      title: 'Deck B ready. Add Deck A.',
+      primaryAction: 'show-tracks',
+    })
   })
 })

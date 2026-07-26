@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createDemoTracks } from '../lib/demoAudio'
+import { equalPowerCrossfade } from '../lib/djAudio'
 import {
   createFilterGestureState,
   createGestureClutchState,
@@ -13,6 +14,10 @@ import { clamp, type GestureFrame } from '../lib/vision'
 
 export type DeckId = 'a' | 'b'
 export type DjControl = 'crossfader' | 'volume' | 'filter'
+export type GestureSessionReleaseReason =
+  | 'camera-stopped'
+  | 'camera-error'
+  | 'left-dj-room'
 
 export type MasterCaptureHandle = {
   stream: MediaStream
@@ -64,6 +69,7 @@ type BpmSyncSnapshot = {
 type LoadFileOptions = {
   knownBpm?: number
   title?: string
+  loop?: boolean
 }
 
 type PositionGesture = {
@@ -101,6 +107,11 @@ const POSITION_GESTURE_DEAD_ZONE = 0.025
 const GESTURE_CALIBRATION_MS = 420
 const POSITION_CALIBRATION_TOLERANCE = 0.04
 export const GESTURE_ENGAGE_FINGERS = 3
+const GESTURE_SESSION_RELEASE_MESSAGES: Record<GestureSessionReleaseReason, string> = {
+  'camera-stopped': 'Camera stopped · Air Controls released',
+  'camera-error': 'Camera unavailable · Air Controls released',
+  'left-dj-room': 'Air Controls released · open your palm to grab again',
+}
 
 export function validateAudioFile(file: File) {
   const hasSupportedType = ACCEPTED_AUDIO_TYPES.has(file.type)
@@ -119,14 +130,6 @@ export function phraseTimeForIndex(index: number, duration: number) {
   const boundedIndex = Math.max(1, Math.min(4, index))
   if (!Number.isFinite(duration) || duration <= 0) return 0
   return ((boundedIndex - 1) / 4) * duration
-}
-
-export function equalPowerCrossfade(value: number) {
-  const position = clamp((value + 100) / 200)
-  return {
-    a: Math.cos(position * Math.PI * 0.5),
-    b: Math.sin(position * Math.PI * 0.5),
-  }
 }
 
 export function normalizeBpm(value: number) {
@@ -657,6 +660,7 @@ export function useDjMixer() {
         objectUrlsRef.current[id] = nextUrl
         audio.pause()
         audio.src = nextUrl
+        audio.loop = options.loop ?? false
         resetDeckAudioParameters(id)
         audio.load()
         tapTimesRef.current[id] = []
@@ -858,6 +862,28 @@ export function useDjMixer() {
     [cancelFilterRelease, setDeckFilter],
   )
 
+  const releaseGestureSession = useCallback(
+    (reason: GestureSessionReleaseReason) => {
+      const filterDeck =
+        filterGestureRef.current.phase === 'idle' ? null : filterGestureRef.current.deck
+
+      cancelFilterRelease()
+      gestureEngagedRef.current = false
+      gestureRequiresReleaseRef.current = false
+      gestureClutchRef.current = createGestureClutchState()
+      positionGestureRef.current = null
+      filterGestureRef.current = createFilterGestureState()
+      smoothedGestureRef.current = null
+      lastGestureUpdateAtRef.current = 0
+      setGesturePhase('locked')
+      if (filterDeck) {
+        setDeckFilter(filterDeck, DJ_NEUTRAL_VALUES.filter, 0.12)
+      }
+      setGestureStatus(GESTURE_SESSION_RELEASE_MESSAGES[reason])
+    },
+    [cancelFilterRelease, setDeckFilter],
+  )
+
   const applyDeckTempo = useCallback(
     (id: DeckId, value: number) => {
       const tempo = Math.round(clamp(value, -20, 20) * 10) / 10
@@ -898,6 +924,18 @@ export function useDjMixer() {
       updateCrossfadeNodes(next)
     },
     [updateCrossfadeNodes],
+  )
+
+  const claimManualControl = useCallback(
+    (control: DjControl, deck: DeckId = activeDeck) => {
+      const label = control === 'volume' ? 'level' : control
+      disarmGesture(
+        control === 'crossfader'
+          ? 'Crossfader under manual control'
+          : `${deckLabel(deck)} ${label} under manual control`,
+      )
+    },
+    [activeDeck, disarmGesture],
   )
 
   const toggleBpmSync = useCallback(() => {
@@ -955,7 +993,7 @@ export function useDjMixer() {
     patchDeck(masterId, { error: null })
     patchDeck(targetId, {
       error: null,
-      bpmStatus: `Synced to ${targetEffectiveBpm.toFixed(1)} BPM · align the downbeat manually`,
+      bpmStatus: `Tempo matched to ${targetEffectiveBpm.toFixed(1)} BPM · align the downbeat manually`,
     })
     const message = `${deckLabel(targetId)} follows ${deckLabel(masterId)} at ${targetEffectiveBpm.toFixed(1)} BPM`
     setBpmSyncMessage(message)
@@ -1025,8 +1063,16 @@ export function useDjMixer() {
       ])
       const [deckA, deckB] = createDemoTracks()
       const loaded = await Promise.all([
-        loadFile('a', deckA.file, { knownBpm: deckA.bpm, title: deckA.title }),
-        loadFile('b', deckB.file, { knownBpm: deckB.bpm, title: deckB.title }),
+        loadFile('a', deckA.file, {
+          knownBpm: deckA.bpm,
+          title: deckA.title,
+          loop: true,
+        }),
+        loadFile('b', deckB.file, {
+          knownBpm: deckB.bpm,
+          title: deckB.title,
+          loop: true,
+        }),
       ])
       if (!loaded.every(Boolean)) {
         setGestureStatus('The demo set could not load · try again')
@@ -1170,17 +1216,24 @@ export function useDjMixer() {
         positionGestureRef.current = null
         smoothedGestureRef.current = null
         if (selectedControl === 'filter') {
-          const transition = transitionFilterGesture(filterGestureRef.current, {
-            type: 'lost',
-            now,
-          })
-          filterGestureRef.current = transition.state
-          if (
-            transition.command === 'schedule-neutral' &&
-            transition.state.phase === 'release-grace'
-          ) {
-            scheduleFilterRelease(transition.state.releaseAt)
-            setGestureStatus(`${deckLabel(activeDeck)} filter released · returning to 50%`)
+          if (clutchTransition.releaseReason === 'fist') {
+            cancelFilterRelease()
+            filterGestureRef.current = createFilterGestureState()
+            setDeckFilter(activeDeck, DJ_NEUTRAL_VALUES.filter, 0.12)
+            setGestureStatus(`${deckLabel(activeDeck)} filter returned to neutral`)
+          } else {
+            const transition = transitionFilterGesture(filterGestureRef.current, {
+              type: 'lost',
+              now,
+            })
+            filterGestureRef.current = transition.state
+            if (
+              transition.command === 'schedule-neutral' &&
+              transition.state.phase === 'release-grace'
+            ) {
+              scheduleFilterRelease(transition.state.releaseAt)
+              setGestureStatus(`${deckLabel(activeDeck)} filter released · returning to 50%`)
+            }
           }
         } else {
           filterGestureRef.current = createFilterGestureState()
@@ -1425,11 +1478,13 @@ export function useDjMixer() {
     setDeckVolume,
     setDeckFilter,
     setCrossfader,
+    claimManualControl,
     toggleBpmSync,
     tapTempo,
     selectControl,
     resetControl,
     resetMix,
     handleGestureFrame,
+    releaseGestureSession,
   }
 }

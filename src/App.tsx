@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import {
   AppHeader,
@@ -15,7 +15,7 @@ function App() {
   const [screen, setScreen] = useState<Screen>('dj-room')
   const [targetColor, setTargetColor] = useState<TargetColor>('purple')
   const mixer = useDjMixer()
-  const { handleGestureFrame } = mixer
+  const { handleGestureFrame, releaseGestureSession } = mixer
   const handleVisionGesture = useCallback(
     (frame: Parameters<typeof handleGestureFrame>[0]) => {
       if (screen === 'dj-room') handleGestureFrame(frame)
@@ -27,17 +27,27 @@ function App() {
     targetColor,
     onGestureFrame: handleVisionGesture,
   })
+  const previousScreenRef = useRef(screen)
+  const previousCameraStatusRef = useRef(vision.status)
 
   useEffect(() => {
-    if (screen === 'dj-room') return
-    handleGestureFrame({
-      detected: false,
-      x: 0.5,
-      y: 0.5,
-      wristAngle: 0,
-      openFingers: 0,
-    })
-  }, [handleGestureFrame, screen])
+    const previousScreen = previousScreenRef.current
+    const previousCameraStatus = previousCameraStatusRef.current
+    previousScreenRef.current = screen
+    previousCameraStatusRef.current = vision.status
+
+    if (previousScreen === 'dj-room' && screen === 'vision') {
+      releaseGestureSession('left-dj-room')
+    } else if (
+      screen === 'dj-room' &&
+      previousCameraStatus !== vision.status &&
+      vision.status === 'idle'
+    ) {
+      releaseGestureSession('camera-stopped')
+    } else if (screen === 'dj-room' && vision.status === 'error') {
+      releaseGestureSession('camera-error')
+    }
+  }, [releaseGestureSession, screen, vision.status])
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' })

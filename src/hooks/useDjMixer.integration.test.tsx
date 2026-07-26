@@ -162,10 +162,13 @@ function Harness({ onUpdate }: { onUpdate: (mixer: Mixer) => void }) {
   return null
 }
 
-function openHand(wristAngle: number, options: { fingers?: number; y?: number } = {}) {
+function openHand(
+  wristAngle: number,
+  options: { fingers?: number; x?: number; y?: number } = {},
+) {
   return {
     detected: true,
-    x: 0.5,
+    x: options.x ?? 0.5,
     y: options.y ?? 0.5,
     wristAngle,
     openFingers: options.fingers ?? 5,
@@ -269,13 +272,6 @@ describe('DJ mixer filter gesture integration', () => {
     expect(current.decks.a.filter).toBe(70)
     expect(current.gestureStatus).toBe('Keep your fist closed to release')
 
-    await act(async () => {
-      vi.advanceTimersByTime(GESTURE_CLUTCH_FIST_RELEASE_MS)
-      current.handleGestureFrame(closedHand((-25 * Math.PI) / 180))
-    })
-    expect(current.decks.a.filter).toBe(70)
-    expect(current.gestureStatus).toContain('returning to 50%')
-
     const context = FakeAudioContext.instances[0]
     const moved = bipolarFilterFrequencies(70)
     const movedQ = bipolarFilterResonance(70)
@@ -291,12 +287,13 @@ describe('DJ mixer filter gesture integration', () => {
     )
     expect(context.filters[0].Q.setTargetAtTime).toHaveBeenLastCalledWith(movedQ, 4, 0.045)
 
-    await act(async () => vi.advanceTimersByTime(FILTER_GESTURE_RELEASE_MS - 1))
-    expect(current.decks.a.filter).toBe(70)
-
-    await act(async () => vi.advanceTimersByTime(1))
+    await act(async () => {
+      vi.advanceTimersByTime(GESTURE_CLUTCH_FIST_RELEASE_MS)
+      current.handleGestureFrame(closedHand((-25 * Math.PI) / 180))
+    })
     expect(current.decks.a.filter).toBe(DJ_NEUTRAL_VALUES.filter)
     expect(current.gestureStatus).toBe('Deck A filter returned to neutral')
+    expect(vi.getTimerCount()).toBe(0)
 
     expect(context.filters).toHaveLength(2)
     expect(context.filters[0].frequency.setTargetAtTime).toHaveBeenLastCalledWith(20, 4, 0.12)
@@ -305,6 +302,14 @@ describe('DJ mixer filter gesture integration', () => {
       4,
       0.12,
     )
+
+    await act(async () => {
+      vi.advanceTimersByTime(1)
+      current.handleGestureFrame(openHand((-25 * Math.PI) / 180))
+    })
+    expect(current.decks.a.filter).toBe(DJ_NEUTRAL_VALUES.filter)
+    expect(current.gestureStatus).toContain('grabbed at 50%')
+    expect(current.gesturePhase).toBe('armed')
   })
 
   it('recovers from brief tracking loss and cancels a pending neutral reset when the hand returns', async () => {
@@ -346,6 +351,105 @@ describe('DJ mixer filter gesture integration', () => {
     expect(vi.getTimerCount()).toBe(0)
     expect(current.decks.a.filter).toBe(valueBeforeRegrab)
     expect(current.gestureStatus).toContain(`grabbed at ${valueBeforeRegrab}%`)
+  })
+
+  it('immediately releases a stale session when gesture input disappears', async () => {
+    await act(async () => {
+      current.setCrossfader(34)
+      current.setDeckVolume('a', 64)
+      current.handleGestureFrame(openHand(0.4))
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleGestureFrame(openHand(0.1))
+    })
+    expect(current.decks.a.filter).not.toBe(DJ_NEUTRAL_VALUES.filter)
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleGestureFrame(noHand)
+      vi.advanceTimersByTime(GESTURE_CLUTCH_LOST_RELEASE_MS)
+      current.handleGestureFrame(noHand)
+    })
+    expect(vi.getTimerCount()).toBe(1)
+
+    await act(async () => {
+      current.releaseGestureSession('camera-stopped')
+    })
+
+    expect(vi.getTimerCount()).toBe(0)
+    expect(current.gesturePhase).toBe('locked')
+    expect(current.gestureEngaged).toBe(false)
+    expect(current.gestureStatus).toBe('Camera stopped · Air Controls released')
+    expect(current.decks.a.filter).toBe(DJ_NEUTRAL_VALUES.filter)
+    expect(current.decks.a.volume).toBe(64)
+    expect(current.crossfader).toBe(34)
+
+    await act(async () => current.handleGestureFrame(openHand(-0.7)))
+    expect(current.gestureStatus).toContain('grabbed at 50%')
+    expect(current.gesturePhase).toBe('armed')
+  })
+
+  it('keeps a manual crossfader reset centered until a fresh hand clutch', async () => {
+    await act(async () => current.selectControl('crossfader'))
+    await act(async () => current.handleGestureFrame(openHand(0, { x: 0.5 })))
+    await act(async () => {
+      vi.advanceTimersByTime(421)
+      current.handleGestureFrame(openHand(0, { x: 0.5 }))
+    })
+    expect(current.gesturePhase).toBe('armed')
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleGestureFrame(openHand(0, { x: 0.8 }))
+    })
+    expect(current.crossfader).toBeGreaterThan(0)
+
+    await act(async () => current.resetControl('crossfader'))
+    expect(current.crossfader).toBe(DJ_NEUTRAL_VALUES.crossfader)
+    expect(current.gesturePhase).toBe('locked')
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleGestureFrame(openHand(0, { x: 0.1 }))
+    })
+    expect(current.crossfader).toBe(DJ_NEUTRAL_VALUES.crossfader)
+    expect(current.gestureStatus).toBe('Close your fist once, then open your palm to grab')
+
+    await act(async () => current.handleGestureFrame(closedHand()))
+    expect(current.gestureStatus).toBe('Released · open your palm to grab the selected control')
+
+    await act(async () => current.handleGestureFrame(openHand(0, { x: 0.1 })))
+    expect(current.crossfader).toBe(DJ_NEUTRAL_VALUES.crossfader)
+    expect(current.gesturePhase).toBe('calibrating')
+
+    await act(async () => {
+      vi.advanceTimersByTime(421)
+      current.handleGestureFrame(openHand(0, { x: 0.1 }))
+      vi.advanceTimersByTime(80)
+      current.handleGestureFrame(openHand(0, { x: 0.4 }))
+    })
+    expect(current.crossfader).toBeGreaterThan(0)
+  })
+
+  it('lets a manual deck move take ownership from an armed gesture', async () => {
+    await act(async () => current.selectControl('volume', 'a'))
+    await act(async () => current.handleGestureFrame(openHand(0, { y: 0.5 })))
+    expect(current.gesturePhase).toBe('armed')
+
+    await act(async () => {
+      current.claimManualControl('volume', 'a')
+      current.setDeckVolume('a', 66)
+    })
+    expect(current.decks.a.volume).toBe(66)
+    expect(current.gesturePhase).toBe('locked')
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleGestureFrame(openHand(0, { y: 0.1 }))
+    })
+    expect(current.decks.a.volume).toBe(66)
+    expect(current.gestureStatus).toBe('Close your fist once, then open your palm to grab')
   })
 
   it('grabs volume without jumping, responds to hand height, then locks its value on release', async () => {
