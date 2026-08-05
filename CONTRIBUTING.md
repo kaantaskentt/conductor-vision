@@ -32,7 +32,7 @@ npm ci
 npm run dev
 ```
 
-Open the local Vite URL. Camera access requires `localhost` or HTTPS. Choose **Load instant demo** in DJ Room to exercise both decks without supplying private or copyrighted audio.
+Open the local Vite URL. Camera access requires `localhost` or HTTPS. Choose **Use mouse controls instead** and **Try generated demo tracks** to exercise both decks without supplying private or copyrighted audio.
 
 Run a fast test pass while working:
 
@@ -69,7 +69,7 @@ camera, generated-hand, and accessibility commands are documented in
 | DJ audio | `src/hooks/useDjMixer.ts` | Deck state, Web Audio graphs, meters, BPM estimation, and sync |
 | Gesture behavior | `src/lib/gestureController.ts` | Calibration, clutch state, no-jump pickup, locking, and release |
 | Replay recording | `src/lib/airMixReplay.ts` | Local recorder state, limits, codec fallback, and cleanup |
-| Product surfaces | `src/screens/` | Vision and DJ Room interface composition |
+| Product surface | `src/screens/PerformanceScreen.tsx` | Camera-first setup, track loading, and live performance composition |
 | Deterministic utilities | `src/lib/` | Vision, pixel, generated-demo, and lifecycle helpers |
 | Product truth | `README.md`, `ROADMAP.md`, `docs/` | Shipped behavior, limitations, architecture, and testing |
 

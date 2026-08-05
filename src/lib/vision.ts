@@ -36,6 +36,9 @@ export type HandSummary = {
   raised: FingerState
   x: number
   y: number
+  pointerX: number
+  pointerY: number
+  pointing: boolean
   wristAngle: number
 }
 
@@ -192,12 +195,17 @@ export function countRaisedFingers(landmarks: NormalizedLandmark[], handedness: 
   return { count: Object.values(raised).filter(Boolean).length, raised }
 }
 
+export function isPointingPose(raised: FingerState) {
+  return raised.index && !raised.middle && !raised.ring && !raised.pinky
+}
+
 export function summarizeHands(result: HandLandmarkerResult): HandSummary[] {
   return result.landmarks.map((landmarks, index) => {
     const label = result.handedness[index]?.[0]?.categoryName ?? `Hand ${index + 1}`
     const fingers = countRaisedFingers(landmarks, label)
     const wrist = landmarks[0]
     const middle = landmarks[9]
+    const indexTip = landmarks[FINGER_JOINTS.index.tip]
     const wristAngle = Math.atan2(middle.y - wrist.y, wrist.x - middle.x)
 
     return {
@@ -207,6 +215,9 @@ export function summarizeHands(result: HandLandmarkerResult): HandSummary[] {
       raised: fingers.raised,
       x: 1 - middle.x,
       y: middle.y,
+      pointerX: 1 - indexTip.x,
+      pointerY: indexTip.y,
+      pointing: isPointingPose(fingers.raised),
       wristAngle,
     }
   })

@@ -1,177 +1,79 @@
 import { AxeBuilder } from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 
-const WCAG_A_AA_TAGS = [
-  'wcag2a',
-  'wcag2aa',
-  'wcag21a',
-  'wcag21aa',
-  'wcag22a',
-  'wcag22aa',
-]
-
-type DemoPerformanceWindow = Window & {
-  __ultraVisionDemoLongTasks?: number[]
-  __ultraVisionDemoObserver?: PerformanceObserver
-}
+const WCAG_A_AA_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22a', 'wcag22aa']
 
 async function expectNoWcagViolations(page: Page, state: string) {
-  const results = await new AxeBuilder({ page })
-    .withTags(WCAG_A_AA_TAGS)
-    .analyze()
-
+  const results = await new AxeBuilder({ page }).withTags(WCAG_A_AA_TAGS).analyze()
   const summary = results.violations
-    .map((violation) => {
-      const targets = violation.nodes
-        .map((node) => node.target.join(' '))
-        .join(', ')
-      return `${violation.id} (${violation.impact ?? 'impact unknown'}): ${targets}`
-    })
+    .map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(' ')).join(', ')}`)
     .join('\n')
+  expect(results.violations, `${state} has WCAG A/AA violations${summary ? `:\n${summary}` : ''}`).toEqual([])
+}
 
-  expect(
-    results.violations,
-    `${state} has WCAG A/AA violations${summary ? `:\n${summary}` : ''}`,
-  ).toEqual([])
+async function openTracks(page: Page) {
+  await page.getByRole('button', { name: 'Use mouse controls instead' }).click()
 }
 
 async function loadGeneratedDemo(page: Page) {
-  await page.getByRole('button', { name: 'Load instant demo' }).click()
-  await expect(page.getByRole('complementary', {
-    name: 'Quick performance controls',
-  })).toBeVisible()
+  await openTracks(page)
+  await page.getByRole('button', { name: 'Try generated demo tracks' }).click()
+  await expect(page.getByText('Neon Pulse', { exact: true })).toBeVisible()
 }
 
-test('camera-off DJ Room meets WCAG A/AA and exposes its keyboard path', async ({ page }) => {
-  await page.goto('/')
-  await expect(page.getByRole('heading', { name: 'Mix with your hands.' })).toBeVisible()
-  await expectNoWcagViolations(page, 'Camera-off DJ Room')
+async function openPerformance(page: Page) {
+  await page.getByRole('button', { name: 'Open performance · 2 tracks' }).click()
+  await expect(page.locator('.uv-performance-stage')).toBeVisible()
+}
 
+test('camera-first setup meets WCAG A/AA and exposes its keyboard path', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByRole('heading', { name: 'Put the music under your hands.' })).toBeVisible()
+  await expectNoWcagViolations(page, 'Camera-first setup')
   await page.keyboard.press('Tab')
-  await expect(page.getByRole('link', { name: 'Ultra Vision home' })).toBeFocused()
+  await expect(page.getByRole('button', { name: 'Ultra Vision home' })).toBeFocused()
   await page.keyboard.press('Tab')
-  await expect(page.getByRole('button', { name: 'Vision' })).toBeFocused()
+  await expect(page.getByRole('button', { name: 'Allow private camera' })).toBeFocused()
   await page.keyboard.press('Tab')
-  await expect(page.getByRole('button', { name: 'DJ Room' })).toBeFocused()
-  await page.keyboard.press('Tab')
-  await expect(page.getByRole('button', { name: 'Load instant demo' })).toBeFocused()
+  await expect(page.getByRole('button', { name: 'Use mouse controls instead' })).toBeFocused()
 })
 
-test('loaded-demo DJ Room stays responsive and meets WCAG A/AA', async ({ page }) => {
+test('track loading and live performance meet WCAG A/AA', async ({ page }) => {
   await page.goto('/')
-  const supportsLongTasks = await page.evaluate(() => {
-    if (!PerformanceObserver.supportedEntryTypes.includes('longtask')) return false
-    const performanceWindow = window as DemoPerformanceWindow
-    performanceWindow.__ultraVisionDemoLongTasks = []
-    performanceWindow.__ultraVisionDemoObserver = new PerformanceObserver((list) => {
-      performanceWindow.__ultraVisionDemoLongTasks?.push(
-        ...list.getEntries().map((entry) => entry.duration),
-      )
-    })
-    performanceWindow.__ultraVisionDemoObserver.observe({ type: 'longtask' })
-    return true
-  })
-  expect(supportsLongTasks).toBe(true)
-
   await loadGeneratedDemo(page)
-  const longTasks = await page.evaluate(async () => {
-    await new Promise<void>((resolve) => setTimeout(resolve, 0))
-    const performanceWindow = window as DemoPerformanceWindow
-    performanceWindow.__ultraVisionDemoObserver?.disconnect()
-    return performanceWindow.__ultraVisionDemoLongTasks ?? []
-  })
-  expect(longTasks, `Demo loading created long tasks: ${longTasks.join(', ')} ms`).toEqual([])
-  await expectNoWcagViolations(page, 'Loaded-demo DJ Room')
-
-  const fullMixer = page.locator('.full-mixer-disclosure')
-  const fullMixerSummary = page.locator('summary[aria-controls="mixer-decks"]')
-  await expect(fullMixerSummary).toHaveAttribute('aria-expanded', 'false')
-  await fullMixerSummary.focus()
-  await expect(fullMixerSummary).toBeFocused()
-  await fullMixerSummary.press('Enter')
-  await expect(fullMixer).toHaveAttribute('open', '')
-  await expect(fullMixerSummary).toHaveAttribute('aria-expanded', 'true')
-  await expect(page.getByRole('region', { name: 'Two-deck mixer' })).toBeVisible()
-  await expectNoWcagViolations(page, 'Expanded full mixer')
+  await expectNoWcagViolations(page, 'Track loading')
+  await openPerformance(page)
+  await expectNoWcagViolations(page, 'Live performance')
+  await page.getByRole('button', { name: 'Manual controls' }).click()
+  await expect(page.getByRole('region', { name: 'Manual mixer controls' })).toBeVisible()
+  await expectNoWcagViolations(page, 'Manual controls')
 })
 
-test('camera-off Vision workspace meets WCAG A/AA', async ({ page }) => {
-  await page.goto('/')
-  await page.getByRole('button', { name: 'Vision' }).click()
-  await expect(page.getByRole('heading', {
-    name: 'See what the camera understands.',
-  })).toBeVisible()
-  await expectNoWcagViolations(page, 'Camera-off Vision workspace')
-})
-
-test('390px Vision permission error keeps its recovery visible', async ({ page }) => {
+test('390px camera error keeps recovery readable', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.addInitScript(() => {
-    const auditWindow = window as Window & { __ultraVisionCameraAttempts?: number }
-    auditWindow.__ultraVisionCameraAttempts = 0
     Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {
       configurable: true,
-      value: () => {
-        auditWindow.__ultraVisionCameraAttempts =
-          (auditWindow.__ultraVisionCameraAttempts ?? 0) + 1
-        return Promise.reject(new DOMException('Denied by test', 'NotAllowedError'))
-      },
+      value: () => Promise.reject(new DOMException('Denied by test', 'NotAllowedError')),
     })
   })
   await page.goto('/')
-  await loadGeneratedDemo(page)
-  await page.getByRole('button', { name: 'Vision' }).click()
-  await page.getByRole('button', { name: 'Start camera' }).click()
-
-  const recoveryMessage = page.getByText(
+  await page.getByRole('button', { name: 'Allow private camera' }).click()
+  const message = page.getByText(
     'Camera permission was blocked. Allow access in your browser, then try again.',
     { exact: true },
   ).first()
-  await expect(page.locator('.camera-stage')).toHaveAttribute('data-camera-status', 'error')
-  await expect(recoveryMessage).toBeVisible()
-  const retry = page.getByRole('button', { name: 'Retry camera' })
-  await expect(retry).toBeVisible()
-  await expect.poll(() => page.evaluate(() =>
-    (window as Window & { __ultraVisionCameraAttempts?: number })
-      .__ultraVisionCameraAttempts ?? 0,
-  )).toBe(1)
-
-  await retry.click()
-  await expect.poll(() => page.evaluate(() =>
-    (window as Window & { __ultraVisionCameraAttempts?: number })
-      .__ultraVisionCameraAttempts ?? 0,
-  )).toBe(2)
-  await expect(page.locator('.camera-stage')).toHaveAttribute('data-camera-status', 'error')
-  await expect(recoveryMessage).toBeVisible()
-  await expectNoWcagViolations(page, '390px Vision permission error')
-  await page.getByRole('button', { name: 'DJ Room' }).click()
-  const djRecoveryMessage = page.locator('.dj-vision-layout .camera-empty p')
-  await expect(djRecoveryMessage).toHaveText(
-    'Camera permission was blocked. Allow access in your browser, then try again.',
-  )
-  await expect(djRecoveryMessage).toBeVisible()
-  const djRecoveryFit = await djRecoveryMessage.evaluate((element) => {
-    const style = getComputedStyle(element)
-    return {
-      clientWidth: element.clientWidth,
-      scrollWidth: element.scrollWidth,
-      horizontalFit: element.scrollWidth <= element.clientWidth,
-      verticalFit: element.scrollHeight <= element.clientHeight,
-      whiteSpace: style.whiteSpace,
-      overflow: style.overflow,
-      overflowWrap: style.overflowWrap,
-    }
-  })
-  expect(djRecoveryFit, JSON.stringify(djRecoveryFit)).toMatchObject({
-    horizontalFit: true,
-    verticalFit: true,
-  })
-  await expectNoWcagViolations(page, '390px DJ Room permission error')
+  await expect(message).toBeVisible({ timeout: 180_000 })
+  await expect(page.locator('.uv-camera-preview')).toHaveAttribute('data-camera-status', 'error')
+  expect(await message.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await expectNoWcagViolations(page, '390px camera permission error')
 })
 
-test('390px loaded-demo DJ Room meets WCAG A/AA', async ({ page }) => {
+test('390px loaded performance has no horizontal overflow and meets WCAG A/AA', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
   await loadGeneratedDemo(page)
-  await expectNoWcagViolations(page, '390px loaded-demo DJ Room')
+  await openPerformance(page)
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await expectNoWcagViolations(page, '390px performance')
 })

@@ -12,6 +12,11 @@ import {
   type GestureClutchState,
 } from '../lib/gestureController'
 import { clamp, type GestureFrame } from '../lib/vision'
+import {
+  analyzeTrackPcm,
+  type BeatGridMarker,
+  type TrackAnalysis,
+} from '../lib/trackAnalysis'
 
 export type DeckId = 'a' | 'b'
 export type DjControl = 'crossfader' | 'volume' | 'filter'
@@ -47,6 +52,11 @@ export type DeckState = {
   bpmStatus: string
   audioLevel: number
   waveform: number[]
+  overview: number[]
+  beats: BeatGridMarker[]
+  bars: number[]
+  beatGridConfidence: number
+  analysisStatus: string
   error: string | null
 }
 
@@ -87,6 +97,7 @@ type PositionGesture = {
 const DECK_IDS: DeckId[] = ['a', 'b']
 const MAX_AUDIO_BYTES = 100 * 1024 * 1024
 export const MAX_BPM_ANALYSIS_BYTES = 8 * 1024 * 1024
+export const MAX_TRACK_ANALYSIS_BYTES = 32 * 1024 * 1024
 const ACCEPTED_AUDIO_TYPES = new Set([
   'audio/mpeg',
   'audio/mp3',
@@ -324,6 +335,29 @@ async function detectBpm(file: File) {
   }
 }
 
+async function analyzeAudioFile(file: File, knownBpm?: number): Promise<TrackAnalysis | null> {
+  const Context = window.AudioContext
+  if (
+    !Context ||
+    typeof Context.prototype.decodeAudioData !== 'function' ||
+    file.size > MAX_TRACK_ANALYSIS_BYTES
+  ) return null
+  const context = new Context()
+  try {
+    const buffer = await context.decodeAudioData(await file.arrayBuffer())
+    const mixed = new Float32Array(buffer.length)
+    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+      const data = buffer.getChannelData(channel)
+      for (let index = 0; index < buffer.length; index += 1) {
+        mixed[index] += data[index] / buffer.numberOfChannels
+      }
+    }
+    return analyzeTrackPcm(mixed, buffer.sampleRate, { knownBpm })
+  } finally {
+    if (context.state !== 'closed') await context.close()
+  }
+}
+
 type BpmAnalyzer = (file: File) => Promise<number | null>
 
 type QueuedBpmResult =
@@ -369,6 +403,11 @@ function initialDeckState(): DeckState {
     bpmStatus: 'Load a track',
     audioLevel: 0,
     waveform: Array.from({ length: DJ_WAVEFORM_SAMPLES }, () => 0),
+    overview: [],
+    beats: [],
+    bars: [],
+    beatGridConfidence: 0,
+    analysisStatus: 'Load a track',
     error: null,
   }
 }
@@ -408,10 +447,7 @@ export function useDjMixer() {
   const meterAnimationRef = useRef<number | null>(null)
   const bpmRequestRef = useRef<Record<DeckId, number>>({ a: 0, b: 0 })
   const demoGenerationRef = useRef<AbortController | null>(null)
-  const bpmAnalysisQueueRef = useRef<ReturnType<typeof createBpmAnalysisQueue> | null>(null)
-  const bpmAnalysisQueue =
-    bpmAnalysisQueueRef.current ??
-    (bpmAnalysisQueueRef.current = createBpmAnalysisQueue())
+  const trackAnalysisTailRef = useRef(Promise.resolve())
   const tapTimesRef = useRef<Record<DeckId, number[]>>({ a: [], b: [] })
   const lastGestureUpdateAtRef = useRef(0)
   const gestureEngagedRef = useRef(false)
@@ -737,34 +773,51 @@ export function useDjMixer() {
           name: options.title ?? file.name.replace(/\.[^.]+$/, ''),
           loaded: true,
           bpm: knownBpm,
-          bpmStatus: knownBpm ? `${knownBpm} BPM demo` : 'Waiting for BPM analysis…',
+          bpmStatus: knownBpm ? `${knownBpm} BPM supplied` : 'Waiting for BPM analysis…',
+          analysisStatus: 'Analyzing track shape and estimated beat grid…',
         })
-        if (knownBpm) return true
-        if (!shouldAutoAnalyzeBpm(file)) {
+        if (file.size > MAX_TRACK_ANALYSIS_BYTES) {
           patchDeck(id, {
-            bpm: null,
-            bpmStatus: 'Track ready · tap BPM (auto analysis is limited to 8 MB)',
+            bpm: knownBpm,
+            bpmStatus: knownBpm
+              ? `${knownBpm} BPM supplied`
+              : 'Track ready · tap BPM (large-file analysis skipped)',
+            analysisStatus: 'Large track ready · overview analysis skipped',
           })
           return true
         }
         try {
-          const result = await bpmAnalysisQueue.enqueue(
-            file,
-            () => bpmRequestRef.current[id] === requestId,
-            () => {
-              if (bpmRequestRef.current[id] === requestId) {
-                patchDeck(id, { bpmStatus: 'Analyzing BPM…' })
-              }
-            },
+          const analysisTask = trackAnalysisTailRef.current.then(() =>
+            analyzeAudioFile(file, knownBpm ?? undefined),
           )
-          if (result.status === 'stale') return false
+          trackAnalysisTailRef.current = analysisTask.then(
+            () => undefined,
+            () => undefined,
+          )
+          const analysis = await analysisTask
+          if (bpmRequestRef.current[id] !== requestId) return false
           patchDeck(id, {
-            bpm: result.bpm,
-            bpmStatus: result.bpm ? `${result.bpm} BPM detected` : 'Tap BPM to set tempo',
+            bpm: analysis?.bpm ?? knownBpm,
+            bpmStatus: analysis?.bpm
+              ? `${analysis.bpm} BPM ${analysis.source === 'known' ? 'supplied' : 'estimated'}`
+              : 'Tap BPM to set tempo',
+            overview: analysis?.overview ?? [],
+            beats: analysis?.beats ?? [],
+            bars: analysis?.bars ?? [],
+            beatGridConfidence: analysis?.beatGridConfidence ?? 0,
+            analysisStatus: analysis
+              ? analysis.beats.length
+                ? 'Waveform ready · beat and bar lines are estimated'
+                : 'Waveform ready · no reliable beat grid found'
+              : 'Track ready · waveform analysis unavailable',
           })
         } catch {
           if (bpmRequestRef.current[id] === requestId) {
-            patchDeck(id, { bpm: null, bpmStatus: 'Tap BPM to set tempo' })
+            patchDeck(id, {
+              bpm: knownBpm,
+              bpmStatus: knownBpm ? `${knownBpm} BPM supplied` : 'Tap BPM to set tempo',
+              analysisStatus: 'Track ready · waveform analysis unavailable',
+            })
           }
         }
         return true
@@ -775,7 +828,7 @@ export function useDjMixer() {
         return false
       }
     },
-    [bpmAnalysisQueue, cancelDemoMix, disarmGesture, patchDeck, resetDeckAudioParameters],
+    [cancelDemoMix, disarmGesture, patchDeck, resetDeckAudioParameters],
   )
 
   const togglePlayback = useCallback(

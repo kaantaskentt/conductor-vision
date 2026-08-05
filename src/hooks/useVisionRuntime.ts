@@ -466,7 +466,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
   const setVideoElement = useCallback(
     (element: HTMLVideoElement | null) => {
       const stream = streamRef.current
-      attachVideoElement(videoLifecycleRef.current, element, stream, (_error, attempt) => {
+      const changed = attachVideoElement(videoLifecycleRef.current, element, stream, (_error, attempt) => {
         if (
           !runningRef.current ||
           videoLifecycleRef.current.element !== attempt.element ||
@@ -486,6 +486,10 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
         setStatus('error')
         setMessage('The camera view was interrupted. Start the camera to try again.')
       })
+      if (changed && element && stream && runningRef.current) {
+        lastVideoAdvanceAtRef.current = performance.now()
+        lastInferenceAtRef.current = Number.NEGATIVE_INFINITY
+      }
     },
     [teardown],
   )

@@ -1,22 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import './App.css'
-import {
-  AppHeader,
-  PrivacyFooter,
-  type Screen,
-} from './components/AppShell'
+import { useCallback, useEffect } from 'react'
+import './performance.css'
 import { useDjMixer } from './hooks/useDjMixer'
 import { useVisionRuntime } from './hooks/useVisionRuntime'
-import type { TargetColor } from './lib/vision'
-import { DjRoomScreen } from './screens/DjRoomScreen'
-import { VisionScreen } from './screens/VisionScreen'
+import { PerformanceScreen } from './screens/PerformanceScreen'
 
 function App() {
-  const [screen, setScreen] = useState<Screen>('dj-room')
-  const [targetColor, setTargetColor] = useState<TargetColor>('purple')
   const mixer = useDjMixer()
   const {
-    cancelDemoMix,
     handleGestureFrame,
     releaseGestureSession,
     setAudioElement,
@@ -31,58 +21,29 @@ function App() {
   )
   const handleVisionGesture = useCallback(
     (frame: Parameters<typeof handleGestureFrame>[0]) => {
-      if (screen === 'dj-room') handleGestureFrame(frame)
+      handleGestureFrame(frame)
     },
-    [handleGestureFrame, screen],
+    [handleGestureFrame],
   )
   const vision = useVisionRuntime({
-    enableFace: screen === 'vision',
-    targetColor,
+    enableFace: false,
+    targetColor: 'purple',
     onGestureFrame: handleVisionGesture,
   })
-  const previousScreenRef = useRef(screen)
-  const previousCameraStatusRef = useRef(vision.status)
 
   useEffect(() => {
-    const previousScreen = previousScreenRef.current
-    const previousCameraStatus = previousCameraStatusRef.current
-    previousScreenRef.current = screen
-    previousCameraStatusRef.current = vision.status
-
-    if (previousScreen === 'dj-room' && screen === 'vision') {
-      cancelDemoMix()
-      releaseGestureSession('left-dj-room')
-    } else if (
-      screen === 'dj-room' &&
-      previousCameraStatus !== vision.status &&
-      vision.status === 'idle'
-    ) {
+    if (vision.status === 'idle') {
       releaseGestureSession('camera-stopped')
-    } else if (screen === 'dj-room' && vision.status === 'error') {
+    } else if (vision.status === 'error') {
       releaseGestureSession('camera-error')
     }
-  }, [cancelDemoMix, releaseGestureSession, screen, vision.status])
-
-  useEffect(() => {
-    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
-  }, [screen])
+  }, [releaseGestureSession, vision.status])
 
   return (
-    <div className="app">
+    <div className="uv-app">
       <audio ref={setDeckAAudioElement} preload="metadata" />
       <audio ref={setDeckBAudioElement} preload="metadata" />
-      <AppHeader screen={screen} onScreenChange={setScreen} />
-      <main id="main-content" className="app-main">
-        {screen === 'vision' && (
-          <VisionScreen
-            vision={vision}
-            targetColor={targetColor}
-            onTargetColorChange={setTargetColor}
-          />
-        )}
-        {screen === 'dj-room' && <DjRoomScreen vision={vision} mixer={mixer} />}
-      </main>
-      <PrivacyFooter />
+      <PerformanceScreen vision={vision} mixer={mixer} />
       <div className="sr-only" aria-live="polite">
         {vision.message}
       </div>

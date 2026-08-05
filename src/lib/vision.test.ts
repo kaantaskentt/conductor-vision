@@ -3,11 +3,14 @@ import {
   analyzePixels,
   clamp,
   createEmptyAnalysis,
+  isPointingPose,
   rgbToHex,
   rgbToHsv,
   selectPrimaryHand,
+  summarizeHands,
   type HandSummary,
 } from './vision'
+import type { HandLandmarkerResult, NormalizedLandmark } from '@mediapipe/tasks-vision'
 
 function imageData(width: number, height: number, pixels: number[]) {
   return {
@@ -94,6 +97,9 @@ describe('vision utilities', () => {
       label,
       x,
       y,
+      pointerX: x,
+      pointerY: y,
+      pointing: false,
       count: 5,
       wristAngle: 0,
       raised: { thumb: true, index: true, middle: true, ring: true, pinky: true },
@@ -105,5 +111,66 @@ describe('vision utilities', () => {
     expect(selectPrimaryHand([], previous)).toBeNull()
     expect(selectPrimaryHand([hand('Left', 0.21, 0.4)], previous)).toBeNull()
     expect(selectPrimaryHand([hand('Right', 0.8, 0.9)], previous)).toBeNull()
+  })
+
+  it('recognizes only an index-led hand as a pointing pose', () => {
+    expect(isPointingPose({
+      thumb: false,
+      index: true,
+      middle: false,
+      ring: false,
+      pinky: false,
+    })).toBe(true)
+    expect(isPointingPose({
+      thumb: true,
+      index: true,
+      middle: false,
+      ring: false,
+      pinky: false,
+    })).toBe(true)
+    expect(isPointingPose({
+      thumb: false,
+      index: true,
+      middle: true,
+      ring: false,
+      pinky: false,
+    })).toBe(false)
+  })
+
+  it('exposes a mirrored index-tip pointer for air targets', () => {
+    const landmark = (x: number, y: number): NormalizedLandmark => ({
+      x,
+      y,
+      z: 0,
+      visibility: 1,
+    })
+    const landmarks = Array.from({ length: 21 }, () => ({
+      x: 0.5,
+      y: 0.75,
+      z: 0,
+      visibility: 1,
+    })) as NormalizedLandmark[]
+    landmarks[0] = landmark(0.5, 0.9)
+    landmarks[9] = landmark(0.5, 0.65)
+    landmarks[5] = landmark(0.45, 0.68)
+    landmarks[6] = landmark(0.45, 0.5)
+    landmarks[8] = landmark(0.45, 0.25)
+    for (const [mcp, pip, tip] of [[9, 10, 12], [13, 14, 16], [17, 18, 20]]) {
+      landmarks[mcp] = landmark(0.5, 0.65)
+      landmarks[pip] = landmark(0.5, 0.58)
+      landmarks[tip] = landmark(0.5, 0.62)
+    }
+    landmarks[2] = landmark(0.4, 0.78)
+    landmarks[3] = landmark(0.42, 0.76)
+    landmarks[4] = landmark(0.43, 0.75)
+    const result = {
+      landmarks: [landmarks],
+      handedness: [[{ categoryName: 'Right' }]],
+    } as HandLandmarkerResult
+
+    const [hand] = summarizeHands(result)
+    expect(hand.pointerX).toBeCloseTo(0.55)
+    expect(hand.pointerY).toBeCloseTo(0.25)
+    expect(hand.pointing).toBe(true)
   })
 })
