@@ -23,6 +23,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { CameraStage, PageIntro } from '../components/AppShell'
+import { PerformanceWaveform } from '../components/PerformanceWaveform'
 import airMixMotion from '../assets/air-mix-motion.jpg'
 import type { DeckId, DjControl, useDjMixer } from '../hooks/useDjMixer'
 import type { useVisionRuntime } from '../hooks/useVisionRuntime'
@@ -1045,6 +1046,26 @@ export function DjRoomScreen({
           }
         />
         <GestureConsole mixer={mixer} vision={vision} />
+      </section>
+
+      <section className="beat-workspace" aria-labelledby="beat-workspace-title">
+        <div className="beat-workspace-heading">
+          <div>
+            <span>Track view</span>
+            <strong id="beat-workspace-title">Beats under the camera</strong>
+          </div>
+          <p>Beat and bar markers are estimates. Drag either waveform to seek.</p>
+        </div>
+        <PerformanceWaveform
+          deckId="a"
+          deck={mixer.decks.a}
+          onSeek={(time) => mixer.seek('a', time)}
+        />
+        <PerformanceWaveform
+          deckId="b"
+          deck={mixer.decks.b}
+          onSeek={(time) => mixer.seek('b', time)}
+        />
       </section>
 
       <details

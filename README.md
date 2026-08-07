@@ -25,39 +25,42 @@
 
 <p align="center">
   <a href="https://ultra-vision.vercel.app">
-    <img src="./public/ultra-vision-social.png" alt="Ultra Vision private camera-first music controller" />
+    <img src="./public/ultra-vision-social.png" alt="Ultra Vision two-deck gesture-controlled DJ mixer" />
   </a>
 </p>
 
-No account, API key, database, backend, or personal audio is required for the first mix. Ultra Vision combines a generated demo set, a local Web Audio mixer, decoded track waveforms, and deliberate hand control in one browser tab.
+No account, API key, database, backend, or audio files are required for the first mix. Ultra Vision combines a generated demo set, a two-deck Web Audio mixer, and deliberate hand-gesture control in one browser tab.
 
 ## Try your first mix in 60 seconds
 
-1. Open the [live app](https://ultra-vision.vercel.app) and allow the private camera—or continue with mouse controls.
-2. Upload one track, add an optional second track, or choose **Try generated demo tracks**.
-3. Enter the performance view. Point at a large on-camera target and hold briefly to select Play, Volume, Filter, or BPM Match.
-4. Open your palm to grab the selected sound control, then move vertically for volume or rotate your wrist for filter.
+1. Open the [live app](https://ultra-vision.vercel.app) and choose **DJ Room**.
+2. Select **Load instant demo** to generate two short, copyright-safe tracks locally.
+3. Press **Start performance** to start both decks and local hand tracking together—or choose **Play without camera**.
+4. Raise one open palm, then use **Choose Air Control** to route movement to the crossfader, a deck level, or its filter.
 
-A new hand never jumps the current audio value. Closing your hand locks volume; releasing Filter returns it smoothly to its neutral 50% midpoint. Every air target is also a real keyboard- and pointer-accessible button, and manual sliders stay one disclosure away.
+Close your hand to lock the crossfader or volume position; Filter instead returns to its neutral midpoint after release. A newly detected hand grabs the current value without moving it, then responds only to intentional movement.
+When you change controls while your palm is still open, the interface asks for one close-and-reopen handoff before the new control can move.
 
 ## What it can do
 
-- **Camera-first performance** — the camera is the instrument, with large Deck A and Deck B targets placed directly in the live scene.
-- **One- or two-track entry** — start with one local track; add Deck B only when you want to mix or BPM-match.
-- **Focused air controls** — only Play, Volume, Filter, and reversible BPM Match are exposed during performance.
-- **Safe gesture pickup** — relative pickup prevents first-frame jumps, brief landmark flicker stays latched, and a deliberate fist releases the control.
-- **Decoded track overviews** — uploaded audio becomes a real full-track peak waveform with an evidence-scored BPM estimate and clearly labeled estimated beat/bar grid.
-- **Generated demo set** — build two original rhythmic loops locally and reach a playable mix without supplying audio.
-- **Local media** — camera frames and uploaded tracks are not sent to an application backend.
+- **Instant demo set** — generate two original rhythmic loops locally and reach a playable mix without finding audio files.
+- **Two-deck DJ Room** — control independent transports, hardware-style level and bipolar filter knobs, live analyser signal history, track-quarter jumps, post-fader meters, a master limiter, and an equal-power crossfader.
+- **Decoded beat workspace** — see full-track cyan/violet waveform bars, playheads, and explicitly estimated beat and bar markers directly below the camera.
+- **First Mix cockpit** — move from a generated demo to music plus hand controls in two clear actions, with a thumb-reachable performance bar on mobile and the detailed console one tap away in Full mixer.
+- **Intentional gesture routing** — send an open palm to the crossfader or one deck's level or filter. Relative pickup prevents first-frame jumps, brief landmark flicker stays latched, and a deliberate fist releases the control.
+- **BPM tools** — estimate BPM locally, tap a correction, and use one reversible BPM Sync control to match playback rates.
+- **Vision workspace** — inspect hand landmarks, raised fingers, face signals, frame-change regions, and color coverage.
+- **Pixel Studio** — study color similarity and luminance from an upload or captured frame with transparent, deterministic calculations.
+- **Local media** — camera frames, captured images, and uploaded tracks are not sent to an application backend.
 
 BPM Sync matches tempo; it does not claim automatic beat-grid, downbeat, or phase alignment.
 
-## One instrument, three clear steps
+## Two instruments, one private tab
 
-| Camera first | Live performance |
+| Vision | DJ Room |
 | --- | --- |
-| ![Ultra Vision private camera setup](./docs/design/ultra-vision-camera-first.png) | ![Ultra Vision dual-waveform performance view](./docs/design/ultra-vision-live-performance.png) |
-| Start the local hand tracker or continue with accessible mouse controls. | Point and hold to select; open your palm to shape volume or filter above decoded waveforms. |
+| ![Ultra Vision camera-off Vision workspace](./docs/design/ultra-vision-analysis.jpg) | ![Ultra Vision privacy-safe first-mix readiness flow](./docs/design/ultra-vision-readiness.jpg) |
+| Start the camera to inspect live landmarks, motion, face signals, and pixel studies. | Choose one mix control, grab it with an open palm, then perform with movement. |
 
 The interface reflows from desktop down to phone-sized viewports. Real camera and audio behavior still depends on the browser and device; the maintained test matrix lives in [docs/TESTING.md](./docs/TESTING.md).
 
@@ -76,23 +79,24 @@ Open the local Vite URL. Camera access requires `localhost` or HTTPS.
 
 ## How gesture mixing feels
 
-1. Point your index finger at a Deck A or Deck B target and hold for 700 ms.
-2. Choose Play, Volume, or Filter. BPM Match appears once both decks have BPM evidence.
-3. Open your palm to grab the current value without a jump. Move vertically for level or rotate your wrist for filter.
-4. Close your fist to lock volume. Filter returns to its 50% neutral point after release.
+1. Pick Deck A or Deck B and choose Crossfader, Volume, or Filter.
+2. Open your palm to grab the current value without a jump. The crossfader asks for one brief steady hold before it arms.
+3. Move vertically for level, rotate your wrist for filter, or move sideways for the crossfader.
+4. Close your fist to lock level/crossfader. Filter eases back to its 50% neutral point; brief tracking flicker is ignored.
 
-Open **Manual controls** for sliders and explicit resets whenever you want a conventional fallback.
+Use **Reset**, **Reset mix**, or double-click a mode or knob whenever you want a known starting point.
 
 ## Runtime architecture
 
 ```mermaid
 flowchart LR
   Camera["Webcam"] --> Vision["MediaPipe Tasks Vision"]
-  Vision --> Pointer["Index pointer + open-palm clutch"]
+  Vision --> Signals["Hand and face signals"]
+  Camera --> Pixels["Canvas pixel sampling"]
+  Pixels --> Signals
   Demo["Generated demo set"] --> Decks["Two Web Audio deck graphs"]
   Files["Local audio files"] --> Decks
-  Pointer --> Targets["Point-and-hold air targets"]
-  Targets --> Gestures["Relative gesture controller"]
+  Signals --> Gestures["Calibrated gesture controller"]
   Gestures --> Decks
   Decks --> Limiter["Master limiter"]
   Limiter --> Output["Browser audio output"]
@@ -123,7 +127,7 @@ npx playwright install chromium
 npm run test:browser
 ```
 
-It starts one production build and runs Chromium contracts for the real MediaStream and MediaPipe lifecycle, a generated open-palm pickup, one-track entry, mobile reflow, keyboard focus, and WCAG A/AA checks across camera setup, track loading, live performance, and 390px states. It does not record a contributor or claim broad physical-camera accuracy.
+It starts one production build and runs Chromium contracts for the real MediaStream and MediaPipe lifecycle, a generated open-palm pickup, mobile reflow, keyboard focus, and WCAG A/AA checks across the camera-off DJ Room, loaded demo, Vision workspace, and 390px loaded state. It does not record a contributor or claim broad physical-camera accuracy.
 
 - Camera and uploaded media are processed in the active browser tab.
 - File types and sizes are checked before object URLs are created.
@@ -141,7 +145,7 @@ Read [Building Ultra Vision with Codex](./docs/BUILDING_WITH_CODEX.md) for the d
 
 ## Project status
 
-Ultra Vision is an active experimental project. Camera-first mixing, one- or two-track playback, decoded waveforms, safe gesture pickup, and the real-browser camera lifecycle are functional and automated. True downbeat/phase sync, a broader measured moving-gesture fixture corpus, and measured long-session performance remain future work.
+Ultra Vision is an active experimental project. Vision, two-deck mixing, and the real-browser camera lifecycle are functional and automated. Phase-aware sync, a broader measured hand-gesture fixture corpus, measured long-session performance, and the Replay Studio interface remain future work.
 
 Read the [roadmap](./ROADMAP.md), [testing strategy](./docs/TESTING.md), and [contributor guide](./CONTRIBUTING.md). Focused issues and pull requests are welcome.
 

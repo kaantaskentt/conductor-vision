@@ -11,7 +11,7 @@ npm run check
 
 ## Deterministic tests
 
-Unit tests cover vision math, point-and-hold target dwell, decoded-track overview and estimated beat-grid analysis, gesture pickup/release, camera-overlay remounts, audio curves, file validation, generated demo tracks, verified MediaPipe asset provenance, and the bounded Air Mix Replay recorder lifecycle. React integration tests mount the real mixer and camera hooks to verify timed Filter release, Web Audio parameters, one-track entry, live-stream handoff, frozen-frame release, overlay remounts, and camera restart. Prefer generated signals and landmark-coordinate cases over copyrighted or personally identifying fixtures.
+Unit tests cover vision math, pixel studies, gesture pickup/release, camera-overlay remounts, audio curves, serialized and size-bounded BPM analysis, full-track waveform and estimated beat-grid math, file validation, generated demo tracks, verified MediaPipe asset provenance, and the bounded Air Mix Replay recorder lifecycle. React integration tests mount the real mixer and camera hooks to verify timed Filter release, Web Audio parameters, the decoded beat workspace, the isolated post-master recording tap, live-stream handoff, frozen-frame release, optional face-analysis failure, overlay remounts, and camera restart. Prefer generated signals and landmark-coordinate cases over copyrighted or personally identifying fixtures.
 
 Coverage cannot fall below the checked-in project floor: 80% statements, 72% branches, 76% functions, and 82% lines.
 
@@ -32,28 +32,28 @@ npm run test:camera:hand
 npm run test:accessibility
 ```
 
-The required command builds and serves the production application once on `127.0.0.1`, then runs the real MediaPipe JavaScript, WASM, verified model pipeline, generated positive palm, mobile performance checks, keyboard path, and automated accessibility scans. It proves:
+The required command builds and serves the production application once on `127.0.0.1`, then runs the real MediaPipe JavaScript, WASM, verified model pipeline, generated positive palm, mobile First Mix checks, keyboard path, and automated accessibility scans. It proves:
 
 - camera startup reaches a live MediaStream and decoded video frames;
 - MediaPipe processes frames and sizes the landmark canvas to the video;
-- camera setup → track loading → live-performance remounts preserve the same owned stream and track;
+- Vision ↔ DJ Room remounts preserve the same owned stream and track;
+- a frame can be captured locally without an unexpected outbound request;
 - stop ends the original track and clears the video source;
 - restart creates a fresh live stream;
 - application page errors, unexpected console errors, failed requests, and unapproved external origins fail the test;
-- one valid local track can enter performance while Deck B remains optional;
 - the generated demo reaches manual playback without requesting camera access;
 - generated demo tracks loop so a cold vision-model download cannot end the demo before hand controls are ready;
-- both mobile air-target rails remain reachable, expose 44px controls, and have no horizontal overflow at 390 CSS pixels;
-- the camera, target, and waveform layout reflows without horizontal overflow at 320 CSS pixels;
-- the camera-first CTA and manual fallback are reachable in keyboard order;
+- the mobile performance bar remains reachable after scrolling, exposes 44px controls, and has no horizontal overflow at 390 CSS pixels;
+- the first-mix and performance controls reflow without horizontal overflow at 320 CSS pixels;
+- the primary tabs and first-mix CTA are reachable in keyboard order;
 - cooperative demo generation creates no browser long task of 50 ms or more; and
-- camera setup, track loading, live performance, manual controls, the mobile permission error, and the 390px loaded state have no automated WCAG A/AA violations reported by axe-core.
+- the camera-off DJ Room, loaded demo, camera-off Vision workspace, and 390px loaded state have no automated WCAG A/AA violations reported by axe-core.
 
 The focused `npm run test:camera` harness uses Chromium's non-personal test
 pattern as a zero-hand negative case. `npm run test:camera:hand` is its positive
 companion: a generated, provenance-documented open palm is streamed through
 Chromium's file-backed camera and the shipped MediaPipe model, then the test
-confirms that selecting Filter does not jump it away from neutral. The
+confirms that the crossfader becomes armed without jumping away from center. The
 required `npm run test:browser` command runs both focused camera projects plus
 the accessibility project in one Playwright invocation so the production build
 is shared while each project's evidence remains explicit.
@@ -74,13 +74,13 @@ At minimum, check the latest stable Chrome, Safari, and Firefox on desktop. Chec
 For each browser, verify:
 
 1. Camera permission allowed, denied, missing, and busy.
-2. One-track entry, optional Deck B, demo loading, replacement, playback, seeking, and reset.
+2. Demo set loading, individual track replacement, playback, seeking, and reset.
 3. First visible hand causes no control jump.
 4. Open hand engages; fist or loss locks; Filter returns to 50%.
 5. BPM Sync toggles and restores original rates.
-6. With the camera live, move camera setup → tracks → performance and confirm the same stream remains visible.
+6. With the camera live, switch Vision → DJ Room → Vision and confirm landmarks remain on the visible canvas.
 7. Keyboard focus, arrow-key range control, reduced motion, and readable zoom.
-8. Performance opens with one track; BPM Match remains unavailable until both decks have BPM evidence.
+8. First-mix readiness advances only when both tracks, camera, and an armed gesture are actually ready.
 9. Screen-reader announcements occur on discrete readiness or clutch transitions, not on continuously changing control percentages.
 
 ## Camera automation strategy
@@ -88,7 +88,7 @@ For each browser, verify:
 The harness has four layers:
 
 1. Generated landmark-coordinate cases and React integration tests drive pure gesture, permission, recovery, and lifecycle logic on every pull request. A standalone JSON trace corpus remains roadmap work.
-2. The production-build Chromium contract runs a zero-hand test pattern through real MediaPipe and the mobile performance checks on every pull request.
+2. The production-build Chromium contract runs a zero-hand test pattern through real MediaPipe and the mobile First Mix checks on every pull request.
 3. The generated open-palm companion runs one privacy-safe positive frame through
    the real shipped model and verifies no-jump pickup. A future measured
    detector-quality corpus can extend it only after representation, provenance,

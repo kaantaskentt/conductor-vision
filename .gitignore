@@ -9,9 +9,9 @@ lerna-debug.log*
 
 node_modules
 dist
-artifacts/
 dist-ssr
 coverage
+artifacts/
 /.playwright-cli/
 /output/playwright/
 *.local

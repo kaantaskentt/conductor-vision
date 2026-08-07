@@ -36,7 +36,7 @@ ffmpeg -f mjpeg -i open-palm.mjpeg \
 ```
 
 The generated stream passes a narrow Chromium smoke contract through the real
-shipped MediaPipe model: the hand is detected, Filter can be selected, and relative
-pickup leaves its neutral value unchanged. One synthetic image does not
+shipped MediaPipe model: the hand is detected, the crossfader becomes armed, and
+relative pickup leaves its centered value unchanged. One synthetic image does not
 measure accuracy across lighting, movement, devices, skin tones, physical cameras,
 Safari, or Firefox.

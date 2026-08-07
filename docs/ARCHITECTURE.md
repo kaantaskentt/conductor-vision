@@ -8,10 +8,8 @@ Ultra Vision is a client-only React application. It has no accounts, database, a
 flowchart LR
   Camera[Webcam] --> Runtime[Vision runtime]
   Runtime --> Hand[Hand landmarks]
-  Hand --> Pointer[Index-tip pointer]
-  Pointer --> Targets[Point-and-hold targets]
-  Hand --> Gesture[Relative gesture controller]
-  Targets --> Mixer
+  Runtime --> Face[Optional face and pixel analysis]
+  Hand --> Gesture[Gesture controller]
   Gesture --> Mixer[Web Audio mixer]
   Demo[Generated demo tracks] --> Mixer
   Files[Local audio files] --> Mixer
@@ -22,9 +20,9 @@ flowchart LR
 
 ## Vision runtime
 
-`useVisionRuntime` owns cancellable startup, camera permission, the MediaPipe fileset, hand model, frame scheduling, canvas drawing, and recovery. It loads and verifies the startup-required hand model before opening the camera. The shipped performance flow keeps face analysis disabled; older face and pixel experiments remain code-level foundations rather than active product claims.
+`useVisionRuntime` owns cancellable startup, camera permission, the MediaPipe fileset, hand/face models, frame scheduling, canvas drawing, and recovery. It loads the pinned runtime and startup-required models before opening the camera. DJ Room enables hand tracking only. Vision enables face and pixel analysis lazily; switching an already-running DJ camera into Vision can therefore load the optional face model afterward.
 
-The runtime emits a small `GestureFrame` rather than exposing MediaPipe objects to the mixer. A separate `HandSummary` provides mirrored index-tip coordinates and a conservative pointing pose to the UI target controller. Primary-hand continuity favors the previous handedness and nearest position to reduce ordering jumps.
+The runtime emits a small `GestureFrame` rather than exposing MediaPipe objects to the mixer. Primary-hand continuity favors the previous handedness and nearest position to reduce ordering jumps.
 
 ## DJ mixer
 
@@ -36,7 +34,7 @@ media source → high-pass → low-pass → channel gain → crossfade gain → 
 
 React state mirrors user-facing deck status. Refs own high-frequency or imperative audio state. Gesture takeover grabs relative to the current value so the first hand frame cannot jump a control; a small clutch state machine absorbs landmark flicker and confirms release intent.
 
-Track loading decodes eligible local audio into a normalized full-track peak overview, BPM estimate, likely beat phase, and estimated four-beat bar grid. These markers are explicitly estimates: BPM Match changes playback rate but does not claim downbeat or phase alignment.
+Full-track waveform and beat-grid analysis is additive: it feeds the visual beat workspace without replacing the original BPM queue, gesture clutch, filter release, or deck-control behavior. Beat and bar markers are estimates rather than phase or downbeat claims.
 
 ## Air Mix Replay foundation
 

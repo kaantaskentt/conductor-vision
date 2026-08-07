@@ -6,7 +6,7 @@ Git tag or GitHub Release exists.
 
 ## Release candidate — v0.2.0 (not tagged)
 
-- [x] One camera-first performance flow with progressive track loading and live controls.
+- [x] Two focused product surfaces: DJ Room and Vision.
 - [x] Generated demo tracks, local track loading, two-deck playback, filtering,
       channel levels, crossfading, and reversible BPM-rate matching.
 - [x] A guided first mix with explicit camera-off and recovery paths.

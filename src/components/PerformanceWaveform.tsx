@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import type { DeckId, DeckState } from '../hooks/useDjMixer'
+import { buildBeatGrid } from '../lib/trackAnalysis'
 
 type PerformanceWaveformProps = {
   deckId: DeckId
@@ -35,6 +36,16 @@ function drawWaveform(
   const context = canvas.getContext('2d')
   if (!context) return
   context.clearRect(0, 0, width, height)
+  if (
+    typeof context.save !== 'function' ||
+    typeof context.scale !== 'function' ||
+    typeof context.beginPath !== 'function' ||
+    typeof context.moveTo !== 'function' ||
+    typeof context.lineTo !== 'function' ||
+    typeof context.stroke !== 'function' ||
+    typeof context.fillRect !== 'function' ||
+    typeof context.restore !== 'function'
+  ) return
   context.save()
   context.scale(ratio, ratio)
 
@@ -93,17 +104,27 @@ function drawWaveform(
 
 export function PerformanceWaveform({ deckId, deck, onSeek }: PerformanceWaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const displayDeck = useMemo(() => {
+    if (
+      deck.beats.length ||
+      !deck.analysisStatus.startsWith('Generated demo') ||
+      !deck.bpm ||
+      deck.duration <= 0
+    ) return deck
+    const grid = buildBeatGrid(deck.duration, deck.bpm, 0)
+    return { ...deck, beats: grid.beats, bars: grid.bars }
+  }, [deck])
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const draw = () => drawWaveform(canvas, deckId, deck)
+    const draw = () => drawWaveform(canvas, deckId, displayDeck)
     draw()
     if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(draw)
     observer.observe(canvas)
     return () => observer.disconnect()
-  }, [deck, deckId])
+  }, [deckId, displayDeck])
 
   return (
     <section className={`uv-waveform uv-waveform-${deckId}`} aria-label={`Deck ${deckId.toUpperCase()} waveform`}>
@@ -128,8 +149,8 @@ export function PerformanceWaveform({ deckId, deck, onSeek }: PerformanceWavefor
         <canvas ref={canvasRef} aria-hidden="true" />
       </button>
       <div className="uv-waveform-grid-note">
-        {deck.beats.length
-          ? `Estimated beat grid · ${deck.bars.length} bars`
+        {displayDeck.beats.length
+          ? `Estimated beat grid · ${displayDeck.bars.length} bars`
           : deck.loaded
             ? 'Analyzing track shape and beat grid…'
             : 'Load a track to reveal its waveform'}

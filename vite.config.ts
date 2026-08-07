@@ -12,15 +12,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.{ts,tsx}'],
-      exclude: [
-        'src/**/*.test.{ts,tsx}',
-        'src/test/**',
-        // Preserved for future experiments, but intentionally disconnected from
-        // the shipped camera-first surface and its active coverage contract.
-        'src/components/AppShell.tsx',
-        'src/screens/DjRoomScreen.tsx',
-        'src/screens/VisionScreen.tsx',
-      ],
+      exclude: ['src/**/*.test.{ts,tsx}', 'src/test/**'],
       reporter: ['text', 'json-summary'],
       thresholds: {
         // Keep the safety net close to the current suite while leaving a small
