@@ -116,14 +116,18 @@ test('production camera survives handoff, capture, stop, and restart', async ({ 
 
   await page.goto('/')
   await expect(page).toHaveTitle(/Ultra Vision/)
-  await expect(page.getByRole('heading', { name: 'Mix with your hands.' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Start with your camera' })).toBeVisible()
   await expect.poll(() => page.evaluate(() => window.isSecureContext)).toBe(true)
 
-  await page.getByRole('button', { name: 'Load instant demo' }).click()
-  await page.getByRole('button', { name: 'Start performance' }).click()
+  await page.getByRole('button', { name: 'Allow camera' }).click()
 
   try {
+    await expect(page.getByRole('heading', { name: 'Load your tracks' })).toBeVisible()
+    await page.getByRole('button', { name: 'Try demo tracks' }).click()
+    await page.getByRole('button', { name: 'Continue to Perform' }).click()
     await expectLiveCamera(page)
+    await page.getByRole('button', { name: /Play Deck A/ }).click()
+    await page.getByRole('button', { name: /Play Deck B/ }).click()
     await expect.poll(() => page.locator('audio').evaluateAll((audio) =>
       audio.length === 2 && audio.every((track) => !(track as HTMLAudioElement).paused),
     )).toBe(true)
@@ -157,14 +161,12 @@ test('production camera survives handoff, capture, stop, and restart', async ({ 
     await expect(page.locator('.pixel-source-chip')).toHaveText('Camera capture')
 
     await page.getByRole('button', { name: 'DJ Room', exact: true }).click()
-    await expect(page.getByRole('heading', { level: 1, name: /mixed with/i })).toBeVisible()
+    await expect(page.getByRole('region', { name: /Deck [AB] control/ })).toBeVisible()
     await expectLiveCamera(page)
     expect((await readCameraProbe(page)).streamId).toBe(djRoomProbe.streamId)
 
     await page.getByRole('button', { name: 'Stop camera' }).click()
-    const restartCamera = page.getByRole('button', {
-      name: /^(Turn on hand controls|Start performance)$/,
-    })
+    const restartCamera = page.getByRole('button', { name: 'Start camera' })
     await expect(restartCamera).toBeVisible()
     await expect(page.getByText('Camera off', { exact: true }).first()).toBeVisible()
     await expect(page.locator('.camera-stage')).toHaveAttribute('data-camera-status', 'idle')

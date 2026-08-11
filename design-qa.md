@@ -1,47 +1,61 @@
-# Restored Ultra Vision UI QA
+# Ultra Vision design QA
 
-## Source and implementation evidence
+## Comparison inputs
 
-- Source visual truth: `docs/design/ultra-vision-readiness.jpg` (`1280×720`, 1×), the checked-in pre-rebuild DJ Room with the generated demo loaded and camera off.
-- Secondary source: `docs/design/ultra-vision-analysis.jpg` (`1280×720`, 1×), the checked-in Vision workspace with hand, finger, face, smile, motion, and color readings.
-- Rendered implementation: `/tmp/ultra-vision-restored-desktop.png` (`1280×720`, CSS viewport `1280×720`, device scale 1), same loaded camera-off DJ Room state.
-- Vision implementation: `/tmp/ultra-vision-restored-vision.png` (`1280×720`, CSS viewport `1280×720`, device scale 1), camera-off Vision state.
-- Mobile implementation: `/tmp/ultra-vision-restored-mobile.png` (`390×844`, CSS viewport `390×844`, device scale 1), loaded camera-off DJ Room state.
-- Density normalization: source and desktop implementation use identical pixel and CSS dimensions. No scaling or browser chrome was included.
+- Source concept: `/Users/kaantaskent/.codex/generated_images/019f6e2f-6ca4-7df1-b6d7-b38466db7143/exec-d165389f-271a-4ea3-a5e0-6024e15ba99f.png`
+- Side-by-side full-flow comparison: `/tmp/ultra-vision-design-comparison.png`
+- Desktop implementation captures:
+  - `/tmp/ultra-vision-camera-desktop-final.png`
+  - `/tmp/ultra-vision-tracks-desktop-final.png`
+  - `/tmp/ultra-vision-perform-desktop-final.png`
+- Mobile implementation captures:
+  - `/tmp/ultra-vision-camera-mobile-final.png`
+  - `/tmp/ultra-vision-perform-mobile-final.png`
+- Source pixels: 864 × 1821, containing the three intended states.
+- Desktop QA viewport: 1280 × 720 CSS pixels at device scale 1.
+- Mobile QA viewport: 390 × 844 CSS pixels at device scale 1.
+- States reviewed: camera off, generated demo tracks loaded, camera-off demo performance. Real camera lifecycle and deterministic open-palm behavior are covered by browser tests.
 
 ## Full-view comparison
 
-The source and restored desktop screenshot were opened together in the same comparison input. Header, navigation, track title hierarchy, readiness cockpit, quick performance controls, camera stage, gesture console, cyan/violet deck identity, typography, spacing, radii, and surface colors match the previous implementation. The deliberate difference is the new decoded beat workspace directly below the camera, replacing the old full-mixer cards at the lower viewport edge; the full mixer remains available beneath it.
+The implementation preserves the selected concept's hierarchy: a three-step camera-first flow, one primary action per setup state, a centered camera as the live emotional focus, large edge performance targets, one BPM Sync control, and two detailed cyan/violet waveforms immediately below the camera. The desktop performance workspace fits both waveforms within a 720-pixel-high viewport. The 390-pixel layout stays one column with no horizontal overflow and keeps all six performance targets at least 44 pixels tall.
 
-## Focused comparison
+The implementation deliberately uses the existing Ultra Vision header and the shipped local hand-vision artwork when no camera is active. It does not fake a live person or camera output. When a real camera is active, the existing MediaPipe video and hand overlay occupy the same centered frame without remounting the runtime.
 
-- Camera stage and gesture console: unchanged from the source at the same size and position.
-- Vision screen: the source and implementation retain the same camera-first layout, live-detection stack, face/smile readings, motion history, color target, and Pixel Studio entry.
-- Beat workspace: verified independently after loading the generated demo. Both decks show decoded waveform bars, estimated beat/bar markers, BPM, playhead, duration, and working seek controls.
+## Focused regions
 
-## Required fidelity surfaces
+### Camera setup
 
-- Fonts and typography: the existing system font stack, weights, uppercase microcopy, cyan/violet track hierarchy, wrapping, and truncation are restored. The beat workspace follows the same optical scale.
-- Spacing and layout rhythm: the historical header, cockpit, performance strip, camera, and Air Controls geometry match. The beat workspace uses the existing 12px section rhythm and 18px radius.
-- Colors and tokens: the original navy surfaces, cyan Deck A, violet Deck B, green privacy status, borders, and contrast tokens are reused.
-- Image and asset quality: the checked-in neon hand artwork remains the camera-off gesture visualizer. Live camera landmarks continue to use the real MediaPipe overlay; no replacement or fake live image was introduced.
-- Copy and content: the original DJ Room and Vision language is restored. Beat markers are explicitly labeled as estimates, and BPM Sync still claims playback-rate matching only.
+- Heading, instruction, preview frame, primary permission action, demo fallback, and privacy line follow the source order.
+- At 1280 × 720, the camera is 1120 × 280 and the full action group ends at y=713, so the path is usable without zooming.
+- At 390 × 844, the camera is 366 × 330 and the permission button remains in the first viewport.
+- The inactive camera status is honest and visually subordinate to the permission action.
 
-## Comparison history
+### Track loading
 
-### Pass 1
+- Deck A and optional Deck B retain cyan/violet ownership and equal visual weight.
+- The implementation allows one loaded deck to continue, matching the product requirement rather than the concept's earlier two-track gate.
+- Loaded track headings now reserve full card width; `READY` no longer collides with `Deck B · optional`.
+- Track names truncate safely, upload controls use semantic buttons, and Deck B remains visibly optional.
 
-- `P1 · product regression`: the camera-first rebuild removed the Vision tab and disabled face analysis with `enableFace: false`. Fixed by restoring `AppShell`, `VisionScreen`, screen-aware face loading, colors, face/smile signals, motion, and Pixel Studio.
-- `P1 · interaction regression`: the new pointing/dwell controller replaced the previously tested open-palm clutch and made hand control feel unreliable. Fixed by restoring the pre-rebuild gesture routing and pickup behavior.
-- `P2 · requested visual carry-forward`: the old UI only showed low-detail live meter bars. Fixed by retaining decoded full-track overviews with estimated beat/bar markers beneath the camera.
+### Live performance
 
-### Pass 2
+- The centered camera measures 1160 × 290 at 1280 × 720, larger than the former DJ Room camera while leaving both waveforms visible.
+- CUE and PLAY/PAUSE targets sit at the camera edges. VOLUME and FILTER are the only continuous controls presented in the primary surface.
+- BPM Sync appears once, centered between the camera and waveforms, with honest disabled and locked states.
+- The waveform stack ends at y=706 in the 720-pixel viewport. Deck A and Deck B remain simultaneously visible.
+- The mobile camera is 366 × 330. Edge targets are 78 × 94 and center controls are 95 × 49, with no horizontal overflow.
 
-- Desktop comparison matches the prior product above the new beat workspace.
-- Mobile `scrollWidth` equals `innerWidth` at `390px`; no horizontal overflow was found.
-- Demo loading, dual-deck play/pause, Vision/DJ Room navigation, beat-workspace rendering, and waveform labels responded correctly.
-- Browser console contained no warnings or errors.
+## Findings and fix history
 
-No actionable P0, P1, or P2 design findings remain. Real-device camera feel should still be checked by the user because automated QA intentionally did not capture or store a private camera feed.
+- P1 responsiveness: the first laptop pass pushed Deck B below a 720-pixel viewport. Fixed with a 290-pixel low-height performance camera and denser waveform rows while preserving the larger camera on taller displays.
+- P2 layout: the absolutely positioned Deck B heading allowed `optional` and `READY` to collide. Fixed by pinning the heading to both card edges and adding a 12-pixel gap.
+- P2 onboarding: the initial low-height camera layout hid the demo fallback below the fold. Fixed with a 280-pixel low-height setup camera; the primary action, demo fallback, and privacy statement now remain visible.
+- P2 recovery: a camera failure during performance only exposed a retry button. Fixed by adding the camera message beside the performance controls with an alert role.
+- P3 visual difference: the no-camera implementation uses the existing abstract hand artwork instead of the source concept's photographed performer. Accepted because the product must not imply a live camera image before permission; real video replaces the artwork after consent.
 
-Final result: passed
+## Final result
+
+passed
+
+No open P0, P1, or P2 design fidelity or usability findings remain in the reviewed desktop and mobile states.

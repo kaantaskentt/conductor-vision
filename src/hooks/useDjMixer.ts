@@ -978,6 +978,25 @@ export function useDjMixer() {
     [patchDeck],
   )
 
+  const cueDeck = useCallback(
+    (id: DeckId) => {
+      const audio = audioElementsRef.current[id]
+      if (!audio || !decksRef.current[id].loaded) return
+      audio.pause()
+      try {
+        audio.currentTime = 0
+        patchDeck(id, { currentTime: 0, playing: false, error: null })
+        setGestureStatus(`${deckLabel(id)} returned to the start`)
+      } catch (error) {
+        patchDeck(id, {
+          playing: false,
+          error: error instanceof Error ? error.message : 'The cue point could not be restored.',
+        })
+      }
+    },
+    [patchDeck],
+  )
+
   const jumpToPhrase = useCallback(
     (id: DeckId, index: number) => {
       const deck = decksRef.current[id]
@@ -1730,6 +1749,7 @@ export function useDjMixer() {
     loadDemoMix,
     togglePlayback,
     toggleBoth,
+    cueDeck,
     seek,
     jumpToPhrase,
     setDeckVolume,

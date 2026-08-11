@@ -12,7 +12,12 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.{ts,tsx}'],
-      exclude: ['src/**/*.test.{ts,tsx}', 'src/test/**'],
+      exclude: [
+        'src/**/*.test.{ts,tsx}',
+        'src/test/**',
+        // Ignore Finder-style local duplicate files without touching them.
+        'src/**/* 2.{ts,tsx}',
+      ],
       reporter: ['text', 'json-summary'],
       thresholds: {
         // Keep the safety net close to the current suite while leaving a small

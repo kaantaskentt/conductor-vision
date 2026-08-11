@@ -1,31 +1,34 @@
 import { expect, test } from '@playwright/test'
 
-test('synthetic open palm reaches the mixer without a pickup jump', async ({ page }) => {
+test('synthetic open palm reaches the simplified controls without a pickup jump', async ({ page }) => {
   test.setTimeout(360_000)
   await page.goto('/')
-  await page.getByRole('button', { name: 'Load instant demo' }).click()
+  await page.getByRole('button', { name: 'Allow camera' }).click()
 
-  const crossfader = page.getByRole('slider', { name: 'Quick master crossfader' })
-  await expect(crossfader).toHaveValue('0')
-
-  await page.getByRole('button', { name: 'Start performance' }).click()
-  await expect(page.getByText('Live on device', { exact: true })).toBeVisible({
+  await expect(page.getByRole('heading', { name: 'Load your tracks' })).toBeVisible({
     timeout: 180_000,
   })
-  await expect(page.locator('.gesture-state-pill')).toHaveText('Armed')
-  await expect(page.locator('.first-mix-cockpit')).toHaveClass(/stage-ready/)
-  await expect(page.getByText('Crossfader armed · move left or right', { exact: true }))
-    .toBeVisible()
-  await expect(crossfader).toHaveValue('0')
+  await page.getByRole('button', { name: 'Try demo tracks' }).click()
+  await page.getByRole('button', { name: 'Continue to Perform' }).click()
+  await expect(page.getByText('Live on device', { exact: true })).toBeVisible()
 
-  await page.getByText('Choose Air Control', { exact: true }).click()
-  await page.getByRole('button', { name: /^Filter\./ }).click()
-  await expect(page.locator('.gesture-state-pill')).toHaveText('Release hand')
-  await expect(page.getByRole('heading', { name: 'Close your hand once' })).toBeVisible()
-  await expect(crossfader).toHaveValue('0')
+  const volume = page.getByRole('button', { name: /^Volume\./ })
+  const filter = page.getByRole('button', { name: /^Filter\./ })
+  await expect(volume).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.uv-performance-status')).toContainText('82%')
+
+  await filter.click()
+  await expect(filter).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.uv-performance-status')).toContainText('50% · Neutral')
+
+  // The already-open hand must not pull the filter away from neutral. The user
+  // must release and re-clutch before the continuous gesture can take over.
+  await page.waitForTimeout(1_500)
+  await expect(page.locator('.uv-performance-status')).toContainText('50% · Neutral')
 
   await page.getByRole('button', { name: 'Stop camera' }).click()
   await expect(page.locator('.camera-stage')).toHaveAttribute('data-camera-status', 'idle')
-  await expect(page.locator('.gesture-state-pill')).toHaveText('Locked')
-  await expect(crossfader).toHaveValue('0')
+  await expect(page.locator('.uv-performance-status')).toContainText('50% · Neutral')
+  await expect(page.getByRole('button', { name: /Cue Deck A/ })).toBeEnabled()
+  await expect(page.getByRole('button', { name: /Play Deck A/ })).toBeEnabled()
 })

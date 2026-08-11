@@ -36,15 +36,14 @@ async function expectNoWcagViolations(page: Page, state: string) {
 }
 
 async function loadGeneratedDemo(page: Page) {
-  await page.getByRole('button', { name: 'Load instant demo' }).click()
-  await expect(page.getByRole('complementary', {
-    name: 'Quick performance controls',
-  })).toBeVisible()
+  await page.getByRole('button', { name: 'Use demo instead' }).click()
+  await page.getByRole('button', { name: 'Continue to Perform' }).click()
+  await expect(page.getByRole('region', { name: 'Deck A control' })).toBeVisible()
 }
 
 test('camera-off DJ Room meets WCAG A/AA and exposes its keyboard path', async ({ page }) => {
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: 'Mix with your hands.' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Start with your camera' })).toBeVisible()
   await expectNoWcagViolations(page, 'Camera-off DJ Room')
 
   await page.keyboard.press('Tab')
@@ -54,7 +53,9 @@ test('camera-off DJ Room meets WCAG A/AA and exposes its keyboard path', async (
   await page.keyboard.press('Tab')
   await expect(page.getByRole('button', { name: 'DJ Room' })).toBeFocused()
   await page.keyboard.press('Tab')
-  await expect(page.getByRole('button', { name: 'Load instant demo' })).toBeFocused()
+  await expect(page.getByRole('button', { name: 'Camera', exact: true })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(page.getByRole('button', { name: 'Allow camera' })).toBeFocused()
 })
 
 test('loaded-demo DJ Room stays responsive and meets WCAG A/AA', async ({ page }) => {
@@ -83,16 +84,11 @@ test('loaded-demo DJ Room stays responsive and meets WCAG A/AA', async ({ page }
   expect(longTasks, `Demo loading created long tasks: ${longTasks.join(', ')} ms`).toEqual([])
   await expectNoWcagViolations(page, 'Loaded-demo DJ Room')
 
-  const fullMixer = page.locator('.full-mixer-disclosure')
-  const fullMixerSummary = page.locator('summary[aria-controls="mixer-decks"]')
-  await expect(fullMixerSummary).toHaveAttribute('aria-expanded', 'false')
-  await fullMixerSummary.focus()
-  await expect(fullMixerSummary).toBeFocused()
-  await fullMixerSummary.press('Enter')
-  await expect(fullMixer).toHaveAttribute('open', '')
-  await expect(fullMixerSummary).toHaveAttribute('aria-expanded', 'true')
-  await expect(page.getByRole('region', { name: 'Two-deck mixer' })).toBeVisible()
-  await expectNoWcagViolations(page, 'Expanded full mixer')
+  const cueA = page.getByRole('button', { name: /Cue Deck A/ })
+  await cueA.focus()
+  await expect(cueA).toBeFocused()
+  await expect(page.locator('.uv-performance-target')).toHaveCount(6)
+  await expect(page.getByRole('button', { name: 'Toggle BPM Sync' })).toHaveCount(1)
 })
 
 test('camera-off Vision workspace meets WCAG A/AA', async ({ page }) => {
@@ -145,7 +141,7 @@ test('390px Vision permission error keeps its recovery visible', async ({ page }
   await expect(recoveryMessage).toBeVisible()
   await expectNoWcagViolations(page, '390px Vision permission error')
   await page.getByRole('button', { name: 'DJ Room' }).click()
-  const djRecoveryMessage = page.locator('.dj-vision-layout .camera-empty p')
+  const djRecoveryMessage = page.locator('.uv-camera-shell .camera-empty p')
   await expect(djRecoveryMessage).toHaveText(
     'Camera permission was blocked. Allow access in your browser, then try again.',
   )
