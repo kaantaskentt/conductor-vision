@@ -11,6 +11,7 @@ import {
   summarizeHands,
   type GestureFrame,
   type HandAnchor,
+  type HandSummary,
   type TargetColor,
   type VisionAnalysis,
 } from '../lib/vision'
@@ -33,6 +34,7 @@ type VisionRuntimeOptions = {
   enableFace: boolean
   targetColor: TargetColor
   onGestureFrame: (frame: GestureFrame) => void
+  onHandsFrame?: (hands: HandSummary[]) => void
 }
 
 export const VISION_WASM_ROOT = '/vendor/mediapipe/tasks-vision/0.10.35/wasm'
@@ -243,7 +245,12 @@ async function createFaceLandmarker(tasks: VisionTasksModule, vision: VisionFile
   }
 }
 
-export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: VisionRuntimeOptions) {
+export function useVisionRuntime({
+  enableFace,
+  targetColor,
+  onGestureFrame,
+  onHandsFrame,
+}: VisionRuntimeOptions) {
   const [status, setStatus] = useState<CameraStatus>('idle')
   const [message, setMessage] = useState('Camera is off. Processing begins only when you start it.')
   const [analysis, setAnalysis] = useState<VisionAnalysis>(() => createEmptyAnalysis(targetColor))
@@ -277,6 +284,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
   const targetColorRef = useRef(targetColor)
   const enableFaceRef = useRef(enableFace)
   const gestureCallbackRef = useRef(onGestureFrame)
+  const handsCallbackRef = useRef(onHandsFrame)
   const primaryHandRef = useRef<{ hand: HandAnchor; lastSeenAt: number } | null>(null)
 
   const getVisionFileset = useCallback(async () => {
@@ -359,6 +367,10 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
   }, [onGestureFrame])
 
   useEffect(() => {
+    handsCallbackRef.current = onHandsFrame
+  }, [onHandsFrame])
+
+  useEffect(() => {
     enableFaceRef.current = enableFace
     if (!enableFace || !runningRef.current || faceLandmarkerRef.current) return
 
@@ -427,6 +439,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
         wristAngle: 0,
         openFingers: 0,
       })
+      handsCallbackRef.current?.([])
       setStatus('idle')
       setMessage('Camera is off. Processing begins only when you start it.')
       setAnalysis(createEmptyAnalysis(targetColorRef.current))
@@ -449,6 +462,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
           wristAngle: 0,
           openFingers: 0,
         })
+        handsCallbackRef.current?.([])
         setStatus('error')
         setMessage(
           'The camera stopped unexpectedly. Reconnect or re-enable it, then start the camera again.',
@@ -483,6 +497,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
           wristAngle: 0,
           openFingers: 0,
         })
+        handsCallbackRef.current?.([])
         setStatus('error')
         setMessage('The camera view was interrupted. Start the camera to try again.')
       })
@@ -499,6 +514,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
       wristAngle: 0,
       openFingers: 0,
     })
+    handsCallbackRef.current?.([])
     setStatus('error')
     setMessage(
       'Camera frames stopped updating. Gesture controls were released; start the camera to reconnect.',
@@ -591,7 +607,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
           lineWidth: 2,
           radius: 3.5,
         })
-      })
+      }, [])
 
       faceResult?.faceLandmarks.forEach((landmarks) => {
         drawing.drawConnectors(landmarks, tasks.FaceLandmarker.FACE_LANDMARKS_TESSELATION, {
@@ -647,6 +663,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
             }
           : { detected: false, x: 0.5, y: 0.5, wristAngle: 0, openFingers: 0 },
       )
+      handsCallbackRef.current?.(handSummaries)
 
       if (now - lastUiUpdateRef.current >= 90) {
         lastUiUpdateRef.current = now
@@ -677,6 +694,7 @@ export function useVisionRuntime({ enableFace, targetColor, onGestureFrame }: Vi
         wristAngle: 0,
         openFingers: 0,
       })
+      handsCallbackRef.current?.([])
       setStatus('error')
       setMessage('Vision paused after a processing error. Start the camera to try again.')
     }

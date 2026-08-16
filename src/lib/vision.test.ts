@@ -6,6 +6,7 @@ import {
   rgbToHex,
   rgbToHsv,
   selectPrimaryHand,
+  summarizeHands,
   type HandSummary,
 } from './vision'
 
@@ -94,6 +95,8 @@ describe('vision utilities', () => {
       label,
       x,
       y,
+      pointerX: x,
+      pointerY: y,
       count: 5,
       wristAngle: 0,
       raised: { thumb: true, index: true, middle: true, ring: true, pinky: true },
@@ -105,5 +108,20 @@ describe('vision utilities', () => {
     expect(selectPrimaryHand([], previous)).toBeNull()
     expect(selectPrimaryHand([hand('Left', 0.21, 0.4)], previous)).toBeNull()
     expect(selectPrimaryHand([hand('Right', 0.8, 0.9)], previous)).toBeNull()
+  })
+
+  it('keeps palm motion and fingertip pointing in the same mirrored display space', () => {
+    const landmarks = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.5, z: 0 }))
+    landmarks[0] = { x: 0.5, y: 0.8, z: 0 }
+    landmarks[8] = { x: 0.9, y: 0.2, z: 0 }
+    landmarks[9] = { x: 0.7, y: 0.45, z: 0 }
+    const [hand] = summarizeHands({
+      landmarks: [landmarks],
+      handedness: [[{ categoryName: 'Right' }]],
+    } as never)
+
+    expect(hand.x).toBeCloseTo(0.3)
+    expect(hand.pointerX).toBeCloseTo(0.1)
+    expect(hand.pointerY).toBeCloseTo(0.2)
   })
 })

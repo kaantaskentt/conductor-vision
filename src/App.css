@@ -4496,15 +4496,43 @@ input[type='range'] {
   transform: translateX(-50%);
 }
 
-.uv-control-targets > span {
+.uv-deck-focus {
   grid-column: 1 / -1;
-  color: rgba(245, 247, 251, 0.86);
+  display: grid;
+  width: 170px;
+  grid-template-columns: 1fr 1fr;
+  justify-self: center;
+  overflow: hidden;
+  border: 1px solid rgba(111, 135, 171, 0.48);
+  border-radius: 999px;
+  background: rgba(4, 13, 26, 0.9);
+}
+
+.uv-deck-focus button {
+  min-height: 30px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
   font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-align: center;
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+  font-weight: 850;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.uv-deck-focus button.active:first-child {
+  background: rgba(105, 212, 234, 0.16);
+  color: var(--cyan);
+}
+
+.uv-deck-focus button.active:last-child {
+  background: rgba(130, 85, 255, 0.2);
+  color: var(--violet-bright);
+}
+
+.uv-deck-focus button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
 }
 
 .uv-control-targets .uv-performance-target {
@@ -4662,6 +4690,12 @@ input[type='range'] {
 }
 
 .uv-performance-status .uv-performance-camera-error {
+  max-width: 420px;
+  color: #ffb7b7;
+  line-height: 1.25;
+}
+
+.uv-performance-status .uv-performance-audio-error {
   max-width: 420px;
   color: #ffb7b7;
   line-height: 1.25;

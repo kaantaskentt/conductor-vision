@@ -36,6 +36,8 @@ export type HandSummary = {
   raised: FingerState
   x: number
   y: number
+  pointerX: number
+  pointerY: number
   wristAngle: number
 }
 
@@ -198,6 +200,7 @@ export function summarizeHands(result: HandLandmarkerResult): HandSummary[] {
     const fingers = countRaisedFingers(landmarks, label)
     const wrist = landmarks[0]
     const middle = landmarks[9]
+    const indexTip = landmarks[8]
     const wristAngle = Math.atan2(middle.y - wrist.y, wrist.x - middle.x)
 
     return {
@@ -207,6 +210,8 @@ export function summarizeHands(result: HandLandmarkerResult): HandSummary[] {
       raised: fingers.raised,
       x: 1 - middle.x,
       y: middle.y,
+      pointerX: 1 - indexTip.x,
+      pointerY: indexTip.y,
       wristAngle,
     }
   })

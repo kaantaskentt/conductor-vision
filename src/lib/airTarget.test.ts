@@ -4,7 +4,6 @@ import {
   airTargetAt,
   createAirDwellState,
   transitionAirDwell,
-  visibleAirX,
 } from './airTarget'
 
 describe('air performance targets', () => {
@@ -16,12 +15,6 @@ describe('air performance targets', () => {
     expect(airTargetAt(0.4, 0.8)).toBe('volume')
     expect(airTargetAt(0.6, 0.8)).toBe('filter')
     expect(airTargetAt(0.5, 0.45)).toBeNull()
-  })
-
-  it('mirrors camera coordinates before mapping the performer-facing targets', () => {
-    expect(visibleAirX(0.9)).toBeCloseTo(0.1)
-    expect(airTargetAt(visibleAirX(0.9), 0.25)).toBe('cue-a')
-    expect(airTargetAt(visibleAirX(0.1), 0.25)).toBe('cue-b')
   })
 
   it('requires a steady dwell, fires once, and rearms only after leaving', () => {

@@ -1,6 +1,6 @@
 import { clamp } from './vision'
 
-export const AIR_TARGET_DWELL_MS = 800
+export const AIR_TARGET_DWELL_MS = 650
 
 export type AirTargetId =
   | 'cue-a'
@@ -19,10 +19,6 @@ export type AirDwellState = {
 
 export function createAirDwellState(): AirDwellState {
   return { target: null, startedAt: 0, progress: 0, fired: false }
-}
-
-export function visibleAirX(cameraX: number) {
-  return clamp(1 - cameraX)
 }
 
 export function airTargetAt(x: number, y: number): AirTargetId | null {

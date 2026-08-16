@@ -15,6 +15,7 @@ import {
   GESTURE_CLUTCH_FIST_RELEASE_MS,
   GESTURE_CLUTCH_LOST_RELEASE_MS,
 } from '../lib/gestureController'
+import type { HandSummary } from '../lib/vision'
 
 type Mixer = ReturnType<typeof useDjMixer>
 
@@ -252,6 +253,30 @@ const noHand = {
   openFingers: 0,
 }
 
+function trackedHand(
+  label: 'Left' | 'Right',
+  options: { y?: number; wristAngle?: number; fingers?: number } = {},
+): HandSummary {
+  const fingers = options.fingers ?? 5
+  return {
+    id: `${label}-0`,
+    label,
+    count: fingers,
+    raised: {
+      thumb: fingers >= 5,
+      index: fingers >= 1,
+      middle: fingers >= 2,
+      ring: fingers >= 3,
+      pinky: fingers >= 4,
+    },
+    x: label === 'Left' ? 0.3 : 0.7,
+    y: options.y ?? 0.5,
+    pointerX: label === 'Left' ? 0.3 : 0.7,
+    pointerY: options.y ?? 0.5,
+    wristAngle: options.wristAngle ?? 0,
+  }
+}
+
 describe('DJ mixer filter gesture integration', () => {
   let root: Root
   let container: HTMLDivElement
@@ -375,6 +400,44 @@ describe('DJ mixer filter gesture integration', () => {
     expect(current.decks.a.filter).toBe(DJ_NEUTRAL_VALUES.filter)
     expect(current.gestureStatus).toContain('grabbed at 50%')
     expect(current.gesturePhase).toBe('armed')
+  })
+
+  it('controls volume with the left hand and filter with the right hand at the same time', async () => {
+    await act(async () => {
+      current.setDeckVolume('a', 82)
+      current.setDeckFilter('a', 50)
+      current.handleHandsFrame([
+        trackedHand('Left', { y: 0.5 }),
+        trackedHand('Right', { wristAngle: 0 }),
+      ])
+    })
+    expect(current.decks.a.volume).toBe(82)
+    expect(current.decks.a.filter).toBe(50)
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleHandsFrame([
+        trackedHand('Left', { y: 0.3 }),
+        trackedHand('Right', { wristAngle: (-25 * Math.PI) / 180 }),
+      ])
+    })
+    expect(current.decks.a.volume).toBeGreaterThan(82)
+    expect(current.decks.a.filter).not.toBe(50)
+    expect(current.gestureStatus).toContain('Left hand · volume')
+    expect(current.gestureStatus).toContain('Right hand · filter')
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleHandsFrame([trackedHand('Left', { y: 0.3 })])
+    })
+    const heldVolume = current.decks.a.volume
+    expect(current.decks.a.filter).not.toBe(50)
+
+    await act(async () => {
+      vi.advanceTimersByTime(FILTER_GESTURE_RELEASE_MS)
+    })
+    expect(current.decks.a.filter).toBe(50)
+    expect(current.decks.a.volume).toBe(heldVolume)
   })
 
   it('recovers from brief tracking loss and cancels a pending neutral reset when the hand returns', async () => {

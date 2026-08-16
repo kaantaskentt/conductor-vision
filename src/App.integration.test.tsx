@@ -388,7 +388,7 @@ describe('Ultra Vision camera-first DJ flow', () => {
     expect(container.textContent).toContain('FILTER')
   })
 
-  it('does not steal or reset Deck A filter control when transporting Deck B', async () => {
+  it('moves control focus to the deck selected by its transport', async () => {
     await loadDemoSet()
     await enterPerformance()
 
@@ -403,7 +403,7 @@ describe('Ultra Vision camera-first DJ flow', () => {
 
     await act(async () => click(cueB))
     expect(filter.getAttribute('aria-pressed')).toBe('true')
-    expect(status.textContent).toContain('Deck A control')
+    expect(status.textContent).toContain('Deck B control')
     expect(status.textContent).toContain('50% · Neutral')
   })
 

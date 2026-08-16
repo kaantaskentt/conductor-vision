@@ -16,7 +16,7 @@ import {
   type BeatGridMarker,
   type TrackAnalysis,
 } from '../lib/trackAnalysis'
-import { clamp, type GestureFrame } from '../lib/vision'
+import { clamp, type GestureFrame, type HandSummary } from '../lib/vision'
 
 export type DeckId = 'a' | 'b'
 export type DjControl = 'crossfader' | 'volume' | 'filter'
@@ -924,9 +924,13 @@ export function useDjMixer() {
       const audio = audioElementsRef.current[id]
       if (!audio || !decksRef.current[id].loaded) return
       try {
-        await ensureDeckGraph(id)
-        if (audio.paused) await audio.play()
-        else audio.pause()
+        if (!audio.paused) {
+          audio.pause()
+          return
+        }
+        const graphReady = ensureDeckGraph(id)
+        const playbackStarted = audio.play()
+        await Promise.all([graphReady, playbackStarted])
       } catch (error) {
         patchDeck(id, {
           error: error instanceof Error ? error.message : 'Playback could not start.',
@@ -948,14 +952,13 @@ export function useDjMixer() {
       return
     }
     try {
-      await Promise.all(readyIds.map(ensureDeckGraph))
-      const results = await Promise.allSettled(
-        readyIds.map((id) => {
+      const graphPromises = readyIds.map(ensureDeckGraph)
+      const playbackPromises = readyIds.map((id) => {
           const audio = audioElementsRef.current[id]
           if (!audio) throw new Error(`${deckLabel(id)} is not ready.`)
           return audio.play()
-        }),
-      )
+        })
+      const results = await Promise.allSettled([...graphPromises, ...playbackPromises])
       if (results.some((result) => result.status === 'rejected')) {
         throw new Error('One deck could not start.')
       }
@@ -1373,6 +1376,130 @@ export function useDjMixer() {
     [activeDeck, disarmGesture, selectedControl, setDeckFilter],
   )
 
+  const handleHandsFrame = useCallback(
+    (hands: HandSummary[]) => {
+      const now = performance.now()
+      const left = hands.find((hand) => hand.label.toLowerCase() === 'left')
+      const right = hands.find((hand) => hand.label.toLowerCase() === 'right')
+      const deck = decksRef.current[activeDeck].loaded
+        ? activeDeck
+        : decksRef.current.a.loaded
+          ? 'a'
+          : decksRef.current.b.loaded
+            ? 'b'
+            : activeDeck
+      const leftOpen = Boolean(left && left.count >= 3)
+      const rightOpen = Boolean(right && right.count >= 3)
+
+      if (!decksRef.current[deck].loaded) {
+        positionGestureRef.current = null
+        filterGestureRef.current = createFilterGestureState()
+        gestureEngagedRef.current = false
+        setGesturePhase('locked')
+        setGestureStatus('Load a track to use hand controls')
+        return
+      }
+
+      if (!leftOpen) {
+        if (positionGestureRef.current?.control === 'volume') positionGestureRef.current = null
+      }
+
+      if (!rightOpen) {
+        const transition = transitionFilterGesture(filterGestureRef.current, {
+          type: 'lost',
+          now,
+        })
+        filterGestureRef.current = transition.state
+        if (
+          transition.command === 'schedule-neutral' &&
+          transition.state.phase === 'release-grace'
+        ) {
+          scheduleFilterRelease(transition.state.releaseAt)
+        }
+      }
+
+      if (!leftOpen && !rightOpen) {
+        gestureEngagedRef.current = false
+        setGesturePhase('locked')
+        if (now - lastGestureUpdateAtRef.current > 280) {
+          lastGestureUpdateAtRef.current = now
+          setGestureStatus(hands.length ? 'Open a hand to grab its control' : 'Waiting for a hand')
+        }
+        return
+      }
+
+      if (now - lastGestureUpdateAtRef.current < 55) return
+      lastGestureUpdateAtRef.current = now
+      gestureEngagedRef.current = true
+      setGesturePhase('armed')
+
+      if (leftOpen && left) {
+        const input = 1 - left.y
+        let gesture = positionGestureRef.current
+        if (gesture?.control !== 'volume' || gesture.deck !== deck) {
+          gesture = {
+            control: 'volume',
+            deck,
+            baselineInput: input,
+            baselineValue: decksRef.current[deck].volume,
+            samples: 1,
+            startedAt: now,
+            engaged: true,
+          }
+          positionGestureRef.current = gesture
+        } else if (Math.abs(input - gesture.baselineInput) > POSITION_GESTURE_DEAD_ZONE) {
+          const target = relativeGestureValue(
+            gesture.baselineValue,
+            gesture.baselineInput,
+            input,
+            170,
+          )
+          const value = smoothBoundedControlValue(
+            decksRef.current[deck].volume,
+            target,
+            0,
+            100,
+            0.48,
+          )
+          setDeckVolume(deck, value)
+        }
+      }
+
+      if (rightOpen && right) {
+        const transition = transitionFilterGesture(filterGestureRef.current, {
+          type: 'sample',
+          deck,
+          angle: right.wristAngle,
+          currentValue: decksRef.current[deck].filter,
+          now,
+        })
+        filterGestureRef.current = transition.state
+        if (transition.command === 'cancel-neutral') cancelFilterRelease()
+        if (transition.target !== undefined) {
+          const value = smoothBoundedControlValue(
+            decksRef.current[deck].filter,
+            transition.target,
+            0,
+            100,
+            0.48,
+          )
+          setDeckFilter(deck, value)
+        }
+      }
+
+      setGestureStatus(
+        `${leftOpen ? `Left hand · volume ${decksRef.current[deck].volume}%` : 'Left hand · volume ready'} · ${rightOpen ? `Right hand · filter ${decksRef.current[deck].filter}%` : 'Right hand · filter ready'}`,
+      )
+    },
+    [
+      activeDeck,
+      cancelFilterRelease,
+      scheduleFilterRelease,
+      setDeckFilter,
+      setDeckVolume,
+    ],
+  )
+
   const handleGestureFrame = useCallback(
     (frame: GestureFrame) => {
       const now = performance.now()
@@ -1762,6 +1889,7 @@ export function useDjMixer() {
     resetControl,
     resetMix,
     handleGestureFrame,
+    handleHandsFrame,
     releaseGestureSession,
   }
 }

@@ -7,9 +7,11 @@ import {
 } from './components/AppShell'
 import { useDjMixer } from './hooks/useDjMixer'
 import { useVisionRuntime } from './hooks/useVisionRuntime'
-import type { TargetColor } from './lib/vision'
+import type { HandSummary, TargetColor } from './lib/vision'
 import { DjRoomScreen } from './screens/DjRoomScreen'
 import { VisionScreen } from './screens/VisionScreen'
+
+const ignorePrimaryGestureFrame = () => undefined
 
 function App() {
   const [screen, setScreen] = useState<Screen>('dj-room')
@@ -17,7 +19,7 @@ function App() {
   const mixer = useDjMixer()
   const {
     cancelDemoMix,
-    handleGestureFrame,
+    handleHandsFrame,
     releaseGestureSession,
     setAudioElement,
   } = mixer
@@ -29,16 +31,17 @@ function App() {
     (element: HTMLAudioElement | null) => setAudioElement('b', element),
     [setAudioElement],
   )
-  const handleVisionGesture = useCallback(
-    (frame: Parameters<typeof handleGestureFrame>[0]) => {
-      if (screen === 'dj-room') handleGestureFrame(frame)
+  const handleVisionHands = useCallback(
+    (hands: HandSummary[]) => {
+      if (screen === 'dj-room') handleHandsFrame(hands)
     },
-    [handleGestureFrame, screen],
+    [handleHandsFrame, screen],
   )
   const vision = useVisionRuntime({
     enableFace: screen === 'vision',
     targetColor,
-    onGestureFrame: handleVisionGesture,
+    onGestureFrame: ignorePrimaryGestureFrame,
+    onHandsFrame: handleVisionHands,
   })
   const previousScreenRef = useRef(screen)
   const previousCameraStatusRef = useRef(vision.status)
