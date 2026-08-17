@@ -124,9 +124,8 @@ test('production camera survives handoff, capture, stop, and restart', async ({ 
   try {
     await expect(page.getByRole('heading', { name: 'Load your tracks' })).toBeVisible()
     await page.getByRole('button', { name: 'Try demo tracks' }).click()
-    await page.getByRole('button', { name: 'Continue to Perform' }).click()
+    await page.getByRole('button', { name: 'Start performance' }).click()
     await expectLiveCamera(page)
-    await page.getByRole('button', { name: /Play Deck A/ }).click()
     await page.getByRole('button', { name: /Play Deck B/ }).click()
     await expect.poll(() => page.locator('audio').evaluateAll((audio) =>
       audio.length === 2 && audio.every((track) => !(track as HTMLAudioElement).paused),
@@ -161,7 +160,7 @@ test('production camera survives handoff, capture, stop, and restart', async ({ 
     await expect(page.locator('.pixel-source-chip')).toHaveText('Camera capture')
 
     await page.getByRole('button', { name: 'DJ Room', exact: true }).click()
-    await expect(page.getByRole('region', { name: /Deck [AB] control/ })).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Deck A waveform' })).toBeVisible()
     await expectLiveCamera(page)
     expect((await readCameraProbe(page)).streamId).toBe(djRoomProbe.streamId)
 

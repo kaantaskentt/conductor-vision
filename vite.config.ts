@@ -9,6 +9,9 @@ export default defineConfig({
   },
   test: {
     exclude: [...configDefaults.exclude, 'e2e/**'],
+    // Audio-generation tests are intentionally CPU-heavy. Capping workers keeps
+    // them from starving the interaction suites on contributor laptops and CI.
+    maxWorkers: 4,
     coverage: {
       provider: 'v8',
       include: ['src/**/*.{ts,tsx}'],

@@ -4161,13 +4161,16 @@ input[type='range'] {
 }
 
 .flow-tracks .uv-camera-shell {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  opacity: 0;
+  position: relative;
+  width: min(980px, 100%);
+  height: clamp(118px, 18vh, 172px);
+  overflow: visible;
+  opacity: 1;
   pointer-events: none;
+}
+
+.flow-tracks .uv-camera-shell .camera-stage {
+  border-radius: 16px;
 }
 
 .uv-camera-actions {
@@ -4490,10 +4493,30 @@ input[type='range'] {
   bottom: 14px;
   left: 50%;
   display: grid;
-  width: 280px;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  width: min(560px, 52%);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
   transform: translateX(-50%);
+}
+
+.uv-deck-control-pair {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.uv-deck-control-pair > span {
+  grid-column: 1 / -1;
+  color: var(--cyan);
+  font-size: 7px;
+  font-weight: 850;
+  letter-spacing: 0.14em;
+  text-align: center;
+}
+
+.uv-deck-control-pair.deck-b > span {
+  color: var(--violet-bright);
 }
 
 .uv-deck-focus {
@@ -4550,6 +4573,15 @@ input[type='range'] {
 
 .uv-control-targets .uv-performance-target > span:last-child {
   grid-column: 2;
+}
+
+.uv-deck-control-pair.deck-b .uv-performance-target:hover,
+.uv-deck-control-pair.deck-b .uv-performance-target:focus-visible,
+.uv-deck-control-pair.deck-b .uv-performance-target.aiming,
+.uv-deck-control-pair.deck-b .uv-performance-target.active {
+  border-color: var(--violet-bright);
+  color: var(--violet-bright);
+  box-shadow: 0 0 0 3px rgba(130, 85, 255, 0.12), 0 0 30px rgba(130, 85, 255, 0.18);
 }
 
 .uv-live-readout {
@@ -4613,6 +4645,12 @@ input[type='range'] {
   opacity: 1;
   transform: translate(-50%, -50%) scale(1.15);
   box-shadow: 0 0 20px rgba(105, 212, 234, 0.55);
+}
+
+.uv-air-cursor.cursor-right.pointing {
+  border-color: var(--violet-bright);
+  background: rgba(130, 85, 255, 0.32);
+  box-shadow: 0 0 20px rgba(130, 85, 255, 0.6);
 }
 
 .uv-performance-workspace {
@@ -4933,8 +4971,17 @@ input[type='range'] {
 
   .uv-control-targets {
     bottom: 7px;
-    width: 194px;
+    width: min(260px, 62%);
     gap: 5px;
+  }
+
+  .uv-deck-control-pair {
+    gap: 4px;
+  }
+
+  .uv-deck-control-pair > span {
+    font-size: 5.5px;
+    letter-spacing: 0.08em;
   }
 
   .uv-control-targets > span {

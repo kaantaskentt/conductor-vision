@@ -37,8 +37,8 @@ async function expectNoWcagViolations(page: Page, state: string) {
 
 async function loadGeneratedDemo(page: Page) {
   await page.getByRole('button', { name: 'Use demo instead' }).click()
-  await page.getByRole('button', { name: 'Continue to Perform' }).click()
-  await expect(page.getByRole('region', { name: 'Deck A control' })).toBeVisible()
+  await page.getByRole('button', { name: 'Start performance' }).click()
+  await expect(page.getByRole('region', { name: 'Deck A waveform' })).toBeVisible()
 }
 
 test('camera-off DJ Room meets WCAG A/AA and exposes its keyboard path', async ({ page }) => {
@@ -87,7 +87,7 @@ test('loaded-demo DJ Room stays responsive and meets WCAG A/AA', async ({ page }
   const cueA = page.getByRole('button', { name: /Cue Deck A/ })
   await cueA.focus()
   await expect(cueA).toBeFocused()
-  await expect(page.locator('.uv-performance-target')).toHaveCount(6)
+  await expect(page.locator('.uv-performance-target')).toHaveCount(8)
   await expect(page.getByRole('button', { name: 'Toggle BPM Sync' })).toHaveCount(1)
 })
 

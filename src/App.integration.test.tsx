@@ -10,8 +10,8 @@ const mediaPipe = vi.hoisted(() => ({
   createHand: vi.fn(),
   resolveFileset: vi.fn(),
 }))
-const demoAudio = vi.hoisted(() => ({
-  createDemoTracksCooperatively: vi.fn(),
+const bundledDemo = vi.hoisted(() => ({
+  loadBundledDemoTracks: vi.fn(),
 }))
 
 const HAND_MODEL_BYTES = 7_819_105
@@ -30,8 +30,8 @@ vi.mock('@mediapipe/tasks-vision', () => ({
   FaceLandmarker: { FACE_LANDMARKS_TESSELATION: [], createFromOptions: mediaPipe.createFace },
 }))
 
-vi.mock('./lib/demoAudio', () => ({
-  createDemoTracksCooperatively: demoAudio.createDemoTracksCooperatively,
+vi.mock('./lib/bundledDemo', () => ({
+  loadBundledDemoTracks: bundledDemo.loadBundledDemoTracks,
 }))
 
 type FakeAudioParam = {
@@ -159,8 +159,8 @@ describe('Ultra Vision camera-first DJ flow', () => {
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
       .IS_REACT_ACT_ENVIRONMENT = true
     animationQueue = []
-    demoAudio.createDemoTracksCooperatively.mockReset()
-    demoAudio.createDemoTracksCooperatively.mockResolvedValue([
+    bundledDemo.loadBundledDemoTracks.mockReset()
+    bundledDemo.loadBundledDemoTracks.mockResolvedValue([
       {
         bpm: 120,
         file: new File(['deck-a'], 'neon-pulse.wav', { type: 'audio/wav' }),
@@ -252,6 +252,12 @@ describe('Ultra Vision camera-first DJ flow', () => {
         return mediaPaused.get(this) ?? true
       },
     })
+    Object.defineProperty(HTMLMediaElement.prototype, 'readyState', {
+      configurable: true,
+      get() {
+        return 4
+      },
+    })
     Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
       configurable: true,
       value: vi.fn(() => ({
@@ -288,8 +294,15 @@ describe('Ultra Vision camera-first DJ flow', () => {
   }
 
   async function enterPerformance() {
-    await act(async () => click(buttonByName(container, 'Continue to Perform')))
+    const play = vi.mocked(HTMLMediaElement.prototype.play)
+    const playCallsBefore = play.mock.calls.length
+    await act(async () => {
+      click(buttonByName(container, 'Start performance'))
+      await flushPromises()
+    })
     expect(container.querySelector('h1')?.textContent).toBe('Perform with your hands')
+    expect(play.mock.calls.length).toBeGreaterThan(playCallsBefore)
+    return play.mock.calls.length - playCallsBefore
   }
 
   it('starts with a centered, privacy-clear camera step', () => {
@@ -320,16 +333,19 @@ describe('Ultra Vision camera-first DJ flow', () => {
     expect(container.textContent).toContain('Deck B is optional')
   })
 
-  it('loads demo tracks, reveals only the focused performance controls, and syncs reversibly', async () => {
+  it('uses the trusted Start performance click to unlock sound and syncs reversibly', async () => {
     await loadDemoSet()
     expect(container.textContent).toContain('Neon Pulse')
     expect(container.textContent).toContain('Midnight Circuit')
     expect(container.querySelectorAll('.uv-track-slot.loaded')).toHaveLength(2)
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled()
 
-    await enterPerformance()
+    expect(await enterPerformance()).toBe(2)
 
     expect(container.querySelectorAll('.uv-waveform')).toHaveLength(2)
-    expect(container.querySelectorAll('.uv-performance-target')).toHaveLength(6)
+    expect(container.querySelectorAll('.uv-performance-target')).toHaveLength(8)
+    expect(container.querySelector('[aria-label="Deck A hand control"]')).toBeTruthy()
+    expect(container.querySelector('[aria-label="Deck B hand control"]')).toBeTruthy()
     expect(container.querySelectorAll('button[aria-label="Toggle BPM Sync"]')).toHaveLength(1)
     expect(container.textContent).not.toContain('Crossfader')
     expect(container.textContent).not.toContain('Full mixer')
@@ -339,8 +355,45 @@ describe('Ultra Vision camera-first DJ flow', () => {
     await act(async () => click(sync))
     expect(sync.getAttribute('aria-pressed')).toBe('true')
     expect(sync.textContent).toContain('LOCKED')
+    expect(sync.getAttribute('title')).toContain('Deck B follows Deck A at 120.0 BPM')
     await act(async () => click(sync))
     expect(sync.getAttribute('aria-pressed')).toBe('false')
+    expect(sync.textContent).toContain('READY')
+    expect(sync.getAttribute('title')).toBe('Original BPMs restored')
+  })
+
+  it('locks navigation and track replacement while performance audio is starting', async () => {
+    await loadDemoSet()
+    let releasePlayback!: () => void
+    const playbackGate = new Promise<void>((resolve) => {
+      releasePlayback = resolve
+    })
+    vi.mocked(HTMLMediaElement.prototype.play).mockImplementation(function (
+      this: HTMLMediaElement,
+    ) {
+      mediaPaused.set(this, false)
+      this.dispatchEvent(new Event('play'))
+      return playbackGate
+    })
+
+    await act(async () => {
+      click(buttonByName(container, 'Start performance'))
+      await flushPromises(2)
+    })
+
+    expect(buttonByName(container, 'Enabling sound…')).toHaveProperty('disabled', true)
+    expect(buttonByName(container, 'Try demo tracks')).toHaveProperty('disabled', true)
+    expect(buttonByName(container, 'Replace Deck A')).toHaveProperty('disabled', true)
+    expect(buttonByName(container, 'Replace Deck B')).toHaveProperty('disabled', true)
+    expect(flowStepButton(container, 'Camera').disabled).toBe(true)
+    expect(flowStepButton(container, 'Load Tracks').disabled).toBe(true)
+    expect(flowStepButton(container, 'Perform').disabled).toBe(true)
+
+    await act(async () => {
+      releasePlayback()
+      await flushPromises()
+    })
+    expect(container.querySelector('h1')?.textContent).toBe('Perform with your hands')
   })
 
   it('allows one local track to continue while keeping Deck B and BPM Sync optional', async () => {
@@ -356,8 +409,10 @@ describe('Ultra Vision camera-first DJ flow', () => {
     })
     await act(async () => click(flowStepButton(container, 'Load Tracks')))
     expect(container.textContent).toContain('Deck B · optional')
-    expect((buttonByName(container, 'Continue to Perform') as HTMLButtonElement).disabled).toBe(false)
-    await enterPerformance()
+    expect((buttonByName(container, 'Start performance') as HTMLButtonElement).disabled).toBe(false)
+    expect(await enterPerformance()).toBe(1)
+    const [deckA] = [...container.querySelectorAll('audio')]
+    expect(deckA.paused).toBe(false)
     expect(container.querySelector<HTMLButtonElement>('button[aria-label^="Play Deck A"]')?.disabled)
       .toBe(false)
     expect(container.querySelector<HTMLButtonElement>('button[aria-label^="Play Deck B"]')?.disabled)
@@ -375,6 +430,9 @@ describe('Ultra Vision camera-first DJ flow', () => {
     const cueA = container.querySelector<HTMLButtonElement>('button[aria-label^="Cue Deck A"]')
     if (!playA || !cueA) throw new Error('Deck A transport targets were not rendered.')
 
+    expect(deckA.paused).toBe(false)
+    await act(async () => click(playA))
+    expect(deckA.paused).toBe(true)
     await act(async () => {
       click(playA)
       await Promise.resolve()
@@ -388,23 +446,37 @@ describe('Ultra Vision camera-first DJ flow', () => {
     expect(container.textContent).toContain('FILTER')
   })
 
-  it('moves control focus to the deck selected by its transport', async () => {
+  it('keeps Deck A and Deck B hand controls independent from each other and transport', async () => {
     await loadDemoSet()
     await enterPerformance()
 
-    const filter = container.querySelector<HTMLButtonElement>('button[aria-label^="Filter."]')
+    const volumeA = container.querySelector<HTMLButtonElement>('[data-air-target="volume-a"]')
+    const filterA = container.querySelector<HTMLButtonElement>('[data-air-target="filter-a"]')
+    const volumeB = container.querySelector<HTMLButtonElement>('[data-air-target="volume-b"]')
+    const filterB = container.querySelector<HTMLButtonElement>('[data-air-target="filter-b"]')
     const cueB = container.querySelector<HTMLButtonElement>('button[aria-label^="Cue Deck B"]')
-    const status = container.querySelector('.uv-performance-status')
-    if (!filter || !cueB || !status) throw new Error('Performance controls were not rendered.')
+    if (!volumeA || !filterA || !volumeB || !filterB || !cueB) {
+      throw new Error('Independent performance controls were not rendered.')
+    }
 
-    await act(async () => click(filter))
-    expect(filter.getAttribute('aria-pressed')).toBe('true')
-    expect(status.textContent).toContain('Deck A control')
+    expect(volumeA.getAttribute('aria-pressed')).toBe('true')
+    expect(filterA.getAttribute('aria-pressed')).toBe('false')
+    expect(volumeB.getAttribute('aria-pressed')).toBe('false')
+    expect(filterB.getAttribute('aria-pressed')).toBe('true')
+
+    await act(async () => click(filterA))
+    expect(volumeA.getAttribute('aria-pressed')).toBe('false')
+    expect(filterA.getAttribute('aria-pressed')).toBe('true')
+    expect(filterB.getAttribute('aria-pressed')).toBe('true')
+
+    await act(async () => click(volumeB))
+    expect(filterA.getAttribute('aria-pressed')).toBe('true')
+    expect(volumeB.getAttribute('aria-pressed')).toBe('true')
+    expect(filterB.getAttribute('aria-pressed')).toBe('false')
 
     await act(async () => click(cueB))
-    expect(filter.getAttribute('aria-pressed')).toBe('true')
-    expect(status.textContent).toContain('Deck B control')
-    expect(status.textContent).toContain('50% · Neutral')
+    expect(filterA.getAttribute('aria-pressed')).toBe('true')
+    expect(volumeB.getAttribute('aria-pressed')).toBe('true')
   })
 
   it('keeps BPM Sync honest when only one deck is available', async () => {
@@ -476,7 +548,7 @@ describe('Ultra Vision camera-first DJ flow', () => {
 
   it('cancels pending demo generation when the performer leaves DJ Room', async () => {
     let generationSignal: AbortSignal | undefined
-    demoAudio.createDemoTracksCooperatively.mockImplementationOnce(
+    bundledDemo.loadBundledDemoTracks.mockImplementationOnce(
       ({ signal }: { signal?: AbortSignal }) => new Promise((_, reject) => {
         generationSignal = signal
         signal?.addEventListener('abort', () => reject(signal.reason), { once: true })

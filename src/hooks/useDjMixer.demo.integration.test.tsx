@@ -5,12 +5,12 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useDjMixer } from './useDjMixer'
 
-const demoAudio = vi.hoisted(() => ({
-  createDemoTracksCooperatively: vi.fn(),
+const bundledDemo = vi.hoisted(() => ({
+  loadBundledDemoTracks: vi.fn(),
 }))
 
-vi.mock('../lib/demoAudio', () => ({
-  createDemoTracksCooperatively: demoAudio.createDemoTracksCooperatively,
+vi.mock('../lib/bundledDemo', () => ({
+  loadBundledDemoTracks: bundledDemo.loadBundledDemoTracks,
 }))
 
 type Mixer = ReturnType<typeof useDjMixer>
@@ -38,7 +38,7 @@ function demoTracks() {
   ] as const
 }
 
-function createAudioElement() {
+function createAudioElement(readyState = 4) {
   return Object.assign(new EventTarget(), {
     currentTime: 0,
     duration: 180,
@@ -49,18 +49,19 @@ function createAudioElement() {
     playbackRate: 1,
     play: vi.fn(() => Promise.resolve()),
     preservesPitch: true,
+    readyState,
     src: '',
   }) as unknown as HTMLAudioElement
 }
 
-describe('DJ mixer demo generation lifecycle', () => {
+describe('DJ mixer bundled demo lifecycle', () => {
   let container: HTMLDivElement
   let current: Mixer
   let mounted: boolean
   let root: Root
 
   beforeEach(async () => {
-    demoAudio.createDemoTracksCooperatively.mockReset()
+    bundledDemo.loadBundledDemoTracks.mockReset()
     vi.stubGlobal(
       'requestAnimationFrame',
       vi.fn((callback: FrameRequestCallback) => {
@@ -96,7 +97,7 @@ describe('DJ mixer demo generation lifecycle', () => {
   })
 
   it('reports generation failure and clears the in-flight guard for retry', async () => {
-    demoAudio.createDemoTracksCooperatively
+    bundledDemo.loadBundledDemoTracks
       .mockRejectedValueOnce(new Error('Synthesis failed'))
       .mockRejectedValueOnce(new Error('Retry failed'))
 
@@ -106,18 +107,18 @@ describe('DJ mixer demo generation lifecycle', () => {
     })
     expect(firstResult).toBe(false)
     expect(current.demoLoading).toBe(false)
-    expect(current.gestureStatus).toBe('The demo set could not be built · try again')
+    expect(current.gestureStatus).toBe('The demo set could not be loaded · try again')
 
     let retryResult = true
     await act(async () => {
       retryResult = await current.loadDemoMix()
     })
     expect(retryResult).toBe(false)
-    expect(demoAudio.createDemoTracksCooperatively).toHaveBeenCalledTimes(2)
+    expect(bundledDemo.loadBundledDemoTracks).toHaveBeenCalledTimes(2)
   })
 
   it('keeps generated-track loading failure distinct from synthesis failure', async () => {
-    demoAudio.createDemoTracksCooperatively.mockResolvedValueOnce(demoTracks())
+    bundledDemo.loadBundledDemoTracks.mockResolvedValueOnce(demoTracks())
 
     let result = true
     await act(async () => {
@@ -134,9 +135,9 @@ describe('DJ mixer demo generation lifecycle', () => {
     const audioB = createAudioElement()
     current.setAudioElement('a', audioA)
     current.setAudioElement('b', audioB)
-    demoAudio.createDemoTracksCooperatively.mockResolvedValueOnce(demoTracks())
+    bundledDemo.loadBundledDemoTracks.mockResolvedValueOnce(demoTracks())
 
-    expect(demoAudio.createDemoTracksCooperatively).not.toHaveBeenCalled()
+    expect(bundledDemo.loadBundledDemoTracks).not.toHaveBeenCalled()
     let result = false
     await act(async () => {
       result = await current.loadDemoMix()
@@ -157,13 +158,63 @@ describe('DJ mixer demo generation lifecycle', () => {
     expect(audioA.loop).toBe(true)
     expect(audioB.loop).toBe(true)
     expect(current.gestureStatus).toBe(
-      'Demo set loaded · press Start both, then open your hand',
+      'Demo set loaded · press Start performance',
     )
+  })
+
+  it('waits for both bundled tracks to become playable before enabling performance', async () => {
+    const audioA = createAudioElement(0)
+    const audioB = createAudioElement(0)
+    current.setAudioElement('a', audioA)
+    current.setAudioElement('b', audioB)
+    bundledDemo.loadBundledDemoTracks.mockResolvedValueOnce(demoTracks())
+
+    let pending!: Promise<boolean>
+    await act(async () => {
+      pending = current.loadDemoMix()
+      for (let index = 0; index < 8; index += 1) await Promise.resolve()
+    })
+    expect(current.demoLoading).toBe(true)
+
+    let result = false
+    await act(async () => {
+      audioA.dispatchEvent(new Event('canplay'))
+      audioB.dispatchEvent(new Event('canplay'))
+      result = await pending
+    })
+
+    expect(result).toBe(true)
+    expect(current.demoLoading).toBe(false)
+    expect(current.gestureStatus).toBe('Demo set loaded · press Start performance')
+  })
+
+  it('keeps media preparation failure recoverable', async () => {
+    const audioA = createAudioElement(0)
+    const audioB = createAudioElement(0)
+    current.setAudioElement('a', audioA)
+    current.setAudioElement('b', audioB)
+    bundledDemo.loadBundledDemoTracks.mockResolvedValueOnce(demoTracks())
+
+    let pending!: Promise<boolean>
+    await act(async () => {
+      pending = current.loadDemoMix()
+      for (let index = 0; index < 8; index += 1) await Promise.resolve()
+    })
+
+    let result = true
+    await act(async () => {
+      audioA.dispatchEvent(new Event('error'))
+      result = await pending
+    })
+
+    expect(result).toBe(false)
+    expect(current.demoLoading).toBe(false)
+    expect(current.gestureStatus).toBe('The demo set could not be loaded · try again')
   })
 
   it('rejects a duplicate request and aborts cooperative work on unmount', async () => {
     let generationSignal: AbortSignal | undefined
-    demoAudio.createDemoTracksCooperatively.mockImplementationOnce(
+    bundledDemo.loadBundledDemoTracks.mockImplementationOnce(
       ({ signal }: { signal?: AbortSignal }) =>
         new Promise((_, reject) => {
           generationSignal = signal
@@ -184,7 +235,7 @@ describe('DJ mixer demo generation lifecycle', () => {
     })
 
     expect(duplicateResult).toBe(false)
-    expect(demoAudio.createDemoTracksCooperatively).toHaveBeenCalledOnce()
+    expect(bundledDemo.loadBundledDemoTracks).toHaveBeenCalledOnce()
     expect(generationSignal?.aborted).toBe(false)
 
     let result = true
@@ -202,7 +253,7 @@ describe('DJ mixer demo generation lifecycle', () => {
     const audioA = createAudioElement()
     current.setAudioElement('a', audioA)
     let generationSignal: AbortSignal | undefined
-    demoAudio.createDemoTracksCooperatively.mockImplementationOnce(
+    bundledDemo.loadBundledDemoTracks.mockImplementationOnce(
       ({ signal }: { signal?: AbortSignal }) =>
         new Promise((_, reject) => {
           generationSignal = signal

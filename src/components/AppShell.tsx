@@ -5,8 +5,9 @@ import {
   Hand,
   ShieldCheck,
 } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import type { CameraStatus } from '../hooks/useVisionRuntime'
+import type { CameraCoverGeometry } from '../lib/cameraGeometry'
 
 export type Screen = 'vision' | 'dj-room'
 
@@ -93,6 +94,8 @@ export function CameraStage({
   compact = false,
   backdrop,
   overlay,
+  objectPosition = { x: 0.5, y: 0.5 },
+  onGeometryChange,
 }: {
   status: CameraStatus
   message: string
@@ -101,12 +104,62 @@ export function CameraStage({
   compact?: boolean
   backdrop?: ReactNode
   overlay?: ReactNode
+  objectPosition?: Readonly<{ x: number; y: number }>
+  onGeometryChange?: (geometry: CameraCoverGeometry) => void
 }) {
   const isRunning = status === 'running'
   const isLoading = status === 'loading'
+  const stageRef = useRef<HTMLDivElement | null>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const objectPositionX = objectPosition.x
+  const objectPositionY = objectPosition.y
+  const mediaObjectPosition = `${objectPositionX * 100}% ${objectPositionY * 100}%`
+
+  const handleVideoElement = useCallback((element: HTMLVideoElement | null) => {
+    videoRef.current = element
+    setVideoElement(element)
+  }, [setVideoElement])
+
+  useEffect(() => {
+    const stage = stageRef.current
+    const video = videoRef.current
+    if (!stage || !video || !onGeometryChange) return
+
+    const updateGeometry = () => {
+      const bounds = stage.getBoundingClientRect()
+      const stageWidth = stage.clientWidth || bounds.width
+      const stageHeight = stage.clientHeight || bounds.height
+      if (!video.videoWidth || !video.videoHeight || !stageWidth || !stageHeight) return
+      onGeometryChange({
+        sourceWidth: video.videoWidth,
+        sourceHeight: video.videoHeight,
+        stageWidth,
+        stageHeight,
+        objectPositionX,
+        objectPositionY,
+      })
+    }
+
+    updateGeometry()
+    video.addEventListener('loadedmetadata', updateGeometry)
+    video.addEventListener('resize', updateGeometry)
+    window.addEventListener('resize', updateGeometry)
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updateGeometry)
+    resizeObserver?.observe(stage)
+
+    return () => {
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', updateGeometry)
+      video.removeEventListener('resize', updateGeometry)
+      video.removeEventListener('loadedmetadata', updateGeometry)
+    }
+  }, [objectPositionX, objectPositionY, onGeometryChange])
 
   return (
     <div
+      ref={stageRef}
       className={`camera-stage status-${status} ${compact ? 'compact' : ''}`.trim()}
       data-camera-status={status}
     >
@@ -116,14 +169,20 @@ export function CameraStage({
         </div>
       ) : null}
       <video
-        ref={setVideoElement}
+        ref={handleVideoElement}
         className="camera-feed"
+        style={{ objectPosition: mediaObjectPosition }}
         playsInline
         muted
         aria-hidden="true"
         tabIndex={-1}
       />
-      <canvas ref={setCanvasElement} className="camera-overlay" aria-hidden="true" />
+      <canvas
+        ref={setCanvasElement}
+        className="camera-overlay"
+        style={{ objectPosition: mediaObjectPosition }}
+        aria-hidden="true"
+      />
       <div className="stage-corners" aria-hidden="true" />
       <div className={`live-pill ${isRunning ? 'running' : isLoading ? 'loading' : ''}`}>
         <span />

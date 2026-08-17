@@ -17,6 +17,8 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -24,15 +26,27 @@ import {
 import airMixMotion from '../assets/air-mix-motion.jpg'
 import { CameraStage } from '../components/AppShell'
 import { PerformanceWaveform } from '../components/PerformanceWaveform'
-import type { DeckId, DjControl, useDjMixer } from '../hooks/useDjMixer'
+import type { DeckId, useDjMixer } from '../hooks/useDjMixer'
 import type { useVisionRuntime } from '../hooks/useVisionRuntime'
 import {
-  airTargetAt,
+  airTargetAtBounds,
   createAirDwellState,
   transitionAirDwell,
+  type AirHandSlot,
   type AirDwellState,
+  type AirTargetBounds,
   type AirTargetId,
 } from '../lib/airTarget'
+import {
+  mapCameraPointToStage,
+  type CameraCoverGeometry,
+} from '../lib/cameraGeometry'
+import {
+  assignHandsToStableSlots,
+  createHandAssignmentState,
+  type HandAssignmentState,
+} from '../lib/handAssignment'
+import type { HandSummary } from '../lib/vision'
 
 const ACCEPTED_AUDIO = 'audio/mpeg,audio/wav,audio/flac,audio/ogg,.mp3,.wav,.flac,.ogg'
 
@@ -51,34 +65,53 @@ const AIR_TARGET_LABELS: Record<AirTargetId, string> = {
   'play-b': 'Play Deck B',
   volume: 'Volume',
   filter: 'Filter',
+  'volume-a': 'Deck A volume',
+  'filter-a': 'Deck A filter',
+  'volume-b': 'Deck B volume',
+  'filter-b': 'Deck B filter',
+}
+
+const AIR_HAND_SLOTS: AirHandSlot[] = ['left', 'right']
+const DJ_CAMERA_OBJECT_POSITION = { x: 0.5, y: 0.42 } as const
+const AIR_TARGET_IDS = Object.keys(AIR_TARGET_LABELS) as AirTargetId[]
+
+function airTargetBoundsMatch(
+  current: AirTargetBounds | null,
+  next: AirTargetBounds,
+) {
+  if (!current) return false
+  return AIR_TARGET_IDS.every((target) => {
+    const currentRect = current[target]
+    const nextRect = next[target]
+    if (!currentRect || !nextRect) return currentRect === nextRect
+    return currentRect.left === nextRect.left &&
+      currentRect.top === nextRect.top &&
+      currentRect.right === nextRect.right &&
+      currentRect.bottom === nextRect.bottom
+  })
+}
+
+function isPointingHand(hand: HandSummary | null) {
+  return Boolean(
+    hand && hand.count >= 1 && hand.count <= 2 && hand.raised.index,
+  )
 }
 
 function deckLabel(id: DeckId) {
   return id === 'a' ? 'Deck A' : 'Deck B'
 }
 
-function visibleDeckControl(control: DjControl): 'volume' | 'filter' {
-  return control === 'filter' ? 'filter' : 'volume'
-}
-
-function selectedControlValue(mixer: ReturnType<typeof useDjMixer>) {
-  const deck = mixer.decks[mixer.activeDeck]
-  if (mixer.selectedControl === 'filter') {
-    if (deck.filter === 50) return '50% · Neutral'
-    return deck.filter < 50 ? `${deck.filter}% · Low pass` : `${deck.filter}% · High pass`
-  }
-  return `${deck.volume}%`
-}
-
 function FlowProgress({
   step,
   canOpenTracks,
   canPerform,
+  locked,
   onStepChange,
 }: {
   step: DjFlowStep
   canOpenTracks: boolean
   canPerform: boolean
+  locked: boolean
   onStepChange: (step: DjFlowStep) => void
 }) {
   const activeIndex = FLOW_STEPS.findIndex(({ id }) => id === step)
@@ -86,7 +119,9 @@ function FlowProgress({
   return (
     <nav className="uv-flow-progress" aria-label="DJ Room setup">
       {FLOW_STEPS.map((item, index) => {
-        const enabled = item.id === 'camera' || (item.id === 'tracks' ? canOpenTracks : canPerform)
+        const enabled = !locked && (
+          item.id === 'camera' || (item.id === 'tracks' ? canOpenTracks : canPerform)
+        )
         const complete = index < activeIndex
         return (
           <button
@@ -110,10 +145,12 @@ function TrackSlot({
   id,
   mixer,
   onChoose,
+  disabled,
 }: {
   id: DeckId
   mixer: ReturnType<typeof useDjMixer>
   onChoose: () => void
+  disabled: boolean
 }) {
   const deck = mixer.decks[id]
   return (
@@ -141,7 +178,7 @@ function TrackSlot({
           <small>MP3, WAV, FLAC, or OGG</small>
         </>
       )}
-      <button type="button" className="button secondary" onClick={onChoose}>
+      <button type="button" className="button secondary" onClick={onChoose} disabled={disabled}>
         <Upload aria-hidden="true" />
         {deck.loaded ? `Replace ${deckLabel(id)}` : `Choose ${deckLabel(id)}`}
       </button>
@@ -211,39 +248,77 @@ export function DjRoomScreen({
 }) {
   const deckAInputRef = useRef<HTMLInputElement | null>(null)
   const deckBInputRef = useRef<HTMLInputElement | null>(null)
+  const cameraShellRef = useRef<HTMLDivElement | null>(null)
   const cameraAdvancePendingRef = useRef(false)
-  const airDwellRef = useRef(createAirDwellState())
+  const handAssignmentRef = useRef<HandAssignmentState>(createHandAssignmentState())
+  const airDwellRef = useRef<Record<AirHandSlot, AirDwellState>>({
+    left: createAirDwellState(),
+    right: createAirDwellState(),
+  })
   const [step, setStep] = useState<DjFlowStep>(() => {
     if (vision.status !== 'running') return 'camera'
-    return mixer.decks.a.loaded || mixer.decks.b.loaded ? 'perform' : 'tracks'
+    return mixer.performanceAudioReady && (mixer.decks.a.loaded || mixer.decks.b.loaded)
+      ? 'perform'
+      : 'tracks'
   })
   const [cameraBypassed, setCameraBypassed] = useState(false)
-  const [airDwell, setAirDwell] = useState(createAirDwellState)
+  const [performanceStarting, setPerformanceStarting] = useState(false)
+  const [cameraGeometry, setCameraGeometry] = useState<CameraCoverGeometry | null>(null)
+  const [airTargetBounds, setAirTargetBounds] = useState<AirTargetBounds | null>(null)
+  const [stableHands, setStableHands] = useState<
+    Record<AirHandSlot, HandSummary | null>
+  >({ left: null, right: null })
+  const [airDwells, setAirDwells] = useState<Record<AirHandSlot, AirDwellState>>({
+    left: createAirDwellState(),
+    right: createAirDwellState(),
+  })
   const {
-    activeDeck,
     cueDeck: cueMixerDeck,
     decks,
-    selectControl,
-    selectedControl,
+    selectPerformanceControl,
+    setPerformanceGestureInputEnabled,
     togglePlayback,
   } = mixer
 
   const anyTrackLoaded = decks.a.loaded || decks.b.loaded
   const bothTracksLoaded = decks.a.loaded && decks.b.loaded
+  const interactionLocked = performanceStarting || mixer.demoLoading
   const canOpenTracks = vision.status === 'running' || cameraBypassed || anyTrackLoaded
   const canPerform = anyTrackLoaded
   const canSync = Boolean(
     bothTracksLoaded && decks.a.bpm && decks.b.bpm,
   )
-  const primaryHand = vision.analysis.hands[0]
-  const pointerX = primaryHand?.pointerX ?? primaryHand?.x ?? 0
-  const pointerY = primaryHand?.pointerY ?? primaryHand?.y ?? 0
-  const pointing = Boolean(
-    step === 'perform' &&
-    vision.status === 'running' &&
-    primaryHand && primaryHand.count >= 1 && primaryHand.count <= 2 &&
-    primaryHand.raised.index,
-  )
+  const anyPointing = AIR_HAND_SLOTS.some((slot) => isPointingHand(stableHands[slot]))
+  const airPointers = useMemo(() => ({
+    left: stableHands.left && cameraGeometry
+      ? mapCameraPointToStage(
+          stableHands.left.pointerX ?? stableHands.left.x,
+          stableHands.left.pointerY ?? stableHands.left.y,
+          cameraGeometry,
+        )
+      : null,
+    right: stableHands.right && cameraGeometry
+      ? mapCameraPointToStage(
+          stableHands.right.pointerX ?? stableHands.right.x,
+          stableHands.right.pointerY ?? stableHands.right.y,
+          cameraGeometry,
+        )
+      : null,
+  }), [cameraGeometry, stableHands])
+
+  const handleCameraGeometryChange = useCallback((next: CameraCoverGeometry) => {
+    setCameraGeometry((current) => (
+      current &&
+      current.sourceWidth === next.sourceWidth &&
+      current.sourceHeight === next.sourceHeight &&
+      current.stageWidth === next.stageWidth &&
+      current.stageHeight === next.stageHeight &&
+      current.objectPositionX === next.objectPositionX &&
+      current.objectPositionY === next.objectPositionY
+        ? current
+        : next
+    ))
+  }, [])
 
   useEffect(() => {
     if (vision.status !== 'running' || !cameraAdvancePendingRef.current) return
@@ -255,71 +330,163 @@ export function DjRoomScreen({
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
   }, [step])
 
-  useEffect(() => {
-    if (!anyTrackLoaded || decks[activeDeck].loaded) return
-    const loadedDeck: DeckId = decks.a.loaded ? 'a' : 'b'
-    selectControl(visibleDeckControl(selectedControl), loadedDeck)
-  }, [
-    activeDeck,
-    anyTrackLoaded,
-    decks,
-    selectControl,
-    selectedControl,
-  ])
+  useLayoutEffect(() => {
+    setPerformanceGestureInputEnabled(step === 'perform')
+    return () => {
+      if (step === 'perform') setPerformanceGestureInputEnabled(false)
+    }
+  }, [setPerformanceGestureInputEnabled, step])
 
-  const chooseDeck = useCallback((id: DeckId) => {
-    selectControl(visibleDeckControl(selectedControl), id)
-  }, [selectControl, selectedControl])
+  useLayoutEffect(() => {
+    const shell = cameraShellRef.current
+    if (step !== 'perform' || !shell) {
+      setAirTargetBounds(null)
+      return
+    }
+
+    const targetElements = Array.from(
+      shell.querySelectorAll<HTMLElement>('[data-air-target]'),
+    )
+    // Cache layout-normalized rectangles here so hand-frame updates only run
+    // pure hit math and never call getBoundingClientRect themselves.
+    const updateBounds = () => {
+      const shellRect = shell.getBoundingClientRect()
+      if (!shellRect.width || !shellRect.height) return
+
+      const next: Partial<Record<AirTargetId, {
+        left: number
+        top: number
+        right: number
+        bottom: number
+      }>> = {}
+      for (const element of targetElements) {
+        const target = element.dataset.airTarget as AirTargetId | undefined
+        if (!target || !Object.prototype.hasOwnProperty.call(AIR_TARGET_LABELS, target)) {
+          continue
+        }
+        const rect = element.getBoundingClientRect()
+        next[target] = {
+          left: (rect.left - shellRect.left) / shellRect.width,
+          top: (rect.top - shellRect.top) / shellRect.height,
+          right: (rect.right - shellRect.left) / shellRect.width,
+          bottom: (rect.bottom - shellRect.top) / shellRect.height,
+        }
+      }
+      setAirTargetBounds((current) => (
+        airTargetBoundsMatch(current, next) ? current : next
+      ))
+    }
+
+    updateBounds()
+    window.addEventListener('resize', updateBounds)
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updateBounds)
+    resizeObserver?.observe(shell)
+    targetElements.forEach((element) => resizeObserver?.observe(element))
+
+    return () => {
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', updateBounds)
+    }
+  }, [step])
 
   const cueDeck = useCallback((id: DeckId) => {
     if (!decks[id].loaded) return
-    chooseDeck(id)
     cueMixerDeck(id)
-  }, [chooseDeck, cueMixerDeck, decks])
+  }, [cueMixerDeck, decks])
 
   const playDeck = useCallback((id: DeckId) => {
     if (!decks[id].loaded) return
-    chooseDeck(id)
     void togglePlayback(id)
-  }, [chooseDeck, decks, togglePlayback])
+  }, [decks, togglePlayback])
 
   const activateAirTarget = useCallback((target: AirTargetId) => {
     if (target === 'cue-a') cueDeck('a')
     else if (target === 'play-a') playDeck('a')
     else if (target === 'cue-b') cueDeck('b')
     else if (target === 'play-b') playDeck('b')
-    else if (target === 'volume' && anyTrackLoaded) {
-      selectControl('volume', activeDeck)
-    } else if (target === 'filter' && anyTrackLoaded) {
-      selectControl('filter', activeDeck)
-    }
-  }, [activeDeck, anyTrackLoaded, cueDeck, playDeck, selectControl])
+    else if (target === 'volume-a') selectPerformanceControl('a', 'volume')
+    else if (target === 'filter-a') selectPerformanceControl('a', 'filter')
+    else if (target === 'volume-b') selectPerformanceControl('b', 'volume')
+    else if (target === 'filter-b') selectPerformanceControl('b', 'filter')
+  }, [
+    cueDeck,
+    playDeck,
+    selectPerformanceControl,
+  ])
 
   useEffect(() => {
-    const target = pointing && primaryHand ? airTargetAt(pointerX, pointerY) : null
-    const transition = transitionAirDwell(airDwellRef.current, {
-      enabled: pointing,
-      target,
-      now: performance.now(),
-    })
-    airDwellRef.current = transition.state
-    setAirDwell((current) => (
-      current.target === transition.state.target &&
-      current.startedAt === transition.state.startedAt &&
-      current.progress === transition.state.progress &&
-      current.fired === transition.state.fired
+    if (step !== 'perform' || vision.status !== 'running') {
+      handAssignmentRef.current = createHandAssignmentState()
+      setStableHands((current) => (
+        current.left === null && current.right === null
+          ? current
+          : { left: null, right: null }
+      ))
+      return
+    }
+    const assignment = assignHandsToStableSlots(
+      handAssignmentRef.current,
+      vision.analysis.hands,
+      performance.now(),
+    )
+    handAssignmentRef.current = assignment.state
+    setStableHands((current) => (
+      current.left === assignment.left && current.right === assignment.right
         ? current
-        : transition.state
+        : { left: assignment.left, right: assignment.right }
     ))
-    if (transition.activate) activateAirTarget(transition.activate)
-  }, [activateAirTarget, pointing, pointerX, pointerY, primaryHand])
+  }, [step, vision.analysis.hands, vision.status])
+
+  useEffect(() => {
+    const next = { ...airDwellRef.current }
+    const activations: AirTargetId[] = []
+    const now = performance.now()
+
+    for (const slot of AIR_HAND_SLOTS) {
+      const hand = stableHands[slot]
+      const pointer = airPointers[slot]
+      const pointing =
+        step === 'perform' && vision.status === 'running' && isPointingHand(hand)
+      const enabled = pointing && Boolean(pointer?.visible) && Boolean(airTargetBounds)
+      const x = pointer?.x ?? 0
+      const y = pointer?.y ?? 0
+      const target = enabled && airTargetBounds
+        ? airTargetAtBounds(x, y, airTargetBounds, slot)
+        : null
+      const transition = transitionAirDwell(airDwellRef.current[slot], {
+        enabled,
+        target,
+        now,
+        x,
+        y,
+      })
+      next[slot] = transition.state
+      if (transition.activate) activations.push(transition.activate)
+    }
+
+    airDwellRef.current = next
+    setAirDwells((current) => (
+      AIR_HAND_SLOTS.every((slot) => (
+        current[slot].target === next[slot].target &&
+        current[slot].startedAt === next[slot].startedAt &&
+        current[slot].progress === next[slot].progress &&
+        current[slot].fired === next[slot].fired
+      ))
+        ? current
+        : next
+    ))
+    for (const target of activations) activateAirTarget(target)
+  }, [activateAirTarget, airPointers, airTargetBounds, stableHands, step, vision.status])
 
   const loadFile = async (id: DeckId, file?: File) => {
-    if (!file) return
+    if (!file || interactionLocked) return
     await mixer.loadFile(id, file)
   }
 
   const loadDemo = async (bypassCamera = false) => {
+    if (interactionLocked) return
     if (bypassCamera) setCameraBypassed(true)
     const loaded = await mixer.loadDemoMix()
     if (loaded) setStep('tracks')
@@ -339,11 +506,12 @@ export function DjRoomScreen({
     void vision.start()
   }
 
-  const enterPerformance = () => {
-    if (!anyTrackLoaded) return
-    const loadedDeck: DeckId = mixer.decks.a.loaded ? 'a' : 'b'
-    mixer.selectControl(visibleDeckControl(mixer.selectedControl), loadedDeck)
-    setStep('perform')
+  const enterPerformance = async () => {
+    if (!anyTrackLoaded || interactionLocked) return
+    setPerformanceStarting(true)
+    const started = await mixer.startPerformance()
+    setPerformanceStarting(false)
+    if (started) setStep('perform')
   }
 
   const cameraButtonLabel = vision.status === 'loading'
@@ -364,6 +532,7 @@ export function DjRoomScreen({
         ref={deckAInputRef}
         hidden
         type="file"
+        disabled={interactionLocked}
         accept={ACCEPTED_AUDIO}
         onChange={(event) => {
           void loadFile('a', event.target.files?.[0])
@@ -374,6 +543,7 @@ export function DjRoomScreen({
         ref={deckBInputRef}
         hidden
         type="file"
+        disabled={interactionLocked}
         accept={ACCEPTED_AUDIO}
         onChange={(event) => {
           void loadFile('b', event.target.files?.[0])
@@ -385,9 +555,11 @@ export function DjRoomScreen({
         step={step}
         canOpenTracks={canOpenTracks}
         canPerform={canPerform}
+        locked={interactionLocked}
         onStepChange={(nextStep) => {
           cameraAdvancePendingRef.current = false
-          if (nextStep === 'perform') enterPerformance()
+          if (interactionLocked) return
+          if (nextStep === 'perform') void enterPerformance()
           else setStep(nextStep)
         }}
       />
@@ -407,21 +579,27 @@ export function DjRoomScreen({
               ? 'Sit back. Raise one open hand and keep it inside the frame.'
               : step === 'tracks'
                 ? 'Add one track or two. Deck B is optional.'
-                : 'Point and hold to choose. Left hand controls volume; right hand controls filter.'}
+                : 'Left hand owns Deck A. Right hand owns Deck B. Point to choose; open your palm to move.'}
           </p>
         </header>
 
-        <div className="uv-camera-shell" aria-hidden={step === 'tracks' ? 'true' : undefined}>
+        <div
+          ref={cameraShellRef}
+          className="uv-camera-shell"
+          aria-hidden={step === 'tracks' ? 'true' : undefined}
+        >
           <CameraStage
             status={vision.status}
             message={vision.message}
             setVideoElement={vision.setVideoElement}
             setCanvasElement={vision.setCanvasElement}
             backdrop={cameraBackdrop}
+            objectPosition={DJ_CAMERA_OBJECT_POSITION}
+            onGeometryChange={handleCameraGeometryChange}
             overlay={step === 'perform' && vision.status === 'running' ? (
               <div className="uv-live-readout">
-                <span><Hand aria-hidden="true" /> {pointing ? 'Aim and hold' : mixer.gestureStatus}</span>
-                <strong>{deckLabel(mixer.activeDeck)} · {visibleDeckControl(mixer.selectedControl)} · {selectedControlValue(mixer)}</strong>
+                <span><Hand aria-hidden="true" /> {anyPointing ? 'Aim and hold' : mixer.gestureStatus}</span>
+                <strong>Left · Deck A · Right · Deck B</strong>
               </div>
             ) : undefined}
           />
@@ -435,7 +613,7 @@ export function DjRoomScreen({
                   detail="Restart"
                   deck="a"
                   icon="cue"
-                  airDwell={airDwell}
+                  airDwell={airDwells.left}
                   disabled={!mixer.decks.a.loaded}
                   onClick={() => cueDeck('a')}
                 />
@@ -445,7 +623,7 @@ export function DjRoomScreen({
                   detail={mixer.decks.a.playing ? 'Hold' : 'Start'}
                   deck="a"
                   icon={mixer.decks.a.playing ? 'pause' : 'play'}
-                  airDwell={airDwell}
+                  airDwell={airDwells.left}
                   disabled={!mixer.decks.a.loaded}
                   onClick={() => playDeck('a')}
                 />
@@ -457,7 +635,7 @@ export function DjRoomScreen({
                   detail="Restart"
                   deck="b"
                   icon="cue"
-                  airDwell={airDwell}
+                  airDwell={airDwells.right}
                   disabled={!mixer.decks.b.loaded}
                   onClick={() => cueDeck('b')}
                 />
@@ -467,65 +645,84 @@ export function DjRoomScreen({
                   detail={mixer.decks.b.playing ? 'Hold' : 'Start'}
                   deck="b"
                   icon={mixer.decks.b.playing ? 'pause' : 'play'}
-                  airDwell={airDwell}
+                  airDwell={airDwells.right}
                   disabled={!mixer.decks.b.loaded}
                   onClick={() => playDeck('b')}
                 />
               </div>
               <div className="uv-control-targets">
-                <div className="uv-deck-focus" aria-label="Select control deck">
-                  <button
-                    type="button"
-                    className={mixer.activeDeck === 'a' ? 'active' : ''}
-                    onClick={() => chooseDeck('a')}
+                <div className="uv-deck-control-pair deck-a" aria-label="Deck A hand control">
+                  <span>LEFT HAND · DECK A</span>
+                  <PerformanceTarget
+                    target="volume-a"
+                    label="VOLUME"
+                    detail={`${mixer.decks.a.volume}%`}
+                    icon="volume"
+                    airDwell={airDwells.left}
                     disabled={!mixer.decks.a.loaded}
-                    aria-pressed={mixer.activeDeck === 'a'}
-                  >
-                    Deck A
-                  </button>
-                  <button
-                    type="button"
-                    className={mixer.activeDeck === 'b' ? 'active' : ''}
-                    onClick={() => chooseDeck('b')}
-                    disabled={!mixer.decks.b.loaded}
-                    aria-pressed={mixer.activeDeck === 'b'}
-                  >
-                    Deck B
-                  </button>
+                    active={mixer.performanceControls.a === 'volume'}
+                    onClick={() => mixer.selectPerformanceControl('a', 'volume')}
+                  />
+                  <PerformanceTarget
+                    target="filter-a"
+                    label="FILTER"
+                    detail={mixer.decks.a.filter === 50 ? 'Neutral' : `${mixer.decks.a.filter}%`}
+                    icon="filter"
+                    airDwell={airDwells.left}
+                    disabled={!mixer.decks.a.loaded}
+                    active={mixer.performanceControls.a === 'filter'}
+                    onClick={() => mixer.selectPerformanceControl('a', 'filter')}
+                  />
                 </div>
-                <PerformanceTarget
-                  target="volume"
-                  label="VOLUME"
-                  detail={`Left · ${mixer.decks[mixer.activeDeck].volume}%`}
-                  icon="volume"
-                  airDwell={airDwell}
-                  active={mixer.selectedControl === 'volume'}
-                  onClick={() => mixer.selectControl('volume', mixer.activeDeck)}
-                />
-                <PerformanceTarget
-                  target="filter"
-                  label="FILTER"
-                  detail={mixer.decks[mixer.activeDeck].filter === 50 ? 'Right · Neutral' : `Right · ${mixer.decks[mixer.activeDeck].filter}%`}
-                  icon="filter"
-                  airDwell={airDwell}
-                  active={mixer.selectedControl === 'filter'}
-                  onClick={() => mixer.selectControl('filter', mixer.activeDeck)}
-                />
+                <div className="uv-deck-control-pair deck-b" aria-label="Deck B hand control">
+                  <span>RIGHT HAND · DECK B</span>
+                  <PerformanceTarget
+                    target="volume-b"
+                    label="VOLUME"
+                    detail={`${mixer.decks.b.volume}%`}
+                    icon="volume"
+                    airDwell={airDwells.right}
+                    disabled={!mixer.decks.b.loaded}
+                    active={mixer.performanceControls.b === 'volume'}
+                    onClick={() => mixer.selectPerformanceControl('b', 'volume')}
+                  />
+                  <PerformanceTarget
+                    target="filter-b"
+                    label="FILTER"
+                    detail={mixer.decks.b.filter === 50 ? 'Neutral' : `${mixer.decks.b.filter}%`}
+                    icon="filter"
+                    airDwell={airDwells.right}
+                    disabled={!mixer.decks.b.loaded}
+                    active={mixer.performanceControls.b === 'filter'}
+                    onClick={() => mixer.selectPerformanceControl('b', 'filter')}
+                  />
+                </div>
               </div>
-              {primaryHand && vision.status === 'running' && (
-                <span
-                  className={`uv-air-cursor ${pointing ? 'pointing' : ''}`}
-                  style={{ left: `${pointerX * 100}%`, top: `${pointerY * 100}%` }}
-                  aria-hidden="true"
-                />
-              )}
+              {AIR_HAND_SLOTS.map((slot) => {
+                const hand = stableHands[slot]
+                const pointer = airPointers[slot]
+                if (!hand || !pointer?.visible || vision.status !== 'running') return null
+                return (
+                  <span
+                    key={slot}
+                    className={`uv-air-cursor cursor-${slot} ${isPointingHand(hand) ? 'pointing' : ''}`}
+                    style={{ left: `${pointer.x * 100}%`, top: `${pointer.y * 100}%` }}
+                    aria-hidden="true"
+                  />
+                )
+              })}
             </>
           )}
         </div>
 
         {step === 'camera' && (
           <div className="uv-camera-actions">
-            <button type="button" className="button primary" onClick={startCamera}>
+            <button
+              type="button"
+              className="button primary"
+              onClick={startCamera}
+              disabled={interactionLocked}
+            >
               <Camera aria-hidden="true" />
               {cameraButtonLabel}
             </button>
@@ -533,7 +730,7 @@ export function DjRoomScreen({
               type="button"
               className="button text"
               onClick={() => void loadDemo(true)}
-              disabled={mixer.demoLoading}
+              disabled={interactionLocked}
             >
               <Sparkles aria-hidden="true" />
               {mixer.demoLoading ? 'Building demo…' : 'Use demo instead'}
@@ -553,23 +750,31 @@ export function DjRoomScreen({
             <TrackSlot
               id="a"
               mixer={mixer}
+              disabled={interactionLocked}
               onChoose={() => deckAInputRef.current?.click()}
             />
             <TrackSlot
               id="b"
               mixer={mixer}
+              disabled={interactionLocked}
               onChoose={() => deckBInputRef.current?.click()}
             />
           </div>
           <div className="uv-track-actions">
-            <button type="button" className="button primary" onClick={enterPerformance} disabled={!anyTrackLoaded}>
-              <Play aria-hidden="true" /> Continue to Perform
+            <button
+              type="button"
+              className="button primary"
+              onClick={() => void enterPerformance()}
+              disabled={!anyTrackLoaded || interactionLocked}
+            >
+              <Play aria-hidden="true" />
+              {performanceStarting ? 'Enabling sound…' : 'Start performance'}
             </button>
             <button
               type="button"
               className="button text"
               onClick={() => void loadDemo()}
-              disabled={mixer.demoLoading}
+              disabled={interactionLocked}
             >
               <Sparkles aria-hidden="true" />
               {mixer.demoLoading ? 'Building demo tracks…' : 'Try demo tracks'}
@@ -596,8 +801,10 @@ export function DjRoomScreen({
               <b>{mixer.bpmSyncActive ? 'LOCKED' : canSync ? 'READY' : 'NEEDS 2 DECKS'}</b>
             </button>
             <div className="uv-performance-status">
-              <strong id="uv-performance-title">{deckLabel(mixer.activeDeck)} control</strong>
-              <span>{selectedControlValue(mixer)}</span>
+              <strong id="uv-performance-title">Dual hand control</strong>
+              <span>
+                Left/A · {mixer.performanceControls.a} · Right/B · {mixer.performanceControls.b}
+              </span>
               {vision.status === 'error' && (
                 <span className="uv-performance-camera-error" role="alert">
                   {vision.message}
@@ -625,18 +832,12 @@ export function DjRoomScreen({
             <PerformanceWaveform
               deckId="a"
               deck={mixer.decks.a}
-              onSeek={(time) => {
-                chooseDeck('a')
-                mixer.seek('a', time)
-              }}
+              onSeek={(time) => mixer.seek('a', time)}
             />
             <PerformanceWaveform
               deckId="b"
               deck={mixer.decks.b}
-              onSeek={(time) => {
-                chooseDeck('b')
-                mixer.seek('b', time)
-              }}
+              onSeek={(time) => mixer.seek('b', time)}
             />
           </div>
           <p className="uv-beat-note">

@@ -11,8 +11,8 @@ async function expectNoHorizontalOverflow(page: Page) {
 async function openDemoPerformance(page: Page) {
   await page.getByRole('button', { name: 'Use demo instead' }).click()
   await expect(page.getByRole('heading', { name: 'Load your tracks' })).toBeVisible()
-  await page.getByRole('button', { name: 'Continue to Perform' }).click()
-  await expect(page.getByRole('region', { name: 'Deck A control' })).toBeVisible()
+  await page.getByRole('button', { name: 'Start performance' }).click()
+  await expect(page.getByRole('region', { name: 'Deck A waveform' })).toBeVisible()
 }
 
 test('mobile camera-first performance stays usable without zooming out', async ({ page }) => {
@@ -41,14 +41,13 @@ test('mobile camera-first performance stays usable without zooming out', async (
   }
 
   const targets = page.locator('.uv-performance-target')
-  await expect(targets).toHaveCount(6)
+  await expect(targets).toHaveCount(8)
   for (let index = 0; index < await targets.count(); index += 1) {
     const box = await targets.nth(index).boundingBox()
     expect(box, `performance target ${index + 1} should have a layout box`).not.toBeNull()
     expect(box!.height, `performance target ${index + 1} touch height`).toBeGreaterThanOrEqual(44)
   }
 
-  await page.getByRole('button', { name: /Play Deck A/ }).click()
   await page.getByRole('button', { name: /Play Deck B/ }).click()
   await expect.poll(() => page.locator('audio').evaluateAll((audio) =>
     audio.length === 2 && audio.every((track) => !(track as HTMLAudioElement).paused),

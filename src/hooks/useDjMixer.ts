@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { equalPowerCrossfade } from '../lib/djAudio'
 import {
+  assignHandsToStableSlots,
+  createHandAssignmentState,
+  type HandAssignmentState,
+} from '../lib/handAssignment'
+import {
   createFilterGestureState,
   createGestureClutchState,
   GESTURE_CLUTCH_FIST_RELEASE_MS,
@@ -20,6 +25,7 @@ import { clamp, type GestureFrame, type HandSummary } from '../lib/vision'
 
 export type DeckId = 'a' | 'b'
 export type DjControl = 'crossfader' | 'volume' | 'filter'
+export type PerformanceControl = 'volume' | 'filter'
 export type GestureSessionReleaseReason =
   | 'camera-stopped'
   | 'camera-error'
@@ -82,6 +88,7 @@ type LoadFileOptions = {
   title?: string
   loop?: boolean
   demoGeneration?: AbortController
+  preload?: 'auto' | 'metadata'
 }
 
 type PositionGesture = {
@@ -109,6 +116,7 @@ const ACCEPTED_AUDIO_TYPES = new Set([
   'audio/ogg',
 ])
 const AUDIO_EXTENSION = /\.(mp3|wav|flac|ogg)$/i
+const DEMO_MEDIA_READY_TIMEOUT_MS = 8_000
 const FILTER_LOW_MIN_HZ = 220
 const FILTER_LOW_OPEN_HZ = 20_000
 const FILTER_HIGH_OPEN_HZ = 20
@@ -458,6 +466,46 @@ function deckLabel(id: DeckId) {
   return id === 'a' ? 'Deck A' : 'Deck B'
 }
 
+function waitForMediaReady(
+  audio: HTMLAudioElement,
+  signal?: AbortSignal,
+  timeoutMs = DEMO_MEDIA_READY_TIMEOUT_MS,
+) {
+  if (!Number.isFinite(audio.readyState) || audio.readyState >= 3) {
+    return Promise.resolve()
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    let settled = false
+    const finish = (error?: Error | DOMException) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      audio.removeEventListener('canplay', handleReady)
+      audio.removeEventListener('error', handleError)
+      signal?.removeEventListener('abort', handleAbort)
+      if (error) reject(error)
+      else resolve()
+    }
+    const handleReady = () => finish()
+    const handleError = () => finish(new Error('The bundled demo audio could not be prepared.'))
+    const handleAbort = () => finish(
+      signal?.reason instanceof Error
+        ? signal.reason
+        : new DOMException('Bundled demo loading was cancelled.', 'AbortError'),
+    )
+    const timeout = setTimeout(
+      () => finish(new Error('The bundled demo audio took too long to prepare.')),
+      timeoutMs,
+    )
+
+    audio.addEventListener('canplay', handleReady, { once: true })
+    audio.addEventListener('error', handleError, { once: true })
+    signal?.addEventListener('abort', handleAbort, { once: true })
+    if (signal?.aborted) handleAbort()
+  })
+}
+
 export function useDjMixer() {
   const [decks, setDecks] = useState<Record<DeckId, DeckState>>({
     a: initialDeckState(),
@@ -466,6 +514,10 @@ export function useDjMixer() {
   const [crossfader, setCrossfaderState] = useState(0)
   const [activeDeck, setActiveDeck] = useState<DeckId>('a')
   const [selectedControl, setSelectedControl] = useState<DjControl>('crossfader')
+  const [performanceControls, setPerformanceControls] = useState<
+    Record<DeckId, PerformanceControl>
+  >({ a: 'volume', b: 'filter' })
+  const [performanceAudioReady, setPerformanceAudioReady] = useState(false)
   const [gestureStatus, setGestureStatus] = useState('Waiting for a hand')
   const [gesturePhase, setGesturePhase] = useState<'locked' | 'calibrating' | 'armed'>(
     'locked',
@@ -497,6 +549,7 @@ export function useDjMixer() {
   const tapTimesRef = useRef<Record<DeckId, number[]>>({ a: [], b: [] })
   const lastGestureUpdateAtRef = useRef(0)
   const gestureEngagedRef = useRef(false)
+  const performanceGestureInputEnabledRef = useRef(false)
   const gestureRequiresReleaseRef = useRef(false)
   const gestureReleasePendingRef = useRef<{
     reason: 'fist' | 'lost'
@@ -511,6 +564,23 @@ export function useDjMixer() {
   const gestureClutchRef = useRef<GestureClutchState>(createGestureClutchState())
   const positionGestureRef = useRef<PositionGesture | null>(null)
   const filterReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const performanceControlsRef = useRef<Record<DeckId, PerformanceControl>>({
+    a: 'volume',
+    b: 'filter',
+  })
+  const handPositionGesturesRef = useRef<Record<DeckId, PositionGesture | null>>({
+    a: null,
+    b: null,
+  })
+  const handFilterGesturesRef = useRef<Record<DeckId, FilterGestureState>>({
+    a: createFilterGestureState(),
+    b: createFilterGestureState(),
+  })
+  const handFilterReleaseTimersRef = useRef<
+    Record<DeckId, ReturnType<typeof setTimeout> | null>
+  >({ a: null, b: null })
+  const lastHandGestureUpdateAtRef = useRef<Record<DeckId, number>>({ a: 0, b: 0 })
+  const handAssignmentRef = useRef<HandAssignmentState>(createHandAssignmentState())
 
   useEffect(() => {
     decksRef.current = decks
@@ -520,6 +590,10 @@ export function useDjMixer() {
     crossfaderRef.current = crossfader
   }, [crossfader])
 
+  useEffect(() => {
+    performanceControlsRef.current = performanceControls
+  }, [performanceControls])
+
   const patchDeck = useCallback((id: DeckId, patch: Partial<DeckState>) => {
     setDecks((current) => {
       const next = { ...current, [id]: { ...current[id], ...patch } }
@@ -527,6 +601,39 @@ export function useDjMixer() {
       return next
     })
   }, [])
+
+  const setDeckFilter = useCallback(
+    (id: DeckId, value: number, timeConstant = 0.045) => {
+      const filter = Math.round(clamp(value, 0, 100))
+      const context = audioContextRef.current
+      if (context && nodesRef.current[id]) {
+        const frequencies = bipolarFilterFrequencies(filter)
+        const resonance = bipolarFilterResonance(filter)
+        nodesRef.current[id].highpass.frequency.setTargetAtTime(
+          frequencies.highpass,
+          context.currentTime,
+          timeConstant,
+        )
+        nodesRef.current[id].lowpass.frequency.setTargetAtTime(
+          frequencies.lowpass,
+          context.currentTime,
+          timeConstant,
+        )
+        nodesRef.current[id].highpass.Q.setTargetAtTime(
+          resonance,
+          context.currentTime,
+          timeConstant,
+        )
+        nodesRef.current[id].lowpass.Q.setTargetAtTime(
+          resonance,
+          context.currentTime,
+          timeConstant,
+        )
+      }
+      patchDeck(id, { filter })
+    },
+    [patchDeck],
+  )
 
   const queueTrackAnalysis = useCallback(
     (id: DeckId, file: File, requestId: number, knownBpm?: number | null) => {
@@ -588,9 +695,34 @@ export function useDjMixer() {
     }
   }, [])
 
+  const cancelHandFilterRelease = useCallback((id: DeckId) => {
+    const timer = handFilterReleaseTimersRef.current[id]
+    if (timer !== null) clearTimeout(timer)
+    handFilterReleaseTimersRef.current[id] = null
+  }, [])
+
+  const resetHandGestureSession = useCallback(
+    (id: DeckId) => {
+      cancelHandFilterRelease(id)
+      handPositionGesturesRef.current[id] = null
+      handFilterGesturesRef.current[id] = createFilterGestureState()
+      lastHandGestureUpdateAtRef.current[id] = 0
+    },
+    [cancelHandFilterRelease],
+  )
+
   const disarmGesture = useCallback(
     (message?: string) => {
       const wasEngaged = gestureClutchRef.current.phase !== 'locked'
+      const engagedFilterDecks = new Set<DeckId>()
+      if (filterGestureRef.current.phase !== 'idle') {
+        engagedFilterDecks.add(filterGestureRef.current.deck)
+      }
+      for (const id of DECK_IDS) {
+        if (handFilterGesturesRef.current[id].phase !== 'idle') {
+          engagedFilterDecks.add(id)
+        }
+      }
       cancelFilterRelease()
       gestureEngagedRef.current = false
       if (wasEngaged) {
@@ -602,12 +734,26 @@ export function useDjMixer() {
       positionGestureRef.current = null
       filterGestureRef.current = createFilterGestureState()
       smoothedGestureRef.current = null
+      for (const id of DECK_IDS) resetHandGestureSession(id)
+      for (const id of engagedFilterDecks) {
+        setDeckFilter(id, DJ_NEUTRAL_VALUES.filter, 0.12)
+      }
       setGesturePhase('locked')
       setGestureReleaseRequired(requiresRelease)
       if (message) setGestureStatus(message)
       return requiresRelease
     },
-    [cancelFilterRelease],
+    [cancelFilterRelease, resetHandGestureSession, setDeckFilter],
+  )
+
+  const setPerformanceGestureInputEnabled = useCallback(
+    (enabled: boolean) => {
+      if (performanceGestureInputEnabledRef.current === enabled) return
+      performanceGestureInputEnabledRef.current = enabled
+      handAssignmentRef.current = createHandAssignmentState()
+      if (!enabled) disarmGesture()
+    },
+    [disarmGesture],
   )
 
   const updateCrossfadeNodes = useCallback((value: number) => {
@@ -820,6 +966,9 @@ export function useDjMixer() {
         validateAudioFile(file)
         const audio = audioElementsRef.current[id]
         if (!audio) throw new Error(`${deckLabel(id)} is not ready.`)
+        // Every accepted source needs a fresh trusted Start click before air
+        // transport can rely on browser audio permission again.
+        setPerformanceAudioReady(false)
         const requestId = bpmRequestRef.current[id] + 1
         bpmRequestRef.current[id] = requestId
         disarmGesture(`${deckLabel(id)} changed · gesture pickup reset`)
@@ -848,6 +997,7 @@ export function useDjMixer() {
         audio.pause()
         audio.src = nextUrl
         audio.loop = options.loop ?? false
+        audio.preload = options.preload ?? 'metadata'
         resetDeckAudioParameters(id)
         audio.load()
         tapTimesRef.current[id] = []
@@ -864,7 +1014,7 @@ export function useDjMixer() {
           if (options.demoGeneration) {
             patchDeck(id, {
               overview: generatedDemoOverview(id),
-              analysisStatus: 'Generated demo overview · known tempo grid',
+              analysisStatus: 'Bundled demo overview · authored tempo grid',
             })
             return true
           }
@@ -971,6 +1121,83 @@ export function useDjMixer() {
     }
   }, [ensureDeckGraph, patchDeck])
 
+  const startPerformance = useCallback(async () => {
+    const readyIds = DECK_IDS.filter((id) => decksRef.current[id].loaded)
+    if (!readyIds.length) {
+      setGestureStatus('Load at least one track before starting the performance')
+      return false
+    }
+
+    const leadId: DeckId = readyIds.includes('a') ? 'a' : readyIds[0]
+    const primedIds = readyIds.filter((id) => id !== leadId)
+    const leadAudio = audioElementsRef.current[leadId]
+    if (!leadAudio) {
+      patchDeck(leadId, { error: `${deckLabel(leadId)} is not ready.` })
+      return false
+    }
+
+    try {
+      const leadGraphReady = ensureDeckGraph(leadId)
+      const playbackPromises: Promise<unknown>[] = []
+
+      if (leadAudio.paused) playbackPromises.push(leadAudio.play())
+      for (const id of primedIds) {
+        const audio = audioElementsRef.current[id]
+        if (!audio) throw new Error(`${deckLabel(id)} is not ready.`)
+        const wasMuted = audio.muted
+        audio.muted = true
+        const prime = audio.play().then(() => {
+          audio.pause()
+          audio.currentTime = 0
+          audio.muted = wasMuted
+        }, (error) => {
+          audio.muted = wasMuted
+          throw error
+        })
+        playbackPromises.push(prime)
+      }
+
+      await Promise.all([leadGraphReady, ...playbackPromises])
+      for (const id of readyIds) patchDeck(id, { error: null })
+      setPerformanceAudioReady(true)
+      setGestureStatus(
+        primedIds.length
+          ? `${deckLabel(leadId)} playing · ${deckLabel(primedIds[0])} ready for air control`
+          : `${deckLabel(leadId)} playing · hand controls ready`,
+      )
+      if (primedIds.length) {
+        requestAnimationFrame(() => {
+          for (const id of primedIds) {
+            void ensureDeckGraph(id).catch((error) => {
+              patchDeck(id, {
+                error: error instanceof Error
+                  ? error.message
+                  : `${deckLabel(id)} controls could not be prepared.`,
+              })
+            })
+          }
+        })
+      }
+      return true
+    } catch (error) {
+      for (const id of readyIds) {
+        const audio = audioElementsRef.current[id]
+        if (audio) {
+          audio.pause()
+          audio.muted = false
+        }
+        patchDeck(id, { playing: false })
+      }
+      setPerformanceAudioReady(false)
+      const message = error instanceof Error
+        ? error.message
+        : 'The browser could not enable performance audio.'
+      patchDeck(leadId, { error: message })
+      setGestureStatus('Sound is still locked · press Start performance again')
+      return false
+    }
+  }, [ensureDeckGraph, patchDeck])
+
   const seek = useCallback(
     (id: DeckId, time: number) => {
       const audio = audioElementsRef.current[id]
@@ -1024,39 +1251,6 @@ export function useDjMixer() {
     [patchDeck],
   )
 
-  const setDeckFilter = useCallback(
-    (id: DeckId, value: number, timeConstant = 0.045) => {
-      const filter = Math.round(clamp(value, 0, 100))
-      const context = audioContextRef.current
-      if (context && nodesRef.current[id]) {
-        const frequencies = bipolarFilterFrequencies(filter)
-        const resonance = bipolarFilterResonance(filter)
-        nodesRef.current[id].highpass.frequency.setTargetAtTime(
-          frequencies.highpass,
-          context.currentTime,
-          timeConstant,
-        )
-        nodesRef.current[id].lowpass.frequency.setTargetAtTime(
-          frequencies.lowpass,
-          context.currentTime,
-          timeConstant,
-        )
-        nodesRef.current[id].highpass.Q.setTargetAtTime(
-          resonance,
-          context.currentTime,
-          timeConstant,
-        )
-        nodesRef.current[id].lowpass.Q.setTargetAtTime(
-          resonance,
-          context.currentTime,
-          timeConstant,
-        )
-      }
-      patchDeck(id, { filter })
-    },
-    [patchDeck],
-  )
-
   const scheduleFilterRelease = useCallback(
     (releaseAt: number) => {
       cancelFilterRelease()
@@ -1092,10 +1286,47 @@ export function useDjMixer() {
     [cancelFilterRelease, setDeckFilter],
   )
 
+  const scheduleHandFilterRelease = useCallback(
+    (id: DeckId, releaseAt: number) => {
+      cancelHandFilterRelease(id)
+      const finishRelease = () => {
+        const now = performance.now()
+        const transition = transitionFilterGesture(handFilterGesturesRef.current[id], {
+          type: 'release-timeout',
+          now,
+        })
+        handFilterGesturesRef.current[id] = transition.state
+        if (
+          transition.command === 'none' &&
+          transition.state.phase === 'release-grace'
+        ) {
+          handFilterReleaseTimersRef.current[id] = setTimeout(
+            finishRelease,
+            Math.max(0, transition.state.releaseAt - now),
+          )
+          return
+        }
+        handFilterReleaseTimersRef.current[id] = null
+        if (transition.command !== 'reset-neutral') return
+        setDeckFilter(id, DJ_NEUTRAL_VALUES.filter, 0.12)
+        setGestureStatus(`${deckLabel(id)} filter returned to neutral`)
+      }
+
+      handFilterReleaseTimersRef.current[id] = setTimeout(
+        finishRelease,
+        Math.max(0, releaseAt - performance.now()),
+      )
+    },
+    [cancelHandFilterRelease, setDeckFilter],
+  )
+
   const releaseGestureSession = useCallback(
     (reason: GestureSessionReleaseReason) => {
       const filterDeck =
         filterGestureRef.current.phase === 'idle' ? null : filterGestureRef.current.deck
+      const handFilterDecks = DECK_IDS.filter(
+        (id) => handFilterGesturesRef.current[id].phase !== 'idle',
+      )
 
       cancelFilterRelease()
       gestureEngagedRef.current = false
@@ -1107,13 +1338,18 @@ export function useDjMixer() {
       filterGestureRef.current = createFilterGestureState()
       smoothedGestureRef.current = null
       lastGestureUpdateAtRef.current = 0
+      handAssignmentRef.current = createHandAssignmentState()
+      for (const id of DECK_IDS) resetHandGestureSession(id)
       setGesturePhase('locked')
       if (filterDeck) {
         setDeckFilter(filterDeck, DJ_NEUTRAL_VALUES.filter, 0.12)
       }
+      for (const id of handFilterDecks) {
+        if (id !== filterDeck) setDeckFilter(id, DJ_NEUTRAL_VALUES.filter, 0.12)
+      }
       setGestureStatus(GESTURE_SESSION_RELEASE_MESSAGES[reason])
     },
-    [cancelFilterRelease, setDeckFilter],
+    [cancelFilterRelease, resetHandGestureSession, setDeckFilter],
   )
 
   const applyDeckTempo = useCallback(
@@ -1289,16 +1525,16 @@ export function useDjMixer() {
     const generation = new AbortController()
     demoGenerationRef.current = generation
     setDemoLoading(true)
-    setGestureStatus('Building the local demo set…')
+    setGestureStatus('Loading the local demo set…')
     try {
       await Promise.race([
         new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
         new Promise<void>((resolve) => setTimeout(resolve, 100)),
       ])
       if (generation.signal.aborted) return false
-      const { createDemoTracksCooperatively } = await import('../lib/demoAudio')
+      const { loadBundledDemoTracks } = await import('../lib/bundledDemo')
       if (generation.signal.aborted) return false
-      const [deckA, deckB] = await createDemoTracksCooperatively({
+      const [deckA, deckB] = await loadBundledDemoTracks({
         signal: generation.signal,
       })
       if (generation.signal.aborted) return false
@@ -1307,12 +1543,14 @@ export function useDjMixer() {
           knownBpm: deckA.bpm,
           title: deckA.title,
           loop: true,
+          preload: 'auto',
           demoGeneration: generation,
         }),
         loadFile('b', deckB.file, {
           knownBpm: deckB.bpm,
           title: deckB.title,
           loop: true,
+          preload: 'auto',
           demoGeneration: generation,
         }),
       ])
@@ -1321,12 +1559,21 @@ export function useDjMixer() {
         setGestureStatus('The demo set could not load · try again')
         return false
       }
+      const demoAudio = DECK_IDS.map((id) => audioElementsRef.current[id])
+      if (demoAudio.some((audio) => !audio)) {
+        setGestureStatus('The demo set could not load · try again')
+        return false
+      }
+      setGestureStatus('Preparing smooth playback…')
+      await Promise.all(
+        demoAudio.map((audio) => waitForMediaReady(audio!, generation.signal)),
+      )
       resetMix()
-      setGestureStatus('Demo set loaded · press Start both, then open your hand')
+      setGestureStatus('Demo set loaded · press Start performance')
       return true
     } catch {
       if (generation.signal.aborted) return false
-      setGestureStatus('The demo set could not be built · try again')
+      setGestureStatus('The demo set could not be loaded · try again')
       return false
     } finally {
       if (demoGenerationRef.current === generation) {
@@ -1376,105 +1623,120 @@ export function useDjMixer() {
     [activeDeck, disarmGesture, selectedControl, setDeckFilter],
   )
 
+  const selectPerformanceControl = useCallback(
+    (deck: DeckId, control: PerformanceControl) => {
+      const previous = performanceControlsRef.current[deck]
+      resetHandGestureSession(deck)
+      if (previous === 'filter' && control !== 'filter') {
+        setDeckFilter(deck, DJ_NEUTRAL_VALUES.filter, 0.12)
+      }
+      const next = { ...performanceControlsRef.current, [deck]: control }
+      performanceControlsRef.current = next
+      setPerformanceControls(next)
+      setActiveDeck(deck)
+      setGestureStatus(
+        control === 'filter'
+          ? `${deckLabel(deck)} hand control · open palm and rotate your wrist`
+          : `${deckLabel(deck)} hand control · open palm and move up or down`,
+      )
+    },
+    [resetHandGestureSession, setDeckFilter],
+  )
+
   const handleHandsFrame = useCallback(
     (hands: HandSummary[]) => {
+      if (!performanceGestureInputEnabledRef.current) return
       const now = performance.now()
-      const left = hands.find((hand) => hand.label.toLowerCase() === 'left')
-      const right = hands.find((hand) => hand.label.toLowerCase() === 'right')
-      const deck = decksRef.current[activeDeck].loaded
-        ? activeDeck
-        : decksRef.current.a.loaded
-          ? 'a'
-          : decksRef.current.b.loaded
-            ? 'b'
-            : activeDeck
-      const leftOpen = Boolean(left && left.count >= 3)
-      const rightOpen = Boolean(right && right.count >= 3)
-
-      if (!decksRef.current[deck].loaded) {
-        positionGestureRef.current = null
-        filterGestureRef.current = createFilterGestureState()
-        gestureEngagedRef.current = false
-        setGesturePhase('locked')
-        setGestureStatus('Load a track to use hand controls')
-        return
+      const assignment = assignHandsToStableSlots(handAssignmentRef.current, hands, now)
+      handAssignmentRef.current = assignment.state
+      const handByDeck: Record<DeckId, HandSummary | undefined> = {
+        a: assignment.left ?? undefined,
+        b: assignment.right ?? undefined,
       }
+      let anyOpen = false
+      const status: string[] = []
 
-      if (!leftOpen) {
-        if (positionGestureRef.current?.control === 'volume') positionGestureRef.current = null
-      }
+      for (const deck of DECK_IDS) {
+        const hand = handByDeck[deck]
+        const control = performanceControlsRef.current[deck]
+        const open = Boolean(hand && hand.count >= GESTURE_ENGAGE_FINGERS)
 
-      if (!rightOpen) {
-        const transition = transitionFilterGesture(filterGestureRef.current, {
-          type: 'lost',
-          now,
-        })
-        filterGestureRef.current = transition.state
-        if (
-          transition.command === 'schedule-neutral' &&
-          transition.state.phase === 'release-grace'
-        ) {
-          scheduleFilterRelease(transition.state.releaseAt)
+        if (!decksRef.current[deck].loaded) {
+          resetHandGestureSession(deck)
+          status.push(`${deckLabel(deck)} empty`)
+          continue
         }
-      }
 
-      if (!leftOpen && !rightOpen) {
-        gestureEngagedRef.current = false
-        setGesturePhase('locked')
-        if (now - lastGestureUpdateAtRef.current > 280) {
-          lastGestureUpdateAtRef.current = now
-          setGestureStatus(hands.length ? 'Open a hand to grab its control' : 'Waiting for a hand')
-        }
-        return
-      }
-
-      if (now - lastGestureUpdateAtRef.current < 55) return
-      lastGestureUpdateAtRef.current = now
-      gestureEngagedRef.current = true
-      setGesturePhase('armed')
-
-      if (leftOpen && left) {
-        const input = 1 - left.y
-        let gesture = positionGestureRef.current
-        if (gesture?.control !== 'volume' || gesture.deck !== deck) {
-          gesture = {
-            control: 'volume',
-            deck,
-            baselineInput: input,
-            baselineValue: decksRef.current[deck].volume,
-            samples: 1,
-            startedAt: now,
-            engaged: true,
+        if (!open || !hand) {
+          handPositionGesturesRef.current[deck] = null
+          const filterState = handFilterGesturesRef.current[deck]
+          if (filterState.phase !== 'idle') {
+            const transition = transitionFilterGesture(filterState, {
+              type: 'lost',
+              now,
+            })
+            handFilterGesturesRef.current[deck] = transition.state
+            if (
+              transition.command === 'schedule-neutral' &&
+              transition.state.phase === 'release-grace'
+            ) {
+              scheduleHandFilterRelease(deck, transition.state.releaseAt)
+            }
           }
-          positionGestureRef.current = gesture
-        } else if (Math.abs(input - gesture.baselineInput) > POSITION_GESTURE_DEAD_ZONE) {
-          const target = relativeGestureValue(
-            gesture.baselineValue,
-            gesture.baselineInput,
-            input,
-            170,
-          )
-          const value = smoothBoundedControlValue(
-            decksRef.current[deck].volume,
-            target,
-            0,
-            100,
-            0.48,
-          )
-          setDeckVolume(deck, value)
+          status.push(`${deckLabel(deck)} ${control} ready`)
+          continue
         }
-      }
 
-      if (rightOpen && right) {
-        const transition = transitionFilterGesture(filterGestureRef.current, {
+        anyOpen = true
+        if (now - lastHandGestureUpdateAtRef.current[deck] < 55) {
+          status.push(`${deckLabel(deck)} ${control} held`)
+          continue
+        }
+        lastHandGestureUpdateAtRef.current[deck] = now
+
+        if (control === 'volume') {
+          const input = 1 - hand.y
+          let gesture = handPositionGesturesRef.current[deck]
+          if (gesture?.control !== 'volume' || gesture.deck !== deck) {
+            gesture = {
+              control: 'volume',
+              deck,
+              baselineInput: input,
+              baselineValue: decksRef.current[deck].volume,
+              samples: 1,
+              startedAt: now,
+              engaged: true,
+            }
+            handPositionGesturesRef.current[deck] = gesture
+          } else if (Math.abs(input - gesture.baselineInput) > POSITION_GESTURE_DEAD_ZONE) {
+            const target = relativeGestureValue(
+              gesture.baselineValue,
+              gesture.baselineInput,
+              input,
+              170,
+            )
+            const value = smoothBoundedControlValue(
+              decksRef.current[deck].volume,
+              target,
+              0,
+              100,
+              0.48,
+            )
+            setDeckVolume(deck, value)
+          }
+          status.push(`${deckLabel(deck)} volume ${decksRef.current[deck].volume}%`)
+          continue
+        }
+
+        const transition = transitionFilterGesture(handFilterGesturesRef.current[deck], {
           type: 'sample',
           deck,
-          angle: right.wristAngle,
+          angle: hand.wristAngle,
           currentValue: decksRef.current[deck].filter,
           now,
         })
-        filterGestureRef.current = transition.state
-        if (transition.command === 'cancel-neutral') cancelFilterRelease()
+        handFilterGesturesRef.current[deck] = transition.state
+        if (transition.command === 'cancel-neutral') cancelHandFilterRelease(deck)
         if (transition.target !== undefined) {
           const value = smoothBoundedControlValue(
             decksRef.current[deck].filter,
@@ -1485,16 +1747,20 @@ export function useDjMixer() {
           )
           setDeckFilter(deck, value)
         }
+        status.push(`${deckLabel(deck)} filter ${decksRef.current[deck].filter}%`)
       }
 
-      setGestureStatus(
-        `${leftOpen ? `Left hand · volume ${decksRef.current[deck].volume}%` : 'Left hand · volume ready'} · ${rightOpen ? `Right hand · filter ${decksRef.current[deck].filter}%` : 'Right hand · filter ready'}`,
-      )
+      gestureEngagedRef.current = anyOpen
+      setGesturePhase(anyOpen ? 'armed' : 'locked')
+      if (anyOpen || now - lastGestureUpdateAtRef.current > 280) {
+        lastGestureUpdateAtRef.current = now
+        setGestureStatus(status.length ? status.join(' · ') : 'Waiting for a hand')
+      }
     },
     [
-      activeDeck,
-      cancelFilterRelease,
-      scheduleFilterRelease,
+      cancelHandFilterRelease,
+      resetHandGestureSession,
+      scheduleHandFilterRelease,
       setDeckFilter,
       setDeckVolume,
     ],
@@ -1838,6 +2104,7 @@ export function useDjMixer() {
     const demoGeneration = demoGenerationRef
     const captureReleases = masterCaptureReleasesRef.current
     const captureGeneration = captureGenerationRef
+    const handFilterReleaseTimers = handFilterReleaseTimersRef.current
     return () => {
       captureGeneration.current += 1
       for (const id of DECK_IDS) bpmRequests[id] += 1
@@ -1846,6 +2113,8 @@ export function useDjMixer() {
       stopMeter()
       if (filterReleaseTimerRef.current !== null) clearTimeout(filterReleaseTimerRef.current)
       for (const id of DECK_IDS) {
+        const handFilterTimer = handFilterReleaseTimers[id]
+        if (handFilterTimer !== null) clearTimeout(handFilterTimer)
         if (objectUrls[id]) URL.revokeObjectURL(objectUrls[id] ?? '')
       }
       for (const release of [...captureReleases]) release()
@@ -1860,6 +2129,8 @@ export function useDjMixer() {
     crossfader,
     activeDeck,
     selectedControl,
+    performanceControls,
+    performanceAudioReady,
     gestureStatus,
     gesturePhase,
     gestureReleaseRequired,
@@ -1876,6 +2147,7 @@ export function useDjMixer() {
     loadDemoMix,
     togglePlayback,
     toggleBoth,
+    startPerformance,
     cueDeck,
     seek,
     jumpToPhrase,
@@ -1886,6 +2158,8 @@ export function useDjMixer() {
     toggleBpmSync,
     tapTempo,
     selectControl,
+    selectPerformanceControl,
+    setPerformanceGestureInputEnabled,
     resetControl,
     resetMix,
     handleGestureFrame,

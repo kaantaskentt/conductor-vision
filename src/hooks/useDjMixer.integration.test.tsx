@@ -159,6 +159,7 @@ function createAudioElement() {
     duration: 180,
     currentTime: 0,
     playbackRate: 1,
+    muted: false,
     src: '',
     pause: vi.fn(),
     play: vi.fn(() => Promise.resolve()),
@@ -182,6 +183,7 @@ function createEventAudioElement() {
     duration: 180,
     currentTime: 0,
     playbackRate: 1,
+    muted: false,
     src: '',
     loop: false,
     load: vi.fn(),
@@ -254,13 +256,16 @@ const noHand = {
 }
 
 function trackedHand(
-  label: 'Left' | 'Right',
+  physicalHand: 'Left' | 'Right',
   options: { y?: number; wristAngle?: number; fingers?: number } = {},
 ): HandSummary {
   const fingers = options.fingers ?? 5
+  // Inference receives raw, unmirrored video, so MediaPipe's selfie-oriented
+  // handedness label is opposite the physical hand used by the test scenario.
+  const rawLabel = physicalHand === 'Left' ? 'Right' : 'Left'
   return {
-    id: `${label}-0`,
-    label,
+    id: `${physicalHand}-0`,
+    label: rawLabel,
     count: fingers,
     raised: {
       thumb: fingers >= 5,
@@ -269,9 +274,9 @@ function trackedHand(
       ring: fingers >= 3,
       pinky: fingers >= 4,
     },
-    x: label === 'Left' ? 0.3 : 0.7,
+    x: physicalHand === 'Left' ? 0.3 : 0.7,
     y: options.y ?? 0.5,
-    pointerX: label === 'Left' ? 0.3 : 0.7,
+    pointerX: physicalHand === 'Left' ? 0.3 : 0.7,
     pointerY: options.y ?? 0.5,
     wristAngle: options.wristAngle ?? 0,
   }
@@ -327,6 +332,7 @@ describe('DJ mixer filter gesture integration', () => {
     })
     await act(async () => {
       current.selectControl('filter', 'a')
+      current.setPerformanceGestureInputEnabled(true)
     })
   })
 
@@ -402,17 +408,26 @@ describe('DJ mixer filter gesture integration', () => {
     expect(current.gesturePhase).toBe('armed')
   })
 
-  it('controls volume with the left hand and filter with the right hand at the same time', async () => {
+  it('lets the left hand own Deck A while the right hand owns Deck B', async () => {
+    await act(async () => {
+      current.setAudioElement('b', createAudioElement())
+      await current.loadFile(
+        'b',
+        new File(['demo-b'], 'demo-b.wav', { type: 'audio/wav' }),
+        { knownBpm: 120 },
+      )
+    })
     await act(async () => {
       current.setDeckVolume('a', 82)
       current.setDeckFilter('a', 50)
+      current.setDeckFilter('b', 50)
       current.handleHandsFrame([
         trackedHand('Left', { y: 0.5 }),
         trackedHand('Right', { wristAngle: 0 }),
       ])
     })
     expect(current.decks.a.volume).toBe(82)
-    expect(current.decks.a.filter).toBe(50)
+    expect(current.decks.b.filter).toBe(50)
 
     await act(async () => {
       vi.advanceTimersByTime(80)
@@ -422,22 +437,256 @@ describe('DJ mixer filter gesture integration', () => {
       ])
     })
     expect(current.decks.a.volume).toBeGreaterThan(82)
-    expect(current.decks.a.filter).not.toBe(50)
-    expect(current.gestureStatus).toContain('Left hand · volume')
-    expect(current.gestureStatus).toContain('Right hand · filter')
+    expect(current.decks.b.filter).not.toBe(50)
+    expect(current.decks.a.filter).toBe(50)
+    expect(current.decks.b.volume).toBe(82)
+    expect(current.gestureStatus).toContain('Deck A volume')
+    expect(current.gestureStatus).toContain('Deck B filter')
 
     await act(async () => {
       vi.advanceTimersByTime(80)
       current.handleHandsFrame([trackedHand('Left', { y: 0.3 })])
     })
     const heldVolume = current.decks.a.volume
-    expect(current.decks.a.filter).not.toBe(50)
+    expect(current.decks.b.filter).not.toBe(50)
 
     await act(async () => {
       vi.advanceTimersByTime(FILTER_GESTURE_RELEASE_MS)
     })
-    expect(current.decks.a.filter).toBe(50)
+    expect(current.decks.b.filter).toBe(50)
     expect(current.decks.a.volume).toBe(heldVolume)
+  })
+
+  it('ignores dual-hand frames on Tracks and enables them only for Perform', async () => {
+    await act(async () => {
+      current.setPerformanceGestureInputEnabled(false)
+      current.setAudioElement('b', createAudioElement())
+      await current.loadFile(
+        'b',
+        new File(['demo-b'], 'demo-b.wav', { type: 'audio/wav' }),
+        { knownBpm: 120 },
+      )
+    })
+
+    await act(async () => {
+      current.handleHandsFrame([
+        trackedHand('Left', { y: 0.5 }),
+        trackedHand('Right', { wristAngle: 0 }),
+      ])
+      vi.advanceTimersByTime(80)
+      current.handleHandsFrame([
+        trackedHand('Left', { y: 0.2 }),
+        trackedHand('Right', { wristAngle: (-25 * Math.PI) / 180 }),
+      ])
+    })
+    expect(current.decks.a.volume).toBe(DJ_NEUTRAL_VALUES.volume)
+    expect(current.decks.b.filter).toBe(DJ_NEUTRAL_VALUES.filter)
+
+    await act(async () => {
+      current.setPerformanceGestureInputEnabled(true)
+      current.handleHandsFrame([
+        trackedHand('Left', { y: 0.2 }),
+        trackedHand('Right', { wristAngle: (-25 * Math.PI) / 180 }),
+      ])
+      vi.advanceTimersByTime(80)
+      current.handleHandsFrame([
+        trackedHand('Left', { y: 0 }),
+        trackedHand('Right', { wristAngle: (-50 * Math.PI) / 180 }),
+      ])
+    })
+    expect(current.decks.a.volume).not.toBe(DJ_NEUTRAL_VALUES.volume)
+    expect(current.decks.b.filter).not.toBe(DJ_NEUTRAL_VALUES.filter)
+  })
+
+  it('disarms and blocks dual-hand input when leaving Perform', async () => {
+    await act(async () => {
+      current.setAudioElement('b', createAudioElement())
+      await current.loadFile(
+        'b',
+        new File(['demo-b'], 'demo-b.wav', { type: 'audio/wav' }),
+        { knownBpm: 120 },
+      )
+    })
+    await act(async () => {
+      current.handleHandsFrame([trackedHand('Right', { wristAngle: 0 })])
+      vi.advanceTimersByTime(80)
+      current.handleHandsFrame([
+        trackedHand('Right', { wristAngle: (-25 * Math.PI) / 180 }),
+      ])
+    })
+    expect(current.decks.b.filter).not.toBe(DJ_NEUTRAL_VALUES.filter)
+
+    await act(async () => {
+      current.setPerformanceGestureInputEnabled(false)
+    })
+    expect(current.decks.b.filter).toBe(DJ_NEUTRAL_VALUES.filter)
+    expect(current.gesturePhase).toBe('locked')
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleHandsFrame([
+        trackedHand('Right', { wristAngle: (-50 * Math.PI) / 180 }),
+      ])
+    })
+    expect(current.decks.b.filter).toBe(DJ_NEUTRAL_VALUES.filter)
+  })
+
+  it('can choose a different continuous control for either deck without changing ownership', async () => {
+    await act(async () => {
+      current.setAudioElement('b', createAudioElement())
+      await current.loadFile(
+        'b',
+        new File(['demo-b'], 'demo-b.wav', { type: 'audio/wav' }),
+        { knownBpm: 120 },
+      )
+    })
+    await act(async () => {
+      current.selectPerformanceControl('a', 'filter')
+      current.selectPerformanceControl('b', 'volume')
+      current.handleHandsFrame([
+        trackedHand('Left', { wristAngle: 0 }),
+        trackedHand('Right', { y: 0.5 }),
+      ])
+    })
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleHandsFrame([
+        trackedHand('Left', { wristAngle: (-25 * Math.PI) / 180 }),
+        trackedHand('Right', { y: 0.3 }),
+      ])
+    })
+
+    expect(current.decks.a.filter).not.toBe(50)
+    expect(current.decks.b.volume).toBeGreaterThan(82)
+    expect(current.decks.a.volume).toBe(82)
+    expect(current.decks.b.filter).toBe(50)
+  })
+
+  it('returns an engaged Deck A hand filter to neutral when Deck B loads', async () => {
+    await act(async () => {
+      current.setAudioElement('b', createAudioElement())
+      current.selectPerformanceControl('a', 'filter')
+      current.handleHandsFrame([trackedHand('Left', { wristAngle: 0 })])
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleHandsFrame([
+        trackedHand('Left', { wristAngle: (-25 * Math.PI) / 180 }),
+      ])
+    })
+    expect(current.decks.a.filter).not.toBe(DJ_NEUTRAL_VALUES.filter)
+
+    await act(async () => {
+      await current.loadFile(
+        'b',
+        new File(['demo-b'], 'demo-b.wav', { type: 'audio/wav' }),
+        { knownBpm: 120 },
+      )
+    })
+    expect(current.decks.a.filter).toBe(DJ_NEUTRAL_VALUES.filter)
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleHandsFrame([
+        trackedHand('Left', { wristAngle: (-25 * Math.PI) / 180 }),
+      ])
+    })
+    expect(current.decks.a.filter).toBe(DJ_NEUTRAL_VALUES.filter)
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleHandsFrame([
+        trackedHand('Left', { wristAngle: (-50 * Math.PI) / 180 }),
+      ])
+    })
+    expect(current.decks.a.filter).not.toBe(DJ_NEUTRAL_VALUES.filter)
+  })
+
+  it('returns an engaged Deck B hand filter to neutral when Deck A is replaced', async () => {
+    await act(async () => {
+      current.setAudioElement('b', createAudioElement())
+      await current.loadFile(
+        'b',
+        new File(['demo-b'], 'demo-b.wav', { type: 'audio/wav' }),
+        { knownBpm: 120 },
+      )
+    })
+    await act(async () => {
+      current.handleHandsFrame([trackedHand('Right', { wristAngle: 0 })])
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleHandsFrame([
+        trackedHand('Right', { wristAngle: (-25 * Math.PI) / 180 }),
+      ])
+    })
+    expect(current.decks.b.filter).not.toBe(DJ_NEUTRAL_VALUES.filter)
+
+    await act(async () => {
+      await current.loadFile(
+        'a',
+        new File(['replacement'], 'replacement.wav', { type: 'audio/wav' }),
+        { knownBpm: 126 },
+      )
+    })
+    expect(current.decks.b.filter).toBe(DJ_NEUTRAL_VALUES.filter)
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleHandsFrame([
+        trackedHand('Right', { wristAngle: (-25 * Math.PI) / 180 }),
+      ])
+    })
+    expect(current.decks.b.filter).toBe(DJ_NEUTRAL_VALUES.filter)
+
+    await act(async () => {
+      vi.advanceTimersByTime(80)
+      current.handleHandsFrame([
+        trackedHand('Right', { wristAngle: (-50 * Math.PI) / 180 }),
+      ])
+    })
+    expect(current.decks.b.filter).not.toBe(DJ_NEUTRAL_VALUES.filter)
+  })
+
+  it('unlocks performance audio from one click and primes the optional second deck', async () => {
+    const audioA = createAudioElement()
+    const audioB = createAudioElement()
+    await act(async () => {
+      current.setAudioElement('a', audioA)
+      current.setAudioElement('b', audioB)
+      await current.loadFile(
+        'b',
+        new File(['demo-b'], 'demo-b.wav', { type: 'audio/wav' }),
+        { knownBpm: 120 },
+      )
+      vi.mocked(audioA.play).mockClear()
+      vi.mocked(audioA.pause).mockClear()
+      vi.mocked(audioB.play).mockClear()
+      vi.mocked(audioB.pause).mockClear()
+    })
+
+    let started = false
+    await act(async () => {
+      started = await current.startPerformance()
+    })
+
+    expect(started).toBe(true)
+    expect(audioA.play).toHaveBeenCalledOnce()
+    expect(audioB.play).toHaveBeenCalledOnce()
+    expect(audioB.pause).toHaveBeenCalledOnce()
+    expect(audioB.currentTime).toBe(0)
+    expect(audioB.muted).toBe(false)
+    expect(current.performanceAudioReady).toBe(true)
+
+    await act(async () => {
+      await current.loadFile(
+        'b',
+        new File(['replacement-b'], 'replacement-b.wav', { type: 'audio/wav' }),
+        { knownBpm: 124 },
+      )
+    })
+    expect(current.performanceAudioReady).toBe(false)
   })
 
   it('recovers from brief tracking loss and cancels a pending neutral reset when the hand returns', async () => {

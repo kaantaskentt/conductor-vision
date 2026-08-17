@@ -29,25 +29,25 @@
   </a>
 </p>
 
-No account, API key, database, backend, or audio files are required for the first mix. Ultra Vision combines a generated demo set, a two-deck Web Audio mixer, and deliberate hand-gesture control in one browser tab.
+No account, API key, database, backend, or personal audio files are required for the first mix. Ultra Vision combines two bundled original demo tracks, a two-deck Web Audio mixer, and deliberate hand control in one browser tab.
 
 ## Try your first mix in 60 seconds
 
 1. Open the [live app](https://ultra-vision.vercel.app) and choose **DJ Room**.
-2. Select **Load instant demo** to generate two short, copyright-safe tracks locally.
-3. Press **Start performance** to start both decks and local hand tracking together—or choose **Play without camera**.
-4. Raise one open palm, then use **Choose Air Control** to route movement to the crossfader, a deck level, or its filter.
+2. Allow the private on-device camera, or choose **Use demo instead** for camera-off mode.
+3. Add your own Deck A and optional Deck B, or select **Try demo tracks**.
+4. Press **Start performance**. Deck A starts and Deck B is prepared silently for a later transition.
+5. Your physical left hand owns Deck A and your physical right hand owns Deck B. Point and hold over CUE, PLAY, VOLUME, or FILTER; open your palm to move the selected sound control.
 
-Close your hand to lock the crossfader or volume position; Filter instead returns to its neutral midpoint after release. A newly detected hand grabs the current value without moving it, then responds only to intentional movement.
-When you change controls while your palm is still open, the interface asks for one close-and-reopen handoff before the new control can move.
+Close your hand to lock volume; Filter instead returns to its neutral midpoint after release. A newly detected hand grabs the current value without moving it, then responds only to intentional movement. Pointing and continuous open-palm control are kept separate so aiming at a button cannot accidentally change the sound.
 
 ## What it can do
 
-- **Instant demo set** — generate two original rhythmic loops locally and reach a playable mix without finding audio files.
-- **Two-deck DJ Room** — control independent transports, hardware-style level and bipolar filter knobs, live analyser signal history, track-quarter jumps, post-fader meters, a master limiter, and an equal-power crossfader.
+- **Instant demo set** — load two bundled, original, sample-free tracks without finding audio files or generating music at runtime.
+- **Focused two-deck instrument** — use independent CUE and PLAY controls plus one selected VOLUME or FILTER control per deck.
 - **Decoded beat workspace** — see full-track cyan/violet waveform bars, playheads, and explicitly estimated beat and bar markers directly below the camera.
-- **First Mix cockpit** — move from a generated demo to music plus hand controls in two clear actions, with a thumb-reachable performance bar on mobile and the detailed console one tap away in Full mixer.
-- **Intentional gesture routing** — send an open palm to the crossfader or one deck's level or filter. Relative pickup prevents first-frame jumps, brief landmark flicker stays latched, and a deliberate fist releases the control.
+- **Camera-first flow** — move through Camera, Load Tracks, and Perform while one persistent private camera stage stays mounted.
+- **Independent hand ownership** — physical left controls Deck A while physical right controls Deck B. Relative pickup prevents first-frame jumps, brief landmark flicker stays latched, and filter release returns smoothly to neutral.
 - **BPM tools** — estimate BPM locally, tap a correction, and use one reversible BPM Sync control to match playback rates.
 - **Vision workspace** — inspect hand landmarks, raised fingers, face signals, frame-change regions, and color coverage.
 - **Pixel Studio** — study color similarity and luminance from an upload or captured frame with transparent, deterministic calculations.
@@ -60,7 +60,7 @@ BPM Sync matches tempo; it does not claim automatic beat-grid, downbeat, or phas
 | Vision | DJ Room |
 | --- | --- |
 | ![Ultra Vision camera-off Vision workspace](./docs/design/ultra-vision-analysis.jpg) | ![Ultra Vision privacy-safe first-mix readiness flow](./docs/design/ultra-vision-readiness.jpg) |
-| Start the camera to inspect live landmarks, motion, face signals, and pixel studies. | Choose one mix control, grab it with an open palm, then perform with movement. |
+| Start the camera to inspect live landmarks, motion, face signals, and pixel studies. | Load one or two tracks, point to a deck control, then perform with one or both hands. |
 
 The interface reflows from desktop down to phone-sized viewports. Real camera and audio behavior still depends on the browser and device; the maintained test matrix lives in [docs/TESTING.md](./docs/TESTING.md).
 
@@ -79,12 +79,13 @@ Open the local Vite URL. Camera access requires `localhost` or HTTPS.
 
 ## How gesture mixing feels
 
-1. Pick Deck A or Deck B and choose Crossfader, Volume, or Filter.
-2. Open your palm to grab the current value without a jump. The crossfader asks for one brief steady hold before it arms.
-3. Move vertically for level, rotate your wrist for filter, or move sideways for the crossfader.
-4. Close your fist to lock level/crossfader. Filter eases back to its 50% neutral point; brief tracking flicker is ignored.
+1. Load Deck A and optionally Deck B, then press **Start performance** to unlock browser audio.
+2. Point and hold over VOLUME or FILTER for the matching deck. Left owns A; right owns B.
+3. Open your palm to grab the current value without a jump. Move vertically for volume or rotate your wrist for filter.
+4. Close your hand to lock volume. Filter eases back to its 50% neutral point; brief tracking flicker is ignored.
+5. Point and hold over CUE or PLAY to control transport without touching the laptop.
 
-Use **Reset**, **Reset mix**, or double-click a mode or knob whenever you want a known starting point.
+Clicking and keyboard activation remain available for every performance target.
 
 ## Runtime architecture
 
@@ -94,7 +95,7 @@ flowchart LR
   Vision --> Signals["Hand and face signals"]
   Camera --> Pixels["Canvas pixel sampling"]
   Pixels --> Signals
-  Demo["Generated demo set"] --> Decks["Two Web Audio deck graphs"]
+  Demo["Bundled original demo set"] --> Decks["Two Web Audio deck graphs"]
   Files["Local audio files"] --> Decks
   Signals --> Gestures["Calibrated gesture controller"]
   Gestures --> Decks
