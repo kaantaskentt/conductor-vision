@@ -8,10 +8,11 @@ All notable changes to Ultra Vision will be documented here. The project follows
 
 - A zero-setup two-track set made from bundled original demo music.
 - A camera → tracks → perform first-mix flow that also accepts a single uploaded track.
+- A private, tab-local crate for selecting up to ten tracks and routing any of them into Deck A or Deck B without an upload.
 - Explicit open-hand gesture clutch with locked, calibrating, and armed states.
 - Stable primary-hand selection and hand-only processing in DJ Room.
 - Independent dual-hand performance: the physical left hand owns Deck A while the physical right hand owns Deck B.
-- Demo Air Mix on the bundled tracks' next authored bar, plus an honest immediate Assisted Fade for uploaded music without a phrase-perfect claim.
+- Best-effort Demo Air Mix on an authored bar boundary, plus an honest immediate Assisted Fade for uploaded music without a phrase-perfect claim.
 - Live analyser signal history for each deck and a bounded, post-master audio recorder with local preview, download, and discard controls.
 - Self-hosted, lock-pinned MediaPipe WASM plus byte-length and SHA-256 verification for model downloads.
 - A production-build Chromium camera contract covering real MediaPipe startup, tab handoff, local capture, stop, and restart without personal camera imagery.
@@ -50,6 +51,9 @@ All notable changes to Ultra Vision will be documented here. The project follows
   frozen-frame watchdog, including retry after a failed lazy model load.
 - Cancelled in-progress bundled-demo loading when a newer local track choice or
   room change supersedes it, so stale demo audio cannot overwrite user intent.
+- Restored a paused target deck's exact cue position when Air Mix is cancelled and rescheduled a late demo transition instead of starting mid-bar.
+- Reused full-waveform analysis to detect BPM for 8–32 MB tracks instead of throwing away the already-computed tempo estimate.
+- Replaced duplicate runtime decoding of the bundled demos with deferred, PCM-derived waveform overviews from the committed audio.
 
 ### Changed
 

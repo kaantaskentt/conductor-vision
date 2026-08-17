@@ -164,6 +164,7 @@ test('production camera survives handoff, capture, stop, and restart', async ({ 
     await expectLiveCamera(page)
     expect((await readCameraProbe(page)).streamId).toBe(djRoomProbe.streamId)
 
+    await page.getByLabel('More performance actions').click()
     await page.getByRole('button', { name: 'Stop camera' }).click()
     const restartCamera = page.getByRole('button', { name: 'Start camera' })
     await expect(restartCamera).toBeVisible()

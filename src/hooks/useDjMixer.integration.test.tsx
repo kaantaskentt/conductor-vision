@@ -8,6 +8,7 @@ import {
   bipolarFilterResonance,
   channelGainFromPercent,
   DJ_NEUTRAL_VALUES,
+  MAX_TRACK_ANALYSIS_BYTES,
   useDjMixer,
 } from './useDjMixer'
 import {
@@ -455,6 +456,25 @@ describe('DJ mixer filter gesture integration', () => {
     })
     expect(current.decks.b.filter).toBe(50)
     expect(current.decks.a.volume).toBe(heldVolume)
+  })
+
+  it('offers Tap BPM instead of claiming analysis for tracks above the waveform limit', async () => {
+    const largeTrack = new File(['large'], 'large.mp3', { type: 'audio/mpeg' })
+    Object.defineProperty(largeTrack, 'size', {
+      configurable: true,
+      value: MAX_TRACK_ANALYSIS_BYTES + 1,
+    })
+
+    await act(async () => {
+      current.setAudioElement('b', createAudioElement())
+      await current.loadFile('b', largeTrack)
+    })
+
+    expect(current.decks.b.bpm).toBeNull()
+    expect(current.decks.b.bpmStatus).toBe('Tap BPM to set tempo')
+    expect(current.decks.b.analysisStatus).toBe(
+      'Large track ready · beat overview skipped',
+    )
   })
 
   it('ignores dual-hand frames on Tracks and enables them only for Perform', async () => {

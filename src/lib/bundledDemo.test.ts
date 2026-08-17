@@ -60,6 +60,11 @@ describe('bundled demo loader', () => {
       'deck-a',
       'deck-b',
     ])
+    for (const track of tracks) {
+      expect(track.overview).toHaveLength(512)
+      expect(Math.max(...track.overview)).toBe(1)
+      expect(track.overview.some((value) => value > 0 && value < 1)).toBe(true)
+    }
   })
 
   it('keeps its runtime manifest limited to same-origin public assets', () => {
@@ -71,6 +76,7 @@ describe('bundled demo loader', () => {
       expect(asset.path).toMatch(/^\/demo\/[a-z0-9-]+\.mp3$/)
       expect(asset.path).not.toMatch(/^https?:\/\//)
       expect(Object.isFrozen(asset)).toBe(true)
+      expect(Object.isFrozen(asset.overview)).toBe(true)
     }
     expect(Object.isFrozen(BUNDLED_DEMO_ASSETS)).toBe(true)
   })

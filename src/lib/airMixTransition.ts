@@ -36,6 +36,7 @@ export type AirMixPlanResult =
 export const AIR_MIX_MIN_GRID_CONFIDENCE = 0.65
 export const AIR_MIX_MIN_FADE_MS = 3_200
 export const AIR_MIX_MAX_FADE_MS = 6_400
+export const AIR_MIX_SCHEDULE_LATE_TOLERANCE_MS = 80
 
 function normalizedBpm(value: number) {
   if (!Number.isFinite(value) || value <= 0) return null
@@ -86,6 +87,36 @@ export function nextAuthoredBarDelayMs(
   return Math.max(0, Math.round((mediaSecondsUntilNextBar / playbackRate) * 1_000))
 }
 
+/**
+ * Browser timers cannot guarantee an exact audio boundary. If the main thread
+ * delivers the scheduled callback late, use the live media clock to target the
+ * following authored bar rather than beginning part-way through the missed one.
+ */
+export function authoredBarRescheduleDelayMs(
+  scheduledAtMs: number,
+  firedAtMs: number,
+  currentTime: number,
+  authoredBpm: number,
+  firstBarSeconds = 0,
+  beatsPerBar = 4,
+  playbackRate = 1,
+  lateToleranceMs = AIR_MIX_SCHEDULE_LATE_TOLERANCE_MS,
+) {
+  if (
+    !Number.isFinite(scheduledAtMs) ||
+    !Number.isFinite(firedAtMs) ||
+    firedAtMs - scheduledAtMs <= Math.max(0, lateToleranceMs)
+  ) return null
+
+  return nextAuthoredBarDelayMs(
+    currentTime,
+    authoredBpm,
+    firstBarSeconds,
+    beatsPerBar,
+    playbackRate,
+  )
+}
+
 function chooseSource(input: AirMixPlanInput): AirMixDeckId | null {
   const { a, b } = input.decks
   if (a.playing && !b.playing) return 'a'
@@ -130,7 +161,7 @@ export function planAirMix(input: AirMixPlanInput): AirMixPlanResult {
     return {
       ok: true,
       plan: {
-        copy: 'Demo Air Mix · starts on the next authored bar',
+        copy: 'Demo Air Mix · aiming for the next authored bar',
         fadeDurationMs: Math.round(
           Math.min(AIR_MIX_MAX_FADE_MS, Math.max(AIR_MIX_MIN_FADE_MS, barMs * 2)),
         ),

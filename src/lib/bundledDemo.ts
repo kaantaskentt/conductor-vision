@@ -1,9 +1,15 @@
+import {
+  MIDNIGHT_CIRCUIT_OVERVIEW,
+  NEON_PULSE_OVERVIEW,
+} from './bundledDemoWaveforms'
+
 export type BundledDemoAsset = {
   beatsPerBar: 4
   bpm: number
   fileName: string
   firstBarSeconds: number
   path: `/demo/${string}.mp3`
+  overview: readonly number[]
   title: string
 }
 
@@ -12,6 +18,7 @@ export type BundledDemoTrack = {
   bpm: number
   file: File
   firstBarSeconds: number
+  overview: readonly number[]
   title: string
 }
 
@@ -26,6 +33,7 @@ export const BUNDLED_DEMO_ASSETS: readonly BundledDemoAsset[] = Object.freeze([
     bpm: 120,
     fileName: 'neon-pulse.mp3',
     firstBarSeconds: 0,
+    overview: NEON_PULSE_OVERVIEW,
     path: '/demo/neon-pulse.mp3',
     title: 'Neon Pulse',
   }),
@@ -34,6 +42,7 @@ export const BUNDLED_DEMO_ASSETS: readonly BundledDemoAsset[] = Object.freeze([
     bpm: 126,
     fileName: 'midnight-circuit.mp3',
     firstBarSeconds: 0,
+    overview: MIDNIGHT_CIRCUIT_OVERVIEW,
     path: '/demo/midnight-circuit.mp3',
     title: 'Midnight Circuit',
   }),
@@ -78,6 +87,7 @@ async function loadBundledDemoAsset(
       type: blob.type || 'audio/mpeg',
     }),
     firstBarSeconds: asset.firstBarSeconds,
+    overview: asset.overview,
     title: asset.title,
   }
 }

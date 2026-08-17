@@ -562,6 +562,40 @@ describe('Ultra Vision camera-first DJ flow', () => {
       .toBe(true)
   })
 
+  it('keeps a ten-track private crate and loads any selection into either deck', async () => {
+    await loadDemoSet()
+    const crateInput = container.querySelector<HTMLInputElement>('input[type="file"][multiple]')
+    if (!crateInput) throw new Error('Local crate input was not rendered.')
+    const files = Array.from({ length: 12 }, (_, index) => new File(
+      ['audio'],
+      `Kaan Track ${index + 1}.mp3`,
+      { type: 'audio/mpeg', lastModified: index + 1 },
+    ))
+    Object.defineProperty(crateInput, 'files', { configurable: true, value: files })
+
+    await act(async () => {
+      crateInput.dispatchEvent(new Event('change', { bubbles: true }))
+      await flushPromises()
+    })
+
+    expect(container.textContent).toContain('10 tracks ready')
+    expect(container.textContent).toContain('Using the first 10 supported tracks.')
+    expect(container.querySelectorAll('.uv-local-crate li')).toHaveLength(10)
+    expect(container.querySelector('button[aria-label="Load Kaan Track 11 into Deck A"]')).toBeNull()
+
+    await act(async () => {
+      click(container.querySelector('button[aria-label="Load Kaan Track 4 into Deck A"]')!)
+      await flushPromises()
+    })
+    expect(container.querySelector('.uv-track-slot.deck-a')?.textContent).toContain('Kaan Track 4')
+
+    await act(async () => {
+      click(container.querySelector('button[aria-label="Load Kaan Track 7 into Deck B"]')!)
+      await flushPromises()
+    })
+    expect(container.querySelector('.uv-track-slot.deck-b')?.textContent).toContain('Kaan Track 7')
+  })
+
   it('shows an honest, cancellable Demo Air Mix rail without claiming phrase lock', async () => {
     await loadDemoSet()
     await enterPerformance()

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   AIR_MIX_MIN_GRID_CONFIDENCE,
+  authoredBarRescheduleDelayMs,
   nextAuthoredBarDelayMs,
   planAirMix,
   safeTempoMatchPercent,
@@ -85,12 +86,36 @@ describe('Air Mix transition planner', () => {
       },
     })
     expect(result.ok && result.plan).toEqual(expect.objectContaining({
-      copy: 'Demo Air Mix · starts on the next authored bar',
+      copy: 'Demo Air Mix · aiming for the next authored bar',
       mode: 'demo-air-mix',
       startDelayMs: 750,
       targetTempoPercent: -4.8,
     }))
     expect(nextAuthoredBarDelayMs(0, 120)).toBe(2_000)
+  })
+
+  it('reschedules from the live media clock only when the browser misses the intended bar', () => {
+    expect(authoredBarRescheduleDelayMs(
+      1_000,
+      1_080,
+      2.08,
+      120,
+    )).toBeNull()
+    expect(authoredBarRescheduleDelayMs(
+      1_000,
+      1_250,
+      2.25,
+      120,
+    )).toBe(1_750)
+    expect(authoredBarRescheduleDelayMs(
+      1_000,
+      1_250,
+      1.25,
+      126,
+      0,
+      4,
+      0.952,
+    )).toBe(688)
   })
 
   it('keeps reverse demo transitions on authored media bars after tempo matching', () => {

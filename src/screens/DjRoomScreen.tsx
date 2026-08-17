@@ -5,7 +5,9 @@ import {
   Circle,
   Disc3,
   Download,
+  FolderOpen,
   Hand,
+  ListMusic,
   Lock,
   MoreHorizontal,
   Pause,
@@ -53,6 +55,12 @@ import {
   createHandAssignmentState,
   type HandAssignmentState,
 } from '../lib/handAssignment'
+import {
+  createLocalCrateSelection,
+  formatLocalTrackSize,
+  MAX_LOCAL_CRATE_TRACKS,
+  type LocalCrateTrack,
+} from '../lib/localCrate'
 import type { HandSummary } from '../lib/vision'
 
 const ACCEPTED_AUDIO = 'audio/mpeg,audio/wav,audio/flac,audio/ogg,.mp3,.wav,.flac,.ogg'
@@ -263,6 +271,7 @@ export function DjRoomScreen({
 }) {
   const deckAInputRef = useRef<HTMLInputElement | null>(null)
   const deckBInputRef = useRef<HTMLInputElement | null>(null)
+  const localCrateInputRef = useRef<HTMLInputElement | null>(null)
   const cameraShellRef = useRef<HTMLDivElement | null>(null)
   const replayDialogRef = useRef<HTMLDialogElement | null>(null)
   const cameraAdvancePendingRef = useRef(false)
@@ -301,6 +310,8 @@ export function DjRoomScreen({
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0)
   const [replayPreviewOpen, setReplayPreviewOpen] = useState(false)
   const [airMixCountdownMs, setAirMixCountdownMs] = useState(0)
+  const [localCrate, setLocalCrate] = useState<LocalCrateTrack[]>([])
+  const [localCrateNotice, setLocalCrateNotice] = useState('')
 
   const anyTrackLoaded = decks.a.loaded || decks.b.loaded
   const bothTracksLoaded = decks.a.loaded && decks.b.loaded
@@ -587,6 +598,21 @@ export function DjRoomScreen({
     await mixer.loadFile(id, file)
   }
 
+  const selectLocalCrate = (files?: FileList | null) => {
+    if (!files || interactionLocked) return
+    const selection = createLocalCrateSelection(files)
+    setLocalCrate(selection.tracks)
+    const notices = [
+      selection.overflow
+        ? `Using the first ${MAX_LOCAL_CRATE_TRACKS} supported tracks.`
+        : '',
+      selection.rejected.length
+        ? `${selection.rejected.length} unsupported or oversized file${selection.rejected.length === 1 ? '' : 's'} skipped.`
+        : '',
+    ].filter(Boolean)
+    setLocalCrateNotice(notices.join(' '))
+  }
+
   const loadDemo = async (bypassCamera = false) => {
     if (interactionLocked) return
     if (bypassCamera) setCameraBypassed(true)
@@ -664,6 +690,18 @@ export function DjRoomScreen({
           event.currentTarget.value = ''
         }}
       />
+      <input
+        ref={localCrateInputRef}
+        hidden
+        type="file"
+        multiple
+        disabled={interactionLocked}
+        accept={ACCEPTED_AUDIO}
+        onChange={(event) => {
+          selectLocalCrate(event.target.files)
+          event.currentTarget.value = ''
+        }}
+      />
 
       <FlowProgress
         step={step}
@@ -718,7 +756,7 @@ export function DjRoomScreen({
             ) : undefined}
           />
 
-          {step === 'perform' && (
+          {step === 'perform' && vision.status !== 'error' && (
             <>
               <div className="uv-target-rail rail-a">
                 <PerformanceTarget
@@ -860,6 +898,58 @@ export function DjRoomScreen({
             <span className={vision.status === 'running' ? 'ready' : ''} />
             {vision.status === 'running' ? 'Camera ready' : 'Manual demo mode'}
           </div>
+          <section className="uv-local-crate" aria-labelledby="uv-local-crate-title">
+            <header>
+              <div>
+                <span><ListMusic aria-hidden="true" /> PRIVATE LOCAL CRATE</span>
+                <h2 id="uv-local-crate-title">
+                  {localCrate.length
+                    ? `${localCrate.length} track${localCrate.length === 1 ? '' : 's'} ready`
+                    : 'Bring your own set'}
+                </h2>
+                <p>Choose up to ten tracks. They stay in this browser tab and are analyzed when loaded.</p>
+              </div>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => localCrateInputRef.current?.click()}
+                disabled={interactionLocked}
+              >
+                <FolderOpen aria-hidden="true" />
+                {localCrate.length ? 'Replace crate' : 'Choose up to 10 tracks'}
+              </button>
+            </header>
+            {localCrateNotice && <output className="uv-local-crate-notice">{localCrateNotice}</output>}
+            {localCrate.length > 0 && (
+              <ol>
+                {localCrate.map((track, index) => (
+                  <li key={track.id}>
+                    <b>{String(index + 1).padStart(2, '0')}</b>
+                    <div>
+                      <strong title={track.name}>{track.name}</strong>
+                      <span>{formatLocalTrackSize(track.size)} · local only</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void loadFile('a', track.file)}
+                      disabled={interactionLocked}
+                      aria-label={`Load ${track.name} into Deck A`}
+                    >
+                      A
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void loadFile('b', track.file)}
+                      disabled={interactionLocked}
+                      aria-label={`Load ${track.name} into Deck B`}
+                    >
+                      B
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
           <div className="uv-track-grid">
             <TrackSlot
               id="a"

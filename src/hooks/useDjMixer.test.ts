@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { equalPowerCrossfade } from '../lib/djAudio'
 import {
+  analyzedBpmPatch,
   appendWaveformSample,
   bipolarFilterFrequencies,
   bipolarFilterResonance,
@@ -212,6 +213,27 @@ describe('DJ mixer audio safeguards and math', () => {
   it('bounds automatic BPM analysis before compressed audio is decoded', () => {
     expect(shouldAutoAnalyzeBpm({ size: MAX_BPM_ANALYSIS_BYTES })).toBe(true)
     expect(shouldAutoAnalyzeBpm({ size: MAX_BPM_ANALYSIS_BYTES + 1 })).toBe(false)
+  })
+
+  it('adopts full-waveform BPM for larger tracks without overwriting an existing tempo', () => {
+    const analysis = {
+      bpm: 128,
+      source: 'detected' as const,
+      bpmConfidence: 0.72,
+      beatOffsetSeconds: 0.1,
+      beatGridConfidence: 0.4,
+      durationSeconds: 300,
+      overview: [0.2, 1],
+      beats: [],
+      bars: [],
+    }
+
+    expect(analyzedBpmPatch(null, analysis)).toEqual({
+      bpm: 128,
+      bpmStatus: '128 BPM detected',
+    })
+    expect(analyzedBpmPatch(126, analysis)).toEqual({})
+    expect(analyzedBpmPatch(null, null)).toEqual({})
   })
 
   it('accepts supported local audio and rejects misleading files', () => {

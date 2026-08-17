@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { equalPowerCrossfade } from '../lib/djAudio'
 import {
+  authoredBarRescheduleDelayMs,
   planAirMix,
   sourceOnlyCrossfader,
   type AirMixMode,
@@ -111,6 +112,7 @@ type LoadFileOptions = {
   loop?: boolean
   demoGeneration?: AbortController
   preload?: 'auto' | 'metadata'
+  overview?: readonly number[]
   sourceKind?: Exclude<AirMixSourceKind, 'none'>
 }
 
@@ -121,6 +123,7 @@ type ActiveAirMixRun = {
   sourceId: DeckId
   startedTarget: boolean
   targetId: DeckId
+  targetOriginalCurrentTime: number
   targetOriginalTempo: number
   timeout: ReturnType<typeof setTimeout> | null
 }
@@ -189,6 +192,17 @@ export function validateAudioFile(file: File) {
 
 export function shouldAutoAnalyzeBpm(file: Pick<File, 'size'>) {
   return file.size <= MAX_BPM_ANALYSIS_BYTES
+}
+
+export function analyzedBpmPatch(
+  currentBpm: number | null,
+  analysis: TrackAnalysis | null,
+): Partial<Pick<DeckState, 'bpm' | 'bpmStatus'>> {
+  if (currentBpm || !analysis?.bpm) return {}
+  return {
+    bpm: analysis.bpm,
+    bpmStatus: `${analysis.bpm} BPM detected`,
+  }
 }
 
 export function phraseTimeForIndex(index: number, duration: number) {
@@ -705,7 +719,11 @@ export function useDjMixer() {
 
       void task.then((analysis) => {
         if (bpmRequestRef.current[id] !== requestId) return
+        const bpmPatch = preserveAuthoredGrid
+          ? {}
+          : analyzedBpmPatch(decksRef.current[id].bpm, analysis)
         patchDeck(id, {
+          ...bpmPatch,
           overview: analysis?.overview ?? [],
           beats: preserveAuthoredGrid ? [] : analysis?.beats ?? [],
           bars: preserveAuthoredGrid ? [] : analysis?.bars ?? [],
@@ -1077,12 +1095,19 @@ export function useDjMixer() {
               ? options.authoredBeatsPerBar ?? null
               : null,
           sourceKind: options.sourceKind ?? (options.demoGeneration ? 'demo' : 'local'),
+          overview: options.overview ? [...options.overview] : [],
           bpm: knownBpm,
           bpmStatus: knownBpm ? `${knownBpm} BPM demo` : 'Waiting for BPM analysis…',
           analysisStatus: 'Waiting for waveform analysis…',
         })
         if (knownBpm) {
           if (options.demoGeneration) {
+            if (options.overview?.length) {
+              patchDeck(id, {
+                analysisStatus: 'Bundled demo waveform ready · authored tempo grid',
+              })
+              return true
+            }
             patchDeck(id, {
               analysisStatus: 'Analyzing bundled waveform · authored tempo grid',
             })
@@ -1093,9 +1118,17 @@ export function useDjMixer() {
           return true
         }
         if (!shouldAutoAnalyzeBpm(file)) {
+          if (file.size > MAX_TRACK_ANALYSIS_BYTES) {
+            patchDeck(id, {
+              bpm: null,
+              bpmStatus: 'Tap BPM to set tempo',
+            })
+            queueTrackAnalysis(id, file, requestId)
+            return true
+          }
           patchDeck(id, {
             bpm: null,
-            bpmStatus: 'Track ready · tap BPM (auto analysis is limited to 8 MB)',
+            bpmStatus: 'Analyzing BPM with the full waveform…',
           })
           queueTrackAnalysis(id, file, requestId)
           return true
@@ -1500,8 +1533,11 @@ export function useDjMixer() {
         if (run.startedTarget && targetAudio) {
           targetAudio.pause()
           try {
-            targetAudio.currentTime = 0
-            patchDeck(run.targetId, { currentTime: 0, playing: false })
+            targetAudio.currentTime = run.targetOriginalCurrentTime
+            patchDeck(run.targetId, {
+              currentTime: run.targetOriginalCurrentTime,
+              playing: false,
+            })
           } catch {
             patchDeck(run.targetId, { playing: false })
           }
@@ -1608,6 +1644,9 @@ export function useDjMixer() {
       sourceId: plan.sourceId,
       startedTarget: false,
       targetId: plan.targetId,
+      targetOriginalCurrentTime: Number.isFinite(targetAudio.currentTime)
+        ? targetAudio.currentTime
+        : decksRef.current[plan.targetId].currentTime,
       targetOriginalTempo: decksRef.current[plan.targetId].tempo,
       timeout: null,
     }
@@ -1649,12 +1688,19 @@ export function useDjMixer() {
       }
       try {
         if (targetAudio.paused) {
+          // Mark the target before awaiting play() so cancellation during the
+          // pending browser promise can still restore its exact entry point.
+          run.startedTarget = true
           await targetAudio.play()
           if (airMixGenerationRef.current !== generation || airMixRunRef.current !== run) {
             targetAudio.pause()
+            try {
+              targetAudio.currentTime = run.targetOriginalCurrentTime
+            } catch {
+              // The normal cancellation path already reported recovery.
+            }
             return false
           }
-          run.startedTarget = true
         }
       } catch (error) {
         return failRun(error)
@@ -1718,20 +1764,49 @@ export function useDjMixer() {
     }
 
     if (plan.startDelayMs > 0) {
-      setAirMix({
-        copy: plan.copy,
-        direction,
-        mode: plan.mode,
-        phase: 'scheduled',
-        progress: 0,
-        scheduledAt: performance.now() + plan.startDelayMs,
-        startDelayMs: plan.startDelayMs,
-      })
-      setGestureStatus(`${plan.copy} · keep the source deck playing`)
-      run.timeout = setTimeout(() => {
-        run.timeout = null
-        void beginFade()
-      }, plan.startDelayMs)
+      const scheduleFade = (delayMs: number, wasRescheduled = false): void => {
+        const scheduledAt = performance.now() + delayMs
+        const copy = wasRescheduled
+          ? 'Demo Air Mix · browser timing adjusted, aiming for the following authored bar'
+          : plan.copy
+        setAirMix({
+          copy,
+          direction,
+          mode: plan.mode,
+          phase: 'scheduled',
+          progress: 0,
+          scheduledAt,
+          startDelayMs: delayMs,
+        })
+        setGestureStatus(`${copy} · keep the source deck playing`)
+        run.timeout = setTimeout(() => {
+          run.timeout = null
+          if (airMixGenerationRef.current !== generation || airMixRunRef.current !== run) return
+
+          if (plan.mode === 'demo-air-mix') {
+            const source = decksRef.current[plan.sourceId]
+            const sourceCurrentTime = liveCurrentTime(plan.sourceId)
+            const retryDelayMs = source.bpm && source.authoredBarOffsetSeconds !== null
+              && source.authoredBeatsPerBar !== null
+              ? authoredBarRescheduleDelayMs(
+                  scheduledAt,
+                  performance.now(),
+                  sourceCurrentTime,
+                  source.bpm,
+                  source.authoredBarOffsetSeconds,
+                  source.authoredBeatsPerBar,
+                  1 + source.tempo / 100,
+                )
+              : null
+            if (retryDelayMs !== null) {
+              scheduleFade(retryDelayMs, true)
+              return
+            }
+          }
+          void beginFade()
+        }, delayMs)
+      }
+      scheduleFade(plan.startDelayMs)
       return true
     }
 
@@ -1902,6 +1977,7 @@ export function useDjMixer() {
           title: deckA.title,
           loop: true,
           preload: 'auto',
+          overview: deckA.overview,
           demoGeneration: generation,
           sourceKind: 'demo',
         }),
@@ -1912,6 +1988,7 @@ export function useDjMixer() {
           title: deckB.title,
           loop: true,
           preload: 'auto',
+          overview: deckB.overview,
           demoGeneration: generation,
           sourceKind: 'demo',
         }),
@@ -2482,7 +2559,17 @@ export function useDjMixer() {
       ) {
         cancelAnimationFrame(airMixRun.animationFrame)
       }
-      if (airMixRun?.startedTarget) audioElements[airMixRun.targetId]?.pause()
+      if (airMixRun?.startedTarget) {
+        const targetAudio = audioElements[airMixRun.targetId]
+        targetAudio?.pause()
+        if (targetAudio) {
+          try {
+            targetAudio.currentTime = airMixRun.targetOriginalCurrentTime
+          } catch {
+            // The element is being detached; there is no remaining UI to update.
+          }
+        }
+      }
       captureGeneration.current += 1
       for (const id of DECK_IDS) bpmRequests[id] += 1
       demoGeneration.current?.abort()

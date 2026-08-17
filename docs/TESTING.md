@@ -11,7 +11,7 @@ npm run check
 
 ## Deterministic tests
 
-Unit tests cover vision math, pixel studies, gesture pickup/release, camera-overlay remounts, audio curves, serialized and size-bounded BPM analysis, full-track waveform and estimated beat-grid math, file validation, bundled demo loading and metadata, Air Mix planning, verified MediaPipe asset provenance, and the bounded local replay lifecycle. React integration tests mount the real mixer and camera hooks to verify timed Filter release, Web Audio parameters, independent left-hand/Deck A and right-hand/Deck B control, Demo Air Mix and Assisted Fade lifecycles, the decoded beat workspace, the isolated post-master recording tap, audio-only replay cleanup, live-stream handoff, frozen-frame release, optional face-analysis failure, overlay remounts, and camera restart. Prefer generated signals and landmark-coordinate cases over copyrighted or personally identifying fixtures.
+Unit tests cover vision math, pixel studies, gesture pickup/release, camera-overlay remounts, audio curves, serialized and size-bounded BPM analysis, full-track waveform and estimated beat-grid math, private ten-track crate validation, file validation, bundled demo loading and metadata, Air Mix planning, verified MediaPipe asset provenance, and the bounded local replay lifecycle. React integration tests mount the real mixer and camera hooks to verify timed Filter release, Web Audio parameters, independent left-hand/Deck A and right-hand/Deck B control, Local Crate routing into either deck, Demo Air Mix and Assisted Fade lifecycles, the decoded beat workspace, the isolated post-master recording tap, audio-only replay cleanup, live-stream handoff, frozen-frame release, optional face-analysis failure, overlay remounts, and camera restart. Prefer generated signals and landmark-coordinate cases over copyrighted or personally identifying fixtures.
 
 Coverage cannot fall below the checked-in project floor: 80% statements, 72% branches, 76% functions, and 82% lines.
 
@@ -74,7 +74,7 @@ At minimum, check the latest stable Chrome, Safari, and Firefox on desktop. Chec
 For each browser, verify:
 
 1. Camera permission allowed, denied, missing, and busy.
-2. Bundled demo loading, one-track and two-track upload flows, individual track replacement, playback, seeking, and reset.
+2. Private Local Crate selection with one, ten, and more than ten files; one-track and two-track routing; individual track replacement, playback, seeking, and reset.
 3. First visible hand causes no control jump; physical left changes only Deck A and physical right changes only Deck B.
 4. Open hand engages; fist or loss locks; Filter returns to 50%.
 5. BPM Sync toggles and restores original rates.

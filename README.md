@@ -35,7 +35,7 @@ No account, API key, database, backend, or personal audio files are required for
 
 1. Open the [live app](https://ultra-vision.vercel.app) and choose **DJ Room**.
 2. Allow the private on-device camera, or choose **Use demo instead** for camera-off mode.
-3. Add your own Deck A and optional Deck B, or select **Try demo tracks**.
+3. Open **Private Local Crate** to choose up to ten tracks from your laptop, then send any track to Deck A or optional Deck B. You can still select **Try demo tracks** when you have no music nearby.
 4. Press **Start performance**. The first loaded deck starts; when both are present, Deck A leads and Deck B is prepared silently for a later transition.
 5. Your physical left hand owns Deck A and your physical right hand owns Deck B. Point and hold over CUE, PLAY, VOLUME, or FILTER; open your palm to move the selected sound control.
 6. With two decks loaded, choose **Demo Air Mix** for the bundled set or **Assisted Fade** for uploaded music. Use **Record** to capture, preview, and download the audio-only master mix locally.
@@ -45,18 +45,19 @@ Close your hand to lock volume; Filter instead returns to its neutral midpoint a
 ## What it can do
 
 - **Instant demo set** — load two bundled, original, sample-free tracks without finding audio files or generating music at runtime.
+- **Private Local Crate** — select up to ten MP3, WAV, FLAC, or OGG files once per tab and move any of them into Deck A or Deck B without uploading them.
 - **Focused two-deck instrument** — use independent CUE and PLAY controls plus one selected VOLUME or FILTER control per deck.
 - **Decoded beat workspace** — see full-track cyan/violet waveform bars, playheads, and explicitly estimated beat and bar markers directly below the camera.
 - **Camera-first flow** — move through Camera, Load Tracks, and Perform while one persistent private camera stage stays mounted.
 - **Independent hand ownership** — physical left controls Deck A while physical right controls Deck B. Relative pickup prevents first-frame jumps, brief landmark flicker stays latched, and filter release returns smoothly to neutral.
 - **BPM tools** — estimate BPM locally, tap a correction, and use one reversible BPM Sync control to match playback rates.
-- **Two honest transition modes** — the bundled demo set can begin a smooth Air Mix on its next authored bar. Uploaded tracks use an immediate Assisted Fade and apply a conservative estimated tempo match only when both local beat analyses are reliable.
+- **Two honest transition modes** — the bundled demo set uses authored bar timing as a best-effort browser cue for a smooth Air Mix, and retries the following bar if the browser runs late. Uploaded tracks use an immediate Assisted Fade and apply a conservative estimated tempo match only when both local beat analyses are reliable.
 - **Local audio replay** — record the post-master mix, listen to it in a local preview, then download or discard it without uploading the recording.
 - **Vision workspace** — inspect hand landmarks, raised fingers, face signals, frame-change regions, and color coverage.
 - **Pixel Studio** — study color similarity and luminance from an upload or captured frame with transparent, deterministic calculations.
 - **Local media** — camera frames, captured images, and uploaded tracks are not sent to an application backend.
 
-BPM Sync matches tempo; it does not claim automatic beat-grid, downbeat, or phase alignment. Demo Air Mix uses metadata authored for the two bundled tracks. Assisted Fade does not claim phrase-perfect mixing for user uploads.
+BPM Sync matches tempo; it does not claim automatic beat-grid, downbeat, or phase alignment. Demo Air Mix uses metadata authored for the two bundled tracks, but browser scheduling is not sample-accurate. Assisted Fade does not claim phrase-perfect mixing for user uploads.
 
 ## Two instruments, one private tab
 
@@ -99,7 +100,7 @@ flowchart LR
   Camera --> Pixels["Canvas pixel sampling"]
   Pixels --> Signals
   Demo["Bundled original demo set"] --> Decks["Two Web Audio deck graphs"]
-  Files["Local audio files"] --> Decks
+  Files["Private Local Crate · up to 10 files"] --> Decks
   Signals --> Gestures["Calibrated gesture controller"]
   Gestures --> Decks
   Decks --> Transition["Demo Air Mix or Assisted Fade"]

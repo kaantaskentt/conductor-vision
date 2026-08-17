@@ -26,6 +26,7 @@ test('synthetic open palm reaches the simplified controls without a pickup jump'
   await page.waitForTimeout(1_500)
   await expect(filter).toHaveAccessibleName('Deck A filter. Neutral')
 
+  await page.getByLabel('More performance actions').click()
   await page.getByRole('button', { name: 'Stop camera' }).click()
   await expect(page.locator('.camera-stage')).toHaveAttribute('data-camera-status', 'idle')
   await expect(filter).toHaveAccessibleName('Deck A filter. Neutral')

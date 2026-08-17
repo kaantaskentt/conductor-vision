@@ -225,6 +225,28 @@ describe('DJ mixer Air Mix lifecycle', () => {
     expect(renderUpdates - updatesBeforeFade).toBeLessThan(100)
   })
 
+  it('restores the paused target to its exact pre-run position when cancelled', async () => {
+    await act(async () => {
+      await current.startPerformance()
+    })
+    audioB.currentTime = 37.25
+
+    await act(async () => {
+      await current.startAirMix()
+    })
+    expect(current.airMix.phase).toBe('fading')
+    expect(audioB.paused).toBe(false)
+
+    await act(async () => current.cancelAirMix())
+
+    expect(audioB.paused).toBe(true)
+    expect(audioB.currentTime).toBe(37.25)
+    expect(current.decks.b).toEqual(expect.objectContaining({
+      currentTime: 37.25,
+      playing: false,
+    }))
+  })
+
   it('uses the live media clock, then cancels a scheduled demo transition cleanly', async () => {
     await act(async () => {
       await current.loadFile('a', new File(['a'], 'a.wav', { type: 'audio/wav' }), {
@@ -265,6 +287,60 @@ describe('DJ mixer Air Mix lifecycle', () => {
       await vi.advanceTimersByTimeAsync(1_000)
     })
     expect(audioB.play).toHaveBeenCalledTimes(targetPlayCalls)
+  })
+
+  it('rechecks a late demo callback and waits for the following authored bar', async () => {
+    await act(async () => {
+      await current.loadFile('a', new File(['a'], 'a.wav', { type: 'audio/wav' }), {
+        knownBpm: 120,
+        authoredBarOffsetSeconds: 0,
+        authoredBeatsPerBar: 4,
+        sourceKind: 'demo',
+      })
+      await current.loadFile('b', new File(['b'], 'b.wav', { type: 'audio/wav' }), {
+        knownBpm: 126,
+        authoredBarOffsetSeconds: 0,
+        authoredBeatsPerBar: 4,
+        sourceKind: 'demo',
+      })
+      await current.startPerformance()
+    })
+    let browserNow = 1_000
+    vi.spyOn(performance, 'now').mockImplementation(() => browserNow)
+    audioA.currentTime = 1.25
+    const targetPlayCallsBeforeAirMix = vi.mocked(audioB.play).mock.calls.length
+
+    await act(async () => {
+      await current.startAirMix()
+    })
+    expect(current.airMix).toEqual(expect.objectContaining({
+      phase: 'scheduled',
+      scheduledAt: 1_750,
+      startDelayMs: 750,
+    }))
+
+    // Simulate a blocked main thread delivering the callback 250 ms late.
+    browserNow = 2_000
+    audioA.currentTime = 2.25
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750)
+    })
+
+    expect(audioB.play).toHaveBeenCalledTimes(targetPlayCallsBeforeAirMix)
+    expect(current.airMix).toEqual(expect.objectContaining({
+      copy: expect.stringContaining('browser timing adjusted'),
+      phase: 'scheduled',
+      scheduledAt: 3_750,
+      startDelayMs: 1_750,
+    }))
+
+    browserNow = 3_750
+    audioA.currentTime = 4
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_750)
+    })
+    expect(audioB.play).toHaveBeenCalledTimes(targetPlayCallsBeforeAirMix + 1)
+    expect(current.airMix.phase).toBe('fading')
   })
 
   it('can transition back from the tempo-matched demo deck on its authored media bar', async () => {
