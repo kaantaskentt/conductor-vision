@@ -15,6 +15,7 @@ const ignorePrimaryGestureFrame = () => undefined
 
 function App() {
   const [screen, setScreen] = useState<Screen>('dj-room')
+  const [djNavigationLocked, setDjNavigationLocked] = useState(false)
   const [targetColor, setTargetColor] = useState<TargetColor>('purple')
   const mixer = useDjMixer()
   const {
@@ -74,7 +75,11 @@ function App() {
     <div className="app">
       <audio ref={setDeckAAudioElement} preload="metadata" />
       <audio ref={setDeckBAudioElement} preload="metadata" />
-      <AppHeader screen={screen} onScreenChange={setScreen} />
+      <AppHeader
+        screen={screen}
+        onScreenChange={setScreen}
+        navigationLocked={djNavigationLocked}
+      />
       <main id="main-content" className="app-main">
         {screen === 'vision' && (
           <VisionScreen
@@ -83,7 +88,13 @@ function App() {
             onTargetColorChange={setTargetColor}
           />
         )}
-        {screen === 'dj-room' && <DjRoomScreen vision={vision} mixer={mixer} />}
+        {screen === 'dj-room' && (
+          <DjRoomScreen
+            vision={vision}
+            mixer={mixer}
+            onNavigationLockChange={setDjNavigationLocked}
+          />
+        )}
       </main>
       <PrivacyFooter />
       <div className="sr-only" aria-live="polite">

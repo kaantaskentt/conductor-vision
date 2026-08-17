@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import type { DeckId, DeckState } from '../hooks/useDjMixer'
-import { buildBeatGrid } from '../lib/trackAnalysis'
+import { effectiveDeckBpm, withDemoTempoGrid } from '../lib/performanceWaveform'
 
 type PerformanceWaveformProps = {
   deckId: DeckId
@@ -104,16 +104,8 @@ function drawWaveform(
 
 export function PerformanceWaveform({ deckId, deck, onSeek }: PerformanceWaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const displayDeck = useMemo(() => {
-    if (
-      deck.beats.length ||
-      !deck.analysisStatus.startsWith('Generated demo') ||
-      !deck.bpm ||
-      deck.duration <= 0
-    ) return deck
-    const grid = buildBeatGrid(deck.duration, deck.bpm, 0)
-    return { ...deck, beats: grid.beats, bars: grid.bars }
-  }, [deck])
+  const displayDeck = useMemo(() => withDemoTempoGrid(deck), [deck])
+  const displayBpm = effectiveDeckBpm(deck)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -132,7 +124,11 @@ export function PerformanceWaveform({ deckId, deck, onSeek }: PerformanceWavefor
         <span className="uv-deck-id">{deckId.toUpperCase()}</span>
         <div>
           <strong>{deck.loaded ? deck.name : `Deck ${deckId.toUpperCase()} is empty`}</strong>
-          <span>{deck.bpm ? `${deck.bpm.toFixed(1)} BPM` : deck.bpmStatus}</span>
+          <span>
+            {displayBpm
+              ? `${displayBpm.toFixed(1)} BPM${Math.abs(deck.tempo) >= 0.05 ? ' · MATCHED' : ''}`
+              : deck.bpmStatus}
+          </span>
         </div>
         <time>{formatTime(deck.currentTime)} / {formatTime(deck.duration)}</time>
       </div>
@@ -150,7 +146,9 @@ export function PerformanceWaveform({ deckId, deck, onSeek }: PerformanceWavefor
       </button>
       <div className="uv-waveform-grid-note">
         {displayDeck.beats.length
-          ? `Estimated beat grid · ${displayDeck.bars.length} bars`
+          ? deck.sourceKind === 'demo'
+            ? `Authored demo tempo grid · ${displayDeck.bars.length} bars`
+            : `Estimated beat grid · ${displayDeck.bars.length} bars`
           : deck.loaded
             ? 'Analyzing track shape and beat grid…'
             : 'Load a track to reveal its waveform'}

@@ -36,8 +36,9 @@ No account, API key, database, backend, or personal audio files are required for
 1. Open the [live app](https://ultra-vision.vercel.app) and choose **DJ Room**.
 2. Allow the private on-device camera, or choose **Use demo instead** for camera-off mode.
 3. Add your own Deck A and optional Deck B, or select **Try demo tracks**.
-4. Press **Start performance**. Deck A starts and Deck B is prepared silently for a later transition.
+4. Press **Start performance**. The first loaded deck starts; when both are present, Deck A leads and Deck B is prepared silently for a later transition.
 5. Your physical left hand owns Deck A and your physical right hand owns Deck B. Point and hold over CUE, PLAY, VOLUME, or FILTER; open your palm to move the selected sound control.
+6. With two decks loaded, choose **Demo Air Mix** for the bundled set or **Assisted Fade** for uploaded music. Use **Record** to capture, preview, and download the audio-only master mix locally.
 
 Close your hand to lock volume; Filter instead returns to its neutral midpoint after release. A newly detected hand grabs the current value without moving it, then responds only to intentional movement. Pointing and continuous open-palm control are kept separate so aiming at a button cannot accidentally change the sound.
 
@@ -49,11 +50,13 @@ Close your hand to lock volume; Filter instead returns to its neutral midpoint a
 - **Camera-first flow** — move through Camera, Load Tracks, and Perform while one persistent private camera stage stays mounted.
 - **Independent hand ownership** — physical left controls Deck A while physical right controls Deck B. Relative pickup prevents first-frame jumps, brief landmark flicker stays latched, and filter release returns smoothly to neutral.
 - **BPM tools** — estimate BPM locally, tap a correction, and use one reversible BPM Sync control to match playback rates.
+- **Two honest transition modes** — the bundled demo set can begin a smooth Air Mix on its next authored bar. Uploaded tracks use an immediate Assisted Fade and apply a conservative estimated tempo match only when both local beat analyses are reliable.
+- **Local audio replay** — record the post-master mix, listen to it in a local preview, then download or discard it without uploading the recording.
 - **Vision workspace** — inspect hand landmarks, raised fingers, face signals, frame-change regions, and color coverage.
 - **Pixel Studio** — study color similarity and luminance from an upload or captured frame with transparent, deterministic calculations.
 - **Local media** — camera frames, captured images, and uploaded tracks are not sent to an application backend.
 
-BPM Sync matches tempo; it does not claim automatic beat-grid, downbeat, or phase alignment.
+BPM Sync matches tempo; it does not claim automatic beat-grid, downbeat, or phase alignment. Demo Air Mix uses metadata authored for the two bundled tracks. Assisted Fade does not claim phrase-perfect mixing for user uploads.
 
 ## Two instruments, one private tab
 
@@ -99,8 +102,11 @@ flowchart LR
   Files["Local audio files"] --> Decks
   Signals --> Gestures["Calibrated gesture controller"]
   Gestures --> Decks
+  Decks --> Transition["Demo Air Mix or Assisted Fade"]
+  Transition --> Decks
   Decks --> Limiter["Master limiter"]
   Limiter --> Output["Browser audio output"]
+  Limiter -. On-demand local tap .-> Replay["Audio-only preview and download"]
 ```
 
 The current runtime uses React 19, TypeScript, Vite, MediaPipe Tasks Vision, Canvas sampling, Web Audio, and Lucide icons. Read the deeper [architecture guide](./docs/ARCHITECTURE.md).
@@ -109,7 +115,7 @@ The current runtime uses React 19, TypeScript, Vite, MediaPipe Tasks Vision, Can
 
 MediaPipe is the shipped vision runtime. NVIDIA Eagle / LocateAnything is **not** part of the current browser application; it remains a researched option for future open-vocabulary grounding. Its integration and model-license risks are documented in [docs/EAGLE_NEXT.md](./docs/EAGLE_NEXT.md).
 
-A bounded, post-master local recording engine also exists in the codebase, but Replay Studio does not yet have a shipped interface. The roadmap does not present foundations as finished product features.
+The shipped recorder is intentionally audio-only. It captures the post-master mix into bounded browser memory, offers an in-tab preview and download, and itself requests no camera, microphone, screen-capture, account, or upload permission. Video capture and hosted sharing are not shipped features.
 
 ## Quality and privacy
 
@@ -132,6 +138,7 @@ It starts one production build and runs Chromium contracts for the real MediaStr
 
 - Camera and uploaded media are processed in the active browser tab.
 - File types and sizes are checked before object URLs are created.
+- Audio replay stays in bounded browser memory while it is previewed, until it is discarded or the tab closes. Download saves a local copy; Ultra Vision does not upload or persist it.
 - Lock-pinned MediaPipe WASM is served from Ultra Vision's own origin. Hand and face model bundles are fetched from their exact Google-hosted upstream URLs, accepted only after byte-length and SHA-256 verification, and then passed to MediaPipe as in-memory bytes. Camera frames are never sent with those requests.
 - GPU initialization falls back to CPU when needed.
 - There are no accounts, application secrets, analytics, databases, or application APIs.
@@ -146,7 +153,7 @@ Read [Building Ultra Vision with Codex](./docs/BUILDING_WITH_CODEX.md) for the d
 
 ## Project status
 
-Ultra Vision is an active experimental project. Vision, two-deck mixing, and the real-browser camera lifecycle are functional and automated. Phase-aware sync, a broader measured hand-gesture fixture corpus, measured long-session performance, and the Replay Studio interface remain future work.
+Ultra Vision is an active experimental project. Vision, two-deck mixing, dual-hand control, bounded local audio replay, and the real-browser camera lifecycle are functional. Phrase-aware mixing for uploaded tracks, video replay and hosted sharing, a broader measured hand-gesture fixture corpus, and measured long-session performance remain future work.
 
 Read the [roadmap](./ROADMAP.md), [testing strategy](./docs/TESTING.md), and [contributor guide](./CONTRIBUTING.md). Focused issues and pull requests are welcome.
 

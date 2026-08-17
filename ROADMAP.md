@@ -7,8 +7,11 @@ Git tag or GitHub Release exists.
 ## Release candidate — v0.2.0 (not tagged)
 
 - [x] Two focused product surfaces: DJ Room and Vision.
-- [x] Generated demo tracks, local track loading, two-deck playback, filtering,
+- [x] Bundled original demo tracks, local track loading, two-deck playback, filtering,
       channel levels, crossfading, and reversible BPM-rate matching.
+- [x] Independent left-hand/Deck A and right-hand/Deck B control.
+- [x] Authored-bar Demo Air Mix, honest upload Assisted Fade, decoded waveforms,
+      and bounded browser-local audio replay with preview and download.
 - [x] A guided first mix with explicit camera-off and recovery paths.
 - [x] Open-palm clutch, relative no-jump takeover, and safe gesture release.
 - [x] Deterministic camera, gesture, audio, permission, and lifecycle tests.
@@ -31,14 +34,15 @@ Git tag or GitHub Release exists.
 
 ## Next — make mixing more musically intelligent
 
-- [ ] Decode track waveforms and add confidence-aware beat and downbeat positions.
+- [ ] Add confidence-aware downbeat and phrase positions beyond the current
+      decoded waveform plus estimated beat/bar grid.
 - [ ] Add phase-aware sync against one shared transport clock; keep current BPM
       matching honestly labeled until then.
 - [ ] Add local calibration profiles and dominant-hand selection without storing
       camera frames.
 - [ ] Add keyboard performance shortcuts and a documented shortcut reference.
-- [ ] Build Replay Studio UI on the existing privacy-safe post-master recording
-      foundation.
+- [ ] Extend the shipped audio-only replay into an optional video editor and
+      hosted sharing flow with explicit consent and storage boundaries.
 - [ ] Publish measured startup, frame-rate, control-latency, and 30-minute
       stability results for a documented device/browser matrix.
 

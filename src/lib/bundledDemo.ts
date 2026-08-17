@@ -1,13 +1,17 @@
 export type BundledDemoAsset = {
+  beatsPerBar: 4
   bpm: number
   fileName: string
+  firstBarSeconds: number
   path: `/demo/${string}.mp3`
   title: string
 }
 
 export type BundledDemoTrack = {
+  beatsPerBar: 4
   bpm: number
   file: File
+  firstBarSeconds: number
   title: string
 }
 
@@ -18,14 +22,18 @@ export type BundledDemoLoadOptions = {
 
 export const BUNDLED_DEMO_ASSETS: readonly BundledDemoAsset[] = Object.freeze([
   Object.freeze({
+    beatsPerBar: 4,
     bpm: 120,
     fileName: 'neon-pulse.mp3',
+    firstBarSeconds: 0,
     path: '/demo/neon-pulse.mp3',
     title: 'Neon Pulse',
   }),
   Object.freeze({
+    beatsPerBar: 4,
     bpm: 126,
     fileName: 'midnight-circuit.mp3',
+    firstBarSeconds: 0,
     path: '/demo/midnight-circuit.mp3',
     title: 'Midnight Circuit',
   }),
@@ -63,11 +71,13 @@ async function loadBundledDemoAsset(
   }
 
   return {
+    beatsPerBar: asset.beatsPerBar,
     bpm: asset.bpm,
     file: new File([blob], asset.fileName, {
       lastModified: 0,
       type: blob.type || 'audio/mpeg',
     }),
+    firstBarSeconds: asset.firstBarSeconds,
     title: asset.title,
   }
 }

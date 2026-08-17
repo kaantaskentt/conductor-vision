@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { equalPowerCrossfade } from '../lib/djAudio'
 import {
+  planAirMix,
+  sourceOnlyCrossfader,
+  type AirMixMode,
+  type AirMixSourceKind,
+} from '../lib/airMixTransition'
+import {
   assignHandsToStableSlots,
   createHandAssignmentState,
   type HandAssignmentState,
@@ -26,6 +32,17 @@ import { clamp, type GestureFrame, type HandSummary } from '../lib/vision'
 export type DeckId = 'a' | 'b'
 export type DjControl = 'crossfader' | 'volume' | 'filter'
 export type PerformanceControl = 'volume' | 'filter'
+export type AirMixPhase = 'idle' | 'scheduled' | 'fading' | 'complete' | 'error'
+export type AirMixDirection = 'a-to-b' | 'b-to-a'
+export type AirMixState = {
+  copy: string
+  direction: AirMixDirection | null
+  mode: AirMixMode | null
+  phase: AirMixPhase
+  progress: number
+  scheduledAt: number | null
+  startDelayMs: number
+}
 export type GestureSessionReleaseReason =
   | 'camera-stopped'
   | 'camera-error'
@@ -46,6 +63,8 @@ export const DJ_NEUTRAL_VALUES = {
 export const DJ_WAVEFORM_SAMPLES = 44
 
 export type DeckState = {
+  authoredBarOffsetSeconds: number | null
+  authoredBeatsPerBar: number | null
   name: string
   loaded: boolean
   playing: boolean
@@ -64,6 +83,7 @@ export type DeckState = {
   beatGridConfidence: number
   analysisStatus: string
   error: string | null
+  sourceKind: AirMixSourceKind
 }
 
 type DeckNodes = {
@@ -84,11 +104,25 @@ type BpmSyncSnapshot = {
 }
 
 type LoadFileOptions = {
+  authoredBarOffsetSeconds?: number
+  authoredBeatsPerBar?: number
   knownBpm?: number
   title?: string
   loop?: boolean
   demoGeneration?: AbortController
   preload?: 'auto' | 'metadata'
+  sourceKind?: Exclude<AirMixSourceKind, 'none'>
+}
+
+type ActiveAirMixRun = {
+  animationFrame: number | null
+  fadeDurationMs: number
+  generation: number
+  sourceId: DeckId
+  startedTarget: boolean
+  targetId: DeckId
+  targetOriginalTempo: number
+  timeout: ReturnType<typeof setTimeout> | null
 }
 
 type PositionGesture = {
@@ -132,6 +166,16 @@ const GESTURE_SESSION_RELEASE_MESSAGES: Record<GestureSessionReleaseReason, stri
   'camera-stopped': 'Camera stopped · Air Controls released',
   'camera-error': 'Camera unavailable · Air Controls released',
   'left-dj-room': 'Air Controls released · open your palm to grab again',
+}
+
+const INITIAL_AIR_MIX_STATE: AirMixState = {
+  copy: 'Ready for one smooth transition',
+  direction: null,
+  mode: null,
+  phase: 'idle',
+  progress: 0,
+  scheduledAt: null,
+  startDelayMs: 0,
 }
 
 export function validateAudioFile(file: File) {
@@ -431,6 +475,8 @@ export function createBpmAnalysisQueue(analyze: BpmAnalyzer = detectBpm) {
 
 function initialDeckState(): DeckState {
   return {
+    authoredBarOffsetSeconds: null,
+    authoredBeatsPerBar: null,
     name: 'No track loaded',
     loaded: false,
     playing: false,
@@ -449,17 +495,8 @@ function initialDeckState(): DeckState {
     beatGridConfidence: 0,
     analysisStatus: 'Load a track',
     error: null,
+    sourceKind: 'none',
   }
-}
-
-function generatedDemoOverview(id: DeckId, bucketCount = 512) {
-  const phase = id === 'a' ? 0.35 : 1.2
-  return Array.from({ length: bucketCount }, (_, index) => {
-    const pulse = Math.abs(Math.sin(index * 0.17 + phase)) * 0.52
-    const phrase = Math.abs(Math.sin(index * 0.043 + phase * 0.5)) * 0.24
-    const contour = 0.72 + Math.sin((index / bucketCount) * Math.PI) * 0.28
-    return Math.round(clamp((0.16 + pulse + phrase) * contour) * 10_000) / 10_000
-  })
 }
 
 function deckLabel(id: DeckId) {
@@ -518,6 +555,7 @@ export function useDjMixer() {
     Record<DeckId, PerformanceControl>
   >({ a: 'volume', b: 'filter' })
   const [performanceAudioReady, setPerformanceAudioReady] = useState(false)
+  const [airMix, setAirMix] = useState<AirMixState>(INITIAL_AIR_MIX_STATE)
   const [gestureStatus, setGestureStatus] = useState('Waiting for a hand')
   const [gesturePhase, setGesturePhase] = useState<'locked' | 'calibrating' | 'armed'>(
     'locked',
@@ -581,6 +619,10 @@ export function useDjMixer() {
   >({ a: null, b: null })
   const lastHandGestureUpdateAtRef = useRef<Record<DeckId, number>>({ a: 0, b: 0 })
   const handAssignmentRef = useRef<HandAssignmentState>(createHandAssignmentState())
+  const performanceAudioReadyRef = useRef(false)
+  const airMixGenerationRef = useRef(0)
+  const airMixRunRef = useRef<ActiveAirMixRun | null>(null)
+  const cancelAirMixRef = useRef<(silent?: boolean) => void>(() => undefined)
 
   useEffect(() => {
     decksRef.current = decks
@@ -593,6 +635,10 @@ export function useDjMixer() {
   useEffect(() => {
     performanceControlsRef.current = performanceControls
   }, [performanceControls])
+
+  useEffect(() => {
+    performanceAudioReadyRef.current = performanceAudioReady
+  }, [performanceAudioReady])
 
   const patchDeck = useCallback((id: DeckId, patch: Partial<DeckState>) => {
     setDecks((current) => {
@@ -636,7 +682,13 @@ export function useDjMixer() {
   )
 
   const queueTrackAnalysis = useCallback(
-    (id: DeckId, file: File, requestId: number, knownBpm?: number | null) => {
+    (
+      id: DeckId,
+      file: File,
+      requestId: number,
+      knownBpm?: number | null,
+      preserveAuthoredGrid = false,
+    ) => {
       if (file.size > MAX_TRACK_ANALYSIS_BYTES) {
         patchDeck(id, { analysisStatus: 'Large track ready · beat overview skipped' })
         return
@@ -655,18 +707,26 @@ export function useDjMixer() {
         if (bpmRequestRef.current[id] !== requestId) return
         patchDeck(id, {
           overview: analysis?.overview ?? [],
-          beats: analysis?.beats ?? [],
-          bars: analysis?.bars ?? [],
-          beatGridConfidence: analysis?.beatGridConfidence ?? 0,
-          analysisStatus: analysis
-            ? analysis.beats.length
-              ? 'Waveform ready · beat and bar lines are estimated'
-              : 'Waveform ready · no reliable beat grid found'
-            : 'Track ready · waveform analysis unavailable',
+          beats: preserveAuthoredGrid ? [] : analysis?.beats ?? [],
+          bars: preserveAuthoredGrid ? [] : analysis?.bars ?? [],
+          beatGridConfidence: preserveAuthoredGrid ? 1 : analysis?.beatGridConfidence ?? 0,
+          analysisStatus: preserveAuthoredGrid
+            ? analysis
+              ? 'Bundled demo waveform ready · authored tempo grid'
+              : 'Bundled demo ready · waveform analysis unavailable'
+            : analysis
+              ? analysis.beats.length
+                ? 'Waveform ready · beat and bar lines are estimated'
+                : 'Waveform ready · no reliable beat grid found'
+              : 'Track ready · waveform analysis unavailable',
         })
       }).catch(() => {
         if (bpmRequestRef.current[id] === requestId) {
-          patchDeck(id, { analysisStatus: 'Track ready · waveform analysis unavailable' })
+          patchDeck(id, {
+            analysisStatus: preserveAuthoredGrid
+              ? 'Bundled demo ready · waveform analysis unavailable'
+              : 'Track ready · waveform analysis unavailable',
+          })
         }
       })
     },
@@ -956,6 +1016,7 @@ export function useDjMixer() {
   const loadFile = useCallback(
     async (id: DeckId, file?: File, options: LoadFileOptions = {}) => {
       if (!file) return false
+      cancelAirMixRef.current()
       if (
         demoGenerationRef.current &&
         options.demoGeneration !== demoGenerationRef.current
@@ -969,6 +1030,7 @@ export function useDjMixer() {
         // Every accepted source needs a fresh trusted Start click before air
         // transport can rely on browser audio permission again.
         setPerformanceAudioReady(false)
+        performanceAudioReadyRef.current = false
         const requestId = bpmRequestRef.current[id] + 1
         bpmRequestRef.current[id] = requestId
         disarmGesture(`${deckLabel(id)} changed · gesture pickup reset`)
@@ -1006,6 +1068,15 @@ export function useDjMixer() {
           ...initialDeckState(),
           name: options.title ?? file.name.replace(/\.[^.]+$/, ''),
           loaded: true,
+          authoredBarOffsetSeconds:
+            options.sourceKind === 'demo' || options.demoGeneration
+              ? options.authoredBarOffsetSeconds ?? null
+              : null,
+          authoredBeatsPerBar:
+            options.sourceKind === 'demo' || options.demoGeneration
+              ? options.authoredBeatsPerBar ?? null
+              : null,
+          sourceKind: options.sourceKind ?? (options.demoGeneration ? 'demo' : 'local'),
           bpm: knownBpm,
           bpmStatus: knownBpm ? `${knownBpm} BPM demo` : 'Waiting for BPM analysis…',
           analysisStatus: 'Waiting for waveform analysis…',
@@ -1013,9 +1084,9 @@ export function useDjMixer() {
         if (knownBpm) {
           if (options.demoGeneration) {
             patchDeck(id, {
-              overview: generatedDemoOverview(id),
-              analysisStatus: 'Bundled demo overview · authored tempo grid',
+              analysisStatus: 'Analyzing bundled waveform · authored tempo grid',
             })
+            queueTrackAnalysis(id, file, requestId, knownBpm, true)
             return true
           }
           queueTrackAnalysis(id, file, requestId, knownBpm)
@@ -1071,6 +1142,7 @@ export function useDjMixer() {
 
   const togglePlayback = useCallback(
     async (id: DeckId) => {
+      cancelAirMixRef.current()
       const audio = audioElementsRef.current[id]
       if (!audio || !decksRef.current[id].loaded) return
       try {
@@ -1091,6 +1163,7 @@ export function useDjMixer() {
   )
 
   const toggleBoth = useCallback(async () => {
+    cancelAirMixRef.current()
     const readyIds = DECK_IDS.filter((id) => decksRef.current[id].loaded)
     if (readyIds.length !== 2) {
       setGestureStatus('Load both decks to start them together')
@@ -1122,6 +1195,7 @@ export function useDjMixer() {
   }, [ensureDeckGraph, patchDeck])
 
   const startPerformance = useCallback(async () => {
+    cancelAirMixRef.current()
     const readyIds = DECK_IDS.filter((id) => decksRef.current[id].loaded)
     if (!readyIds.length) {
       setGestureStatus('Load at least one track before starting the performance')
@@ -1158,8 +1232,13 @@ export function useDjMixer() {
       }
 
       await Promise.all([leadGraphReady, ...playbackPromises])
+      const leadCrossfader = sourceOnlyCrossfader(leadId)
+      crossfaderRef.current = leadCrossfader
+      setCrossfaderState(leadCrossfader)
+      updateCrossfadeNodes(leadCrossfader)
       for (const id of readyIds) patchDeck(id, { error: null })
       setPerformanceAudioReady(true)
+      performanceAudioReadyRef.current = true
       setGestureStatus(
         primedIds.length
           ? `${deckLabel(leadId)} playing · ${deckLabel(primedIds[0])} ready for air control`
@@ -1189,6 +1268,7 @@ export function useDjMixer() {
         patchDeck(id, { playing: false })
       }
       setPerformanceAudioReady(false)
+      performanceAudioReadyRef.current = false
       const message = error instanceof Error
         ? error.message
         : 'The browser could not enable performance audio.'
@@ -1196,10 +1276,11 @@ export function useDjMixer() {
       setGestureStatus('Sound is still locked · press Start performance again')
       return false
     }
-  }, [ensureDeckGraph, patchDeck])
+  }, [ensureDeckGraph, patchDeck, updateCrossfadeNodes])
 
   const seek = useCallback(
     (id: DeckId, time: number) => {
+      cancelAirMixRef.current()
       const audio = audioElementsRef.current[id]
       if (!audio || !Number.isFinite(audio.duration)) return
       audio.currentTime = clamp(time, 0, audio.duration)
@@ -1210,6 +1291,7 @@ export function useDjMixer() {
 
   const cueDeck = useCallback(
     (id: DeckId) => {
+      cancelAirMixRef.current()
       const audio = audioElementsRef.current[id]
       if (!audio || !decksRef.current[id].loaded) return
       audio.pause()
@@ -1394,8 +1476,279 @@ export function useDjMixer() {
     [updateCrossfadeNodes],
   )
 
+  const setCrossfaderAudioOnly = useCallback(
+    (value: number) => {
+      const next = Math.round(clamp(value, -100, 100))
+      crossfaderRef.current = next
+      updateCrossfadeNodes(next)
+      return next
+    },
+    [updateCrossfadeNodes],
+  )
+
+  const cancelAirMix = useCallback(
+    (silent = false) => {
+      airMixGenerationRef.current += 1
+      const run = airMixRunRef.current
+      airMixRunRef.current = null
+      if (run) {
+        if (run.timeout !== null) clearTimeout(run.timeout)
+        if (run.animationFrame !== null) cancelAnimationFrame(run.animationFrame)
+        setCrossfader(sourceOnlyCrossfader(run.sourceId))
+        applyDeckTempo(run.targetId, run.targetOriginalTempo)
+        const targetAudio = audioElementsRef.current[run.targetId]
+        if (run.startedTarget && targetAudio) {
+          targetAudio.pause()
+          try {
+            targetAudio.currentTime = 0
+            patchDeck(run.targetId, { currentTime: 0, playing: false })
+          } catch {
+            patchDeck(run.targetId, { playing: false })
+          }
+        }
+      }
+      if (!silent) {
+        setAirMix(INITIAL_AIR_MIX_STATE)
+        if (run) setGestureStatus('Air Mix cancelled · source deck restored')
+      }
+    },
+    [applyDeckTempo, patchDeck, setCrossfader],
+  )
+  cancelAirMixRef.current = cancelAirMix
+
+  const startAirMix = useCallback(async () => {
+    cancelAirMix(true)
+    if (!performanceAudioReadyRef.current) {
+      const copy = 'Press Start performance once before using Air Mix.'
+      setAirMix({
+        copy,
+        direction: null,
+        mode: null,
+        phase: 'error',
+        progress: 0,
+        scheduledAt: null,
+        startDelayMs: 0,
+      })
+      setGestureStatus(copy)
+      return false
+    }
+
+    // Air Mix owns the target tempo for the lifetime of this transition.
+    releaseBpmSync('Air Mix released BPM Sync')
+    const liveCurrentTime = (id: DeckId) => {
+      const currentTime = audioElementsRef.current[id]?.currentTime
+      return typeof currentTime === 'number' && Number.isFinite(currentTime)
+        ? currentTime
+        : decksRef.current[id].currentTime
+    }
+    const result = planAirMix({
+      crossfader: crossfaderRef.current,
+      decks: {
+        a: {
+          authoredBarOffsetSeconds: decksRef.current.a.authoredBarOffsetSeconds,
+          authoredBeatsPerBar: decksRef.current.a.authoredBeatsPerBar,
+          beatGridConfidence: decksRef.current.a.beatGridConfidence,
+          bpm: decksRef.current.a.bpm,
+          currentTime: liveCurrentTime('a'),
+          loaded: decksRef.current.a.loaded,
+          playing: decksRef.current.a.playing,
+          sourceKind: decksRef.current.a.sourceKind,
+          tempo: decksRef.current.a.tempo,
+        },
+        b: {
+          authoredBarOffsetSeconds: decksRef.current.b.authoredBarOffsetSeconds,
+          authoredBeatsPerBar: decksRef.current.b.authoredBeatsPerBar,
+          beatGridConfidence: decksRef.current.b.beatGridConfidence,
+          bpm: decksRef.current.b.bpm,
+          currentTime: liveCurrentTime('b'),
+          loaded: decksRef.current.b.loaded,
+          playing: decksRef.current.b.playing,
+          sourceKind: decksRef.current.b.sourceKind,
+          tempo: decksRef.current.b.tempo,
+        },
+      },
+    })
+    if (!result.ok) {
+      setAirMix({
+        copy: result.reason,
+        direction: null,
+        mode: null,
+        phase: 'error',
+        progress: 0,
+        scheduledAt: null,
+        startDelayMs: 0,
+      })
+      setGestureStatus(result.reason)
+      return false
+    }
+
+    const { plan } = result
+    const direction: AirMixDirection = plan.sourceId === 'a' ? 'a-to-b' : 'b-to-a'
+    const generation = airMixGenerationRef.current + 1
+    airMixGenerationRef.current = generation
+    const targetAudio = audioElementsRef.current[plan.targetId]
+    if (!targetAudio) {
+      const copy = `${deckLabel(plan.targetId)} is not ready.`
+      setAirMix({
+        copy,
+        direction,
+        mode: plan.mode,
+        phase: 'error',
+        progress: 0,
+        scheduledAt: null,
+        startDelayMs: 0,
+      })
+      return false
+    }
+
+    const run: ActiveAirMixRun = {
+      animationFrame: null,
+      fadeDurationMs: plan.fadeDurationMs,
+      generation,
+      sourceId: plan.sourceId,
+      startedTarget: false,
+      targetId: plan.targetId,
+      targetOriginalTempo: decksRef.current[plan.targetId].tempo,
+      timeout: null,
+    }
+    airMixRunRef.current = run
+
+    const failRun = (error: unknown) => {
+      if (airMixGenerationRef.current !== generation) return false
+      const copy = error instanceof Error
+        ? error.message
+        : 'Air Mix could not start the other deck.'
+      cancelAirMix(true)
+      setAirMix({
+        copy,
+        direction,
+        mode: plan.mode,
+        phase: 'error',
+        progress: 0,
+        scheduledAt: null,
+        startDelayMs: 0,
+      })
+      setGestureStatus(`${copy} · your source deck is unchanged`)
+      return false
+    }
+
+    try {
+      await ensureDeckGraph(plan.targetId)
+      if (airMixGenerationRef.current !== generation) return false
+      setCrossfader(sourceOnlyCrossfader(plan.sourceId))
+      if (plan.targetTempoPercent !== null) {
+        applyDeckTempo(plan.targetId, plan.targetTempoPercent)
+      }
+    } catch (error) {
+      return failRun(error)
+    }
+
+    const beginFade = async () => {
+      if (airMixGenerationRef.current !== generation || airMixRunRef.current !== run) {
+        return false
+      }
+      try {
+        if (targetAudio.paused) {
+          await targetAudio.play()
+          if (airMixGenerationRef.current !== generation || airMixRunRef.current !== run) {
+            targetAudio.pause()
+            return false
+          }
+          run.startedTarget = true
+        }
+      } catch (error) {
+        return failRun(error)
+      }
+
+      let startedAt: number | null = null
+      let lastPublishedProgress = -1
+      let lastPublishedAt = -Infinity
+      setAirMix({
+        copy: `${plan.copy} · transition in progress`,
+        direction,
+        mode: plan.mode,
+        phase: 'fading',
+        progress: 0,
+        scheduledAt: null,
+        startDelayMs: 0,
+      })
+      setGestureStatus(`Air Mix moving to ${deckLabel(plan.targetId)}`)
+
+      const tick = (now: number) => {
+        if (airMixGenerationRef.current !== generation || airMixRunRef.current !== run) return
+        startedAt ??= now
+        const progress = clamp((now - startedAt) / run.fadeDurationMs, 0, 1)
+        const eased = progress * progress * (3 - 2 * progress)
+        const sourcePosition = sourceOnlyCrossfader(plan.sourceId)
+        const targetPosition = sourceOnlyCrossfader(plan.targetId)
+        const nextCrossfader = setCrossfaderAudioOnly(
+          sourcePosition + (targetPosition - sourcePosition) * eased,
+        )
+        if (
+          progress === 1 ||
+          (progress - lastPublishedProgress >= 0.02 && now - lastPublishedAt >= 80)
+        ) {
+          lastPublishedProgress = progress
+          lastPublishedAt = now
+          setCrossfaderState(nextCrossfader)
+          setAirMix((current) => ({ ...current, progress }))
+        }
+        if (progress < 1) {
+          run.animationFrame = requestAnimationFrame(tick)
+          return
+        }
+
+        run.animationFrame = null
+        airMixRunRef.current = null
+        audioElementsRef.current[plan.sourceId]?.pause()
+        patchDeck(plan.sourceId, { playing: false })
+        setAirMix({
+          copy: `Air Mix complete · ${deckLabel(plan.targetId)} is live`,
+          direction,
+          mode: plan.mode,
+          phase: 'complete',
+          progress: 1,
+          scheduledAt: null,
+          startDelayMs: 0,
+        })
+        setGestureStatus(`Air Mix complete · ${deckLabel(plan.targetId)} is live`)
+      }
+      run.animationFrame = requestAnimationFrame(tick)
+      return true
+    }
+
+    if (plan.startDelayMs > 0) {
+      setAirMix({
+        copy: plan.copy,
+        direction,
+        mode: plan.mode,
+        phase: 'scheduled',
+        progress: 0,
+        scheduledAt: performance.now() + plan.startDelayMs,
+        startDelayMs: plan.startDelayMs,
+      })
+      setGestureStatus(`${plan.copy} · keep the source deck playing`)
+      run.timeout = setTimeout(() => {
+        run.timeout = null
+        void beginFade()
+      }, plan.startDelayMs)
+      return true
+    }
+
+    return beginFade()
+  }, [
+    applyDeckTempo,
+    cancelAirMix,
+    ensureDeckGraph,
+    patchDeck,
+    releaseBpmSync,
+    setCrossfader,
+    setCrossfaderAudioOnly,
+  ])
+
   const claimManualControl = useCallback(
     (control: DjControl, deck: DeckId = activeDeck) => {
+      cancelAirMixRef.current()
       const label = control === 'volume' ? 'level' : control
       disarmGesture(
         control === 'crossfader'
@@ -1407,6 +1760,7 @@ export function useDjMixer() {
   )
 
   const toggleBpmSync = useCallback(() => {
+    cancelAirMixRef.current()
     if (bpmSyncRef.current) {
       releaseBpmSync()
       setGestureStatus('BPM Sync off · original tempos restored')
@@ -1470,6 +1824,7 @@ export function useDjMixer() {
 
   const resetControl = useCallback(
     (control: DjControl = selectedControl, deck: DeckId = activeDeck) => {
+      cancelAirMixRef.current()
       disarmGesture()
       if (control === 'crossfader') {
         setCrossfader(DJ_NEUTRAL_VALUES.crossfader)
@@ -1495,6 +1850,7 @@ export function useDjMixer() {
   )
 
   const resetMix = useCallback(() => {
+    cancelAirMixRef.current()
     disarmGesture()
     const syncSnapshot = bpmSyncRef.current
     bpmSyncRef.current = null
@@ -1540,18 +1896,24 @@ export function useDjMixer() {
       if (generation.signal.aborted) return false
       const loaded = await Promise.all([
         loadFile('a', deckA.file, {
+          authoredBarOffsetSeconds: deckA.firstBarSeconds,
+          authoredBeatsPerBar: deckA.beatsPerBar,
           knownBpm: deckA.bpm,
           title: deckA.title,
           loop: true,
           preload: 'auto',
           demoGeneration: generation,
+          sourceKind: 'demo',
         }),
         loadFile('b', deckB.file, {
+          authoredBarOffsetSeconds: deckB.firstBarSeconds,
+          authoredBeatsPerBar: deckB.beatsPerBar,
           knownBpm: deckB.bpm,
           title: deckB.title,
           loop: true,
           preload: 'auto',
           demoGeneration: generation,
+          sourceKind: 'demo',
         }),
       ])
       if (generation.signal.aborted) return false
@@ -1585,6 +1947,7 @@ export function useDjMixer() {
 
   const tapTempo = useCallback(
     (id: DeckId) => {
+      cancelAirMixRef.current()
       releaseBpmSync('Tap BPM released BPM Sync')
       const now = performance.now()
       const recent = tapTimesRef.current[id].filter((time) => now - time < 2_500)
@@ -2105,7 +2468,21 @@ export function useDjMixer() {
     const captureReleases = masterCaptureReleasesRef.current
     const captureGeneration = captureGenerationRef
     const handFilterReleaseTimers = handFilterReleaseTimersRef.current
+    const audioElements = audioElementsRef.current
     return () => {
+      airMixGenerationRef.current += 1
+      const airMixRun = airMixRunRef.current
+      airMixRunRef.current = null
+      if (airMixRun?.timeout !== null && airMixRun?.timeout !== undefined) {
+        clearTimeout(airMixRun.timeout)
+      }
+      if (
+        airMixRun?.animationFrame !== null &&
+        airMixRun?.animationFrame !== undefined
+      ) {
+        cancelAnimationFrame(airMixRun.animationFrame)
+      }
+      if (airMixRun?.startedTarget) audioElements[airMixRun.targetId]?.pause()
       captureGeneration.current += 1
       for (const id of DECK_IDS) bpmRequests[id] += 1
       demoGeneration.current?.abort()
@@ -2131,6 +2508,7 @@ export function useDjMixer() {
     selectedControl,
     performanceControls,
     performanceAudioReady,
+    airMix,
     gestureStatus,
     gesturePhase,
     gestureReleaseRequired,
@@ -2148,6 +2526,8 @@ export function useDjMixer() {
     togglePlayback,
     toggleBoth,
     startPerformance,
+    startAirMix,
+    cancelAirMix,
     cueDeck,
     seek,
     jumpToPhrase,

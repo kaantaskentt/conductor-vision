@@ -24,9 +24,11 @@ function ScreenIcon({ screen }: { screen: Screen }) {
 export function AppHeader({
   screen,
   onScreenChange,
+  navigationLocked = false,
 }: {
   screen: Screen
   onScreenChange: (screen: Screen) => void
+  navigationLocked?: boolean
 }) {
   return (
     <header className="app-header">
@@ -45,6 +47,10 @@ export function AppHeader({
             type="button"
             className={screen === item ? 'active' : ''}
             aria-current={screen === item ? 'page' : undefined}
+            disabled={navigationLocked && screen !== item}
+            title={navigationLocked && screen !== item
+              ? 'Stop the local recording before leaving DJ Room'
+              : undefined}
             onClick={() => onScreenChange(item)}
           >
             <ScreenIcon screen={item} />

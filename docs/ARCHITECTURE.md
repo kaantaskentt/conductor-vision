@@ -11,11 +11,13 @@ flowchart LR
   Runtime --> Face[Optional face and pixel analysis]
   Hand --> Gesture[Gesture controller]
   Gesture --> Mixer[Web Audio mixer]
-  Demo[Generated demo tracks] --> Mixer
+  Demo[Bundled original demo tracks] --> Mixer
   Files[Local audio files] --> Mixer
+  Mixer --> Transition[Air Mix transition state machine]
+  Transition --> Mixer
   Mixer --> Master[Master limiter]
   Master --> Output[Device output]
-  Master -. On-demand local tap .-> Replay[Bounded replay recorder]
+  Master -. On-demand local tap .-> Replay[Bounded audio-only replay]
 ```
 
 ## Vision runtime
@@ -36,15 +38,20 @@ React state mirrors user-facing deck status. Refs own high-frequency or imperati
 
 Full-track waveform and beat-grid analysis is additive: it feeds the visual beat workspace without replacing the original BPM queue, gesture clutch, filter release, or deck-control behavior. Beat and bar markers are estimates rather than phase or downbeat claims.
 
-## Air Mix Replay foundation
+## Air Mix and local replay
+
+`airMixTransition` plans one source-to-target transition without pretending every uploaded file has a trustworthy beat grid. When both sources are the bundled demos, their authored BPM and bar-offset metadata schedule Demo Air Mix on the next authored bar. Local or mixed-source decks use an immediate 4.8-second Assisted Fade. Assisted Fade applies a bounded estimated tempo match only when both local beat analyses clear the confidence threshold; it does not claim downbeat, phase, or phrase alignment.
+
+`useDjMixer` owns the transition lifetime. It starts the target deck, applies an equal-power crossfade, pauses the source after completion, and restores the source side and target tempo if the transition is cancelled or cannot start. Transport, seeking, track replacement, reset, or a new sync action cancels the active transition so stale scheduled work cannot override newer user intent.
 
 `createMasterCapture` creates an isolated, releasable `MediaStreamAudioDestinationNode` after the master dynamics stage. Releasing that tap disconnects only the recorder branch, so it cannot mute the speaker path or stop either deck.
 
-`airMixReplay` owns the local recorder state machine, codec negotiation, duration and memory ceilings, final-chunk ordering, object URL cleanup, and stale-session protection. It accepts a dedicated canvas plus the post-master audio handle; it does not request the camera, microphone, network, or screen. The recording engine is intentionally not connected to a visible product control until a Replay Studio visual direction is selected and browser-verified.
+`localReplay` owns the shipped audio-only recorder state machine, codec negotiation, duration and memory ceilings, final-chunk ordering, object URL cleanup, and stale-session protection. `useLocalReplay` connects it to the post-master capture handle and the DJ Room's Record control. A finished artifact can be previewed, downloaded, or discarded in the same tab. The recorder requests no camera, microphone, network, or screen capture; the separate canvas-plus-audio engine remains an unshipped foundation for possible future video export.
 
 ## Trust boundaries
 
 - Camera and media remain in the tab.
+- Audio replay remains in bounded browser memory while it is previewed, until it is discarded or the tab closes. Download saves a local copy; there is no upload or application-persistence path.
 - Lock-pinned MediaPipe WASM is served from the application origin. Hand and face model bundles remain external because their object URLs do not publish clear model-specific redistribution terms; Ultra Vision accepts them only after HTTP success, exact byte length, and SHA-256 verification, then passes the verified bytes through `modelAssetBuffer` before requesting camera permission.
 - The model host is permitted only by `connect-src`, never `script-src`, and model requests contain no camera frames.
 - Object URLs are revoked when tracks are replaced or the mixer unmounts.

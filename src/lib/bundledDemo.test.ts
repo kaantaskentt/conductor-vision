@@ -28,22 +28,28 @@ describe('bundled demo loader', () => {
         { credentials: 'same-origin', signal },
       ],
     ])
-    expect(tracks.map(({ bpm, file, title }) => ({
+    expect(tracks.map(({ beatsPerBar, bpm, file, firstBarSeconds, title }) => ({
+      beatsPerBar,
       bpm,
+      firstBarSeconds,
       lastModified: file.lastModified,
       name: file.name,
       title,
       type: file.type,
     }))).toEqual([
       {
+        beatsPerBar: 4,
         bpm: 120,
+        firstBarSeconds: 0,
         lastModified: 0,
         name: 'neon-pulse.mp3',
         title: 'Neon Pulse',
         type: 'audio/mpeg',
       },
       {
+        beatsPerBar: 4,
         bpm: 126,
+        firstBarSeconds: 0,
         lastModified: 0,
         name: 'midnight-circuit.mp3',
         title: 'Midnight Circuit',

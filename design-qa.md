@@ -2,8 +2,9 @@
 
 ## Comparison inputs
 
-- Source concept: `/Users/kaantaskent/.codex/generated_images/019f6e2f-6ca4-7df1-b6d7-b38466db7143/exec-d165389f-271a-4ea3-a5e0-6024e15ba99f.png`
-- Side-by-side full-flow comparison: `/tmp/ultra-vision-design-comparison.png`
+- Source concept: `/Users/kaantaskent/.codex/generated_images/019f6e2f-6ca4-7df1-b6d7-b38466db7143/exec-3a3d8ba5-235b-4a2f-b4d5-0811777de5cd.png`
+- Latest side-by-side performance comparison: `/tmp/ultra-vision-concept-vs-build.png`
+- Latest implementation capture: `/tmp/ultra-vision-final-performance.png`
 - Desktop implementation captures:
   - `/tmp/ultra-vision-camera-desktop-final.png`
   - `/tmp/ultra-vision-tracks-desktop-final.png`
@@ -11,10 +12,10 @@
 - Mobile implementation captures:
   - `/tmp/ultra-vision-camera-mobile-final.png`
   - `/tmp/ultra-vision-perform-mobile-final.png`
-- Source pixels: 864 × 1821, containing the three intended states.
+- Selected source concept: 1487 × 1058 performance state.
 - Desktop QA viewport: 1280 × 720 CSS pixels at device scale 1.
 - Mobile QA viewport: 390 × 844 CSS pixels at device scale 1.
-- States reviewed: camera off, generated demo tracks loaded, camera-off demo performance. Real camera lifecycle and deterministic open-palm behavior are covered by browser tests.
+- States reviewed: camera off, bundled demo tracks loaded, camera-off demo performance, Air Mix, recording lock, and local replay. Real camera lifecycle and deterministic open-palm behavior are covered by browser tests.
 
 ## Full-view comparison
 
@@ -43,6 +44,9 @@ The implementation deliberately uses the existing Ultra Vision header and the sh
 - The centered camera measures 1160 × 290 at 1280 × 720, larger than the former DJ Room camera while leaving both waveforms visible.
 - CUE and PLAY/PAUSE targets sit at the camera edges. VOLUME and FILTER are the only continuous controls presented in the primary surface.
 - BPM Sync appears once, centered between the camera and waveforms, with honest disabled and locked states.
+- Demo Air Mix shares that compact command bar, schedules from authored bar metadata, and exposes progress plus cancel without covering the camera. Uploaded files use the honest `Assisted Fade` label.
+- The Record action captures only the local post-master audio. Its modal preview has native focus containment, Download, Keep for this tab, and Discard actions.
+- Bundled waveforms are decoded from the shipped MP3 audio; authored demo timing supplies the visible beat and bar grid. Uploaded-track timing remains clearly labeled as estimated.
 - The waveform stack ends at y=706 in the 720-pixel viewport. Deck A and Deck B remain simultaneously visible.
 - The mobile camera is 366 × 330. Edge targets are 78 × 94 and center controls are 95 × 49, with no horizontal overflow.
 
@@ -53,6 +57,8 @@ The implementation deliberately uses the existing Ultra Vision header and the sh
 - P2 onboarding: the initial low-height camera layout hid the demo fallback below the fold. Fixed with a 280-pixel low-height setup camera; the primary action, demo fallback, and privacy statement now remain visible.
 - P2 recovery: a camera failure during performance only exposed a retry button. Fixed by adding the camera message beside the performance controls with an alert role.
 - P3 visual difference: the no-camera implementation uses the existing abstract hand artwork instead of the source concept's photographed performer. Accepted because the product must not imply a live camera image before permission; real video replaces the artwork after consent.
+- P1 transition timing: reverse Air Mix originally mixed media time with wall time after tempo matching. Fixed by computing the authored media-bar remainder first, then converting it through playback rate. Forward and reverse transitions are now covered.
+- P1 recording safety: leaving DJ Room could discard an active local take. Fixed by locking the top navigation while recording and restoring it as soon as the preview is ready.
 
 ## Final result
 

@@ -1,9 +1,13 @@
 import {
+  ArrowLeftRight,
   Camera,
   Check,
+  Circle,
   Disc3,
+  Download,
   Hand,
   Lock,
+  MoreHorizontal,
   Pause,
   Play,
   RefreshCw,
@@ -11,6 +15,8 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Square,
+  Trash2,
   Upload,
   Volume2,
 } from 'lucide-react'
@@ -27,6 +33,7 @@ import airMixMotion from '../assets/air-mix-motion.jpg'
 import { CameraStage } from '../components/AppShell'
 import { PerformanceWaveform } from '../components/PerformanceWaveform'
 import type { DeckId, useDjMixer } from '../hooks/useDjMixer'
+import { useLocalReplay } from '../hooks/useLocalReplay'
 import type { useVisionRuntime } from '../hooks/useVisionRuntime'
 import {
   airTargetAtBounds,
@@ -99,6 +106,12 @@ function isPointingHand(hand: HandSummary | null) {
 
 function deckLabel(id: DeckId) {
   return id === 'a' ? 'Deck A' : 'Deck B'
+}
+
+function formatReplayDuration(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1_000))
+  const minutes = Math.floor(totalSeconds / 60)
+  return `${minutes}:${(totalSeconds % 60).toString().padStart(2, '0')}`
 }
 
 function FlowProgress({
@@ -242,13 +255,16 @@ function PerformanceTarget({
 export function DjRoomScreen({
   vision,
   mixer,
+  onNavigationLockChange,
 }: {
   vision: ReturnType<typeof useVisionRuntime>
   mixer: ReturnType<typeof useDjMixer>
+  onNavigationLockChange?: (locked: boolean) => void
 }) {
   const deckAInputRef = useRef<HTMLInputElement | null>(null)
   const deckBInputRef = useRef<HTMLInputElement | null>(null)
   const cameraShellRef = useRef<HTMLDivElement | null>(null)
+  const replayDialogRef = useRef<HTMLDialogElement | null>(null)
   const cameraAdvancePendingRef = useRef(false)
   const handAssignmentRef = useRef<HandAssignmentState>(createHandAssignmentState())
   const airDwellRef = useRef<Record<AirHandSlot, AirDwellState>>({
@@ -256,10 +272,10 @@ export function DjRoomScreen({
     right: createAirDwellState(),
   })
   const [step, setStep] = useState<DjFlowStep>(() => {
-    if (vision.status !== 'running') return 'camera'
-    return mixer.performanceAudioReady && (mixer.decks.a.loaded || mixer.decks.b.loaded)
-      ? 'perform'
-      : 'tracks'
+    if (mixer.performanceAudioReady && (mixer.decks.a.loaded || mixer.decks.b.loaded)) {
+      return 'perform'
+    }
+    return vision.status === 'running' ? 'tracks' : 'camera'
   })
   const [cameraBypassed, setCameraBypassed] = useState(false)
   const [performanceStarting, setPerformanceStarting] = useState(false)
@@ -273,22 +289,47 @@ export function DjRoomScreen({
     right: createAirDwellState(),
   })
   const {
+    cancelAirMix,
     cueDeck: cueMixerDeck,
     decks,
     selectPerformanceControl,
     setPerformanceGestureInputEnabled,
     togglePlayback,
   } = mixer
+  const replay = useLocalReplay({ createMasterCapture: mixer.createMasterCapture })
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null)
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0)
+  const [replayPreviewOpen, setReplayPreviewOpen] = useState(false)
+  const [airMixCountdownMs, setAirMixCountdownMs] = useState(0)
 
   const anyTrackLoaded = decks.a.loaded || decks.b.loaded
   const bothTracksLoaded = decks.a.loaded && decks.b.loaded
-  const interactionLocked = performanceStarting || mixer.demoLoading
+  const replayActive = replay.status === 'recording' || replay.busy
+  const interactionLocked = performanceStarting || mixer.demoLoading || replayActive
   const canOpenTracks = vision.status === 'running' || cameraBypassed || anyTrackLoaded
   const canPerform = anyTrackLoaded
   const canSync = Boolean(
     bothTracksLoaded && decks.a.bpm && decks.b.bpm,
   )
   const anyPointing = AIR_HAND_SLOTS.some((slot) => isPointingHand(stableHands[slot]))
+  const airMixModeLabel = (mixer.airMix.mode === 'demo-air-mix' || (
+    mixer.airMix.mode === null &&
+    decks.a.sourceKind === 'demo' &&
+    decks.b.sourceKind === 'demo'
+  )) ? 'Demo Air Mix' : 'Assisted Fade'
+  const airMixRunning = mixer.airMix.phase === 'scheduled' || mixer.airMix.phase === 'fading'
+  const airMixVisible = mixer.airMix.phase !== 'idle'
+  const airMixStatus = mixer.airMix.phase === 'scheduled'
+    ? `NEXT BAR ${(airMixCountdownMs / 1_000).toFixed(1)}s`
+    : mixer.airMix.phase === 'fading'
+      ? `${Math.round(mixer.airMix.progress * 100)}%`
+      : mixer.airMix.phase === 'complete'
+        ? 'COMPLETE'
+        : mixer.airMix.phase === 'error'
+          ? 'RETRY'
+          : bothTracksLoaded
+            ? 'READY'
+            : 'NEEDS 2 DECKS'
   const airPointers = useMemo(() => ({
     left: stableHands.left && cameraGeometry
       ? mapCameraPointToStage(
@@ -305,6 +346,61 @@ export function DjRoomScreen({
         )
       : null,
   }), [cameraGeometry, stableHands])
+
+  useEffect(() => {
+    if (replay.status !== 'recording') {
+      setRecordingStartedAt(null)
+      if (replay.artifact) setRecordingElapsedMs(replay.artifact.durationMs)
+      else if (!replay.busy) setRecordingElapsedMs(0)
+      return
+    }
+
+    const startedAt = recordingStartedAt ?? Date.now()
+    if (recordingStartedAt === null) setRecordingStartedAt(startedAt)
+    const update = () => setRecordingElapsedMs(Date.now() - startedAt)
+    update()
+    const interval = window.setInterval(update, 250)
+    return () => window.clearInterval(interval)
+  }, [recordingStartedAt, replay.artifact, replay.busy, replay.status])
+
+  useEffect(() => {
+    onNavigationLockChange?.(replayActive)
+    return () => onNavigationLockChange?.(false)
+  }, [onNavigationLockChange, replayActive])
+
+  useEffect(() => {
+    if (replay.status === 'preview' && replay.artifact) setReplayPreviewOpen(true)
+    else if (replay.status !== 'preview') setReplayPreviewOpen(false)
+  }, [replay.artifact, replay.status])
+
+  useEffect(() => {
+    const dialog = replayDialogRef.current
+    if (!dialog) return
+    if (replayPreviewOpen && replay.status === 'preview') {
+      if (!dialog.open) {
+        if (typeof dialog.showModal === 'function') dialog.showModal()
+        else dialog.setAttribute('open', '')
+      }
+      return
+    }
+    if (dialog.open) {
+      if (typeof dialog.close === 'function') dialog.close()
+      else dialog.removeAttribute('open')
+    }
+  }, [replay.status, replayPreviewOpen])
+
+  useEffect(() => {
+    if (mixer.airMix.phase !== 'scheduled' || mixer.airMix.scheduledAt === null) {
+      setAirMixCountdownMs(0)
+      return
+    }
+    const update = () => setAirMixCountdownMs(
+      Math.max(0, mixer.airMix.scheduledAt! - performance.now()),
+    )
+    update()
+    const interval = window.setInterval(update, 100)
+    return () => window.clearInterval(interval)
+  }, [mixer.airMix.phase, mixer.airMix.scheduledAt])
 
   const handleCameraGeometryChange = useCallback((next: CameraCoverGeometry) => {
     setCameraGeometry((current) => (
@@ -336,6 +432,12 @@ export function DjRoomScreen({
       if (step === 'perform') setPerformanceGestureInputEnabled(false)
     }
   }, [setPerformanceGestureInputEnabled, step])
+
+  useEffect(() => {
+    if (step !== 'perform' && airMixRunning) cancelAirMix()
+  }, [airMixRunning, cancelAirMix, step])
+
+  useEffect(() => () => cancelAirMix(), [cancelAirMix])
 
   useLayoutEffect(() => {
     const shell = cameraShellRef.current
@@ -512,6 +614,18 @@ export function DjRoomScreen({
     const started = await mixer.startPerformance()
     setPerformanceStarting(false)
     if (started) setStep('perform')
+  }
+
+  const toggleReplay = async () => {
+    if (replay.status === 'recording') {
+      replay.stop('manual')
+      return
+    }
+    if (replay.status === 'preview' && replay.artifact) {
+      setReplayPreviewOpen(true)
+      return
+    }
+    await replay.start()
   }
 
   const cameraButtonLabel = vision.status === 'loading'
@@ -787,19 +901,37 @@ export function DjRoomScreen({
       {step === 'perform' && (
         <section className="uv-performance-workspace" aria-labelledby="uv-performance-title">
           <div className="uv-performance-toolbar">
-            <button
-              type="button"
-              className={`uv-bpm-sync ${mixer.bpmSyncActive ? 'active' : ''}`}
-              onClick={mixer.toggleBpmSync}
-              disabled={!canSync}
-              aria-pressed={mixer.bpmSyncActive}
-              aria-label={canSync ? 'Toggle BPM Sync' : 'Load Deck B and wait for both BPMs to use BPM Sync'}
-              title={canSync ? mixer.bpmSyncMessage : 'Load Deck B and wait for both BPMs to use BPM Sync'}
-            >
-              {mixer.bpmSyncActive ? <Lock aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
-              <span>BPM SYNC</span>
-              <b>{mixer.bpmSyncActive ? 'LOCKED' : canSync ? 'READY' : 'NEEDS 2 DECKS'}</b>
-            </button>
+            <div className="uv-performance-core-actions">
+              <button
+                type="button"
+                className={`uv-command-pill uv-bpm-sync ${mixer.bpmSyncActive ? 'active' : ''}`}
+                onClick={mixer.toggleBpmSync}
+                disabled={!canSync || airMixRunning}
+                aria-pressed={mixer.bpmSyncActive}
+                aria-label={canSync ? 'Toggle BPM Sync' : 'Load Deck B and wait for both BPMs to use BPM Sync'}
+                title={canSync ? mixer.bpmSyncMessage : 'Load Deck B and wait for both BPMs to use BPM Sync'}
+              >
+                {mixer.bpmSyncActive ? <Lock aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
+                <span>BPM SYNC</span>
+                <b>{mixer.bpmSyncActive ? 'LOCKED' : canSync ? 'READY' : 'NEEDS 2 DECKS'}</b>
+              </button>
+              <button
+                type="button"
+                className={`uv-command-pill uv-air-mix ${airMixRunning ? 'active' : ''} phase-${mixer.airMix.phase}`}
+                onClick={() => {
+                  if (airMixRunning) mixer.cancelAirMix()
+                  else void mixer.startAirMix()
+                }}
+                disabled={!bothTracksLoaded}
+                aria-pressed={airMixRunning}
+                aria-label={airMixRunning ? `Cancel ${airMixModeLabel}` : `Start ${airMixModeLabel}`}
+                title={bothTracksLoaded ? mixer.airMix.copy : 'Load both decks before starting Air Mix'}
+              >
+                <ArrowLeftRight aria-hidden="true" />
+                <span>{airMixModeLabel}</span>
+                <b>{airMixStatus}</b>
+              </button>
+            </div>
             <div className="uv-performance-status">
               <strong id="uv-performance-title">Dual hand control</strong>
               <span>
@@ -815,16 +947,64 @@ export function DjRoomScreen({
                   {mixer.decks.a.error ?? mixer.decks.b.error}
                 </span>
               )}
+              {replay.error && (
+                <span className="uv-performance-replay-error" role="alert">
+                  {replay.error.message}
+                </span>
+              )}
             </div>
             <div className="uv-performance-actions">
-              {vision.status === 'running' ? (
-                <button type="button" onClick={vision.stop}><Camera aria-hidden="true" /> Stop camera</button>
-              ) : (
-                <button type="button" onClick={() => void vision.start()}>
-                  <Camera aria-hidden="true" /> {vision.status === 'error' ? 'Retry camera' : 'Start camera'}
-                </button>
-              )}
-              <button type="button" onClick={() => setStep('tracks')}><Upload aria-hidden="true" /> Change tracks</button>
+              <button
+                type="button"
+                className={`uv-record-control ${replay.status === 'recording' ? 'active' : ''}`}
+                onClick={() => void toggleReplay()}
+                disabled={replay.busy || (
+                  replay.status !== 'recording' &&
+                  replay.status !== 'preview' &&
+                  !decks.a.playing &&
+                  !decks.b.playing
+                )}
+                aria-label={replay.status === 'recording'
+                  ? 'Stop audio-only master mix recording'
+                  : replay.status === 'preview'
+                    ? 'Open local master mix replay'
+                    : 'Record audio-only master mix'}
+                title={replay.label}
+              >
+                {replay.status === 'recording'
+                  ? <Square aria-hidden="true" />
+                  : replay.status === 'preview'
+                    ? <Download aria-hidden="true" />
+                    : <Circle aria-hidden="true" />}
+                <span>
+                  {replay.status === 'recording'
+                    ? 'Stop'
+                    : replay.busy
+                      ? 'Saving…'
+                      : replay.status === 'preview'
+                        ? 'Replay'
+                        : 'Record'}
+                </span>
+                {replay.status === 'recording' && <b>{formatReplayDuration(recordingElapsedMs)}</b>}
+              </button>
+              <details className="uv-secondary-menu">
+                <summary aria-label="More performance actions">
+                  <MoreHorizontal aria-hidden="true" />
+                  <span className="sr-only">More performance actions</span>
+                </summary>
+                <div>
+                  {vision.status === 'running' ? (
+                    <button type="button" onClick={vision.stop}><Camera aria-hidden="true" /> Stop camera</button>
+                  ) : (
+                    <button type="button" onClick={() => void vision.start()}>
+                      <Camera aria-hidden="true" /> {vision.status === 'error' ? 'Retry camera' : 'Start camera'}
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setStep('tracks')} disabled={replayActive}>
+                    <Upload aria-hidden="true" /> Change tracks
+                  </button>
+                </div>
+              </details>
             </div>
           </div>
 
@@ -834,6 +1014,24 @@ export function DjRoomScreen({
               deck={mixer.decks.a}
               onSeek={(time) => mixer.seek('a', time)}
             />
+            {airMixVisible && (
+              <div
+                className={`uv-air-mix-rail phase-${mixer.airMix.phase}`}
+                role={mixer.airMix.phase === 'error' ? 'alert' : undefined}
+              >
+                <span>{airMixModeLabel}</span>
+                <strong aria-live="polite">{mixer.airMix.copy}</strong>
+                <progress
+                  className="uv-air-mix-progress"
+                  aria-label={`${airMixModeLabel} progress`}
+                  max={100}
+                  value={Math.round(mixer.airMix.progress * 100)}
+                />
+                <button type="button" onClick={() => mixer.cancelAirMix()}>
+                  {airMixRunning ? 'Cancel' : 'Dismiss'}
+                </button>
+              </div>
+            )}
             <PerformanceWaveform
               deckId="b"
               deck={mixer.decks.b}
@@ -841,9 +1039,44 @@ export function DjRoomScreen({
             />
           </div>
           <p className="uv-beat-note">
-            <ShieldCheck aria-hidden="true" /> Beat and phrase markers are estimates. Audio and camera stay in this browser tab.
+            <ShieldCheck aria-hidden="true" /> Uploaded-track beat and bar markers are estimates. Audio and camera stay in this browser tab.
           </p>
         </section>
+      )}
+
+      {replay.status === 'preview' && replay.artifact && replay.download && (
+        <dialog
+          ref={replayDialogRef}
+          className="uv-replay-sheet"
+          aria-labelledby="uv-replay-title"
+          onCancel={(event) => {
+            event.preventDefault()
+            setReplayPreviewOpen(false)
+          }}
+        >
+          <header>
+            <div>
+              <span>LOCAL REPLAY</span>
+              <h2 id="uv-replay-title">Your master mix is ready</h2>
+            </div>
+            <strong>{formatReplayDuration(replay.artifact.durationMs)}</strong>
+          </header>
+          <p>{replay.label}</p>
+          <audio controls src={replay.artifact.url} preload="metadata">
+            Your browser cannot preview this recording.
+          </audio>
+          <div className="uv-replay-sheet-actions">
+            <a href={replay.download.url} download={replay.download.filename}>
+              <Download aria-hidden="true" /> Download
+            </a>
+            <button type="button" onClick={() => setReplayPreviewOpen(false)}>
+              <Check aria-hidden="true" /> Keep for this tab
+            </button>
+            <button type="button" onClick={replay.discard}>
+              <Trash2 aria-hidden="true" /> Discard
+            </button>
+          </div>
+        </dialog>
       )}
     </div>
   )

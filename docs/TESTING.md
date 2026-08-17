@@ -11,7 +11,7 @@ npm run check
 
 ## Deterministic tests
 
-Unit tests cover vision math, pixel studies, gesture pickup/release, camera-overlay remounts, audio curves, serialized and size-bounded BPM analysis, full-track waveform and estimated beat-grid math, file validation, generated demo tracks, verified MediaPipe asset provenance, and the bounded Air Mix Replay recorder lifecycle. React integration tests mount the real mixer and camera hooks to verify timed Filter release, Web Audio parameters, the decoded beat workspace, the isolated post-master recording tap, live-stream handoff, frozen-frame release, optional face-analysis failure, overlay remounts, and camera restart. Prefer generated signals and landmark-coordinate cases over copyrighted or personally identifying fixtures.
+Unit tests cover vision math, pixel studies, gesture pickup/release, camera-overlay remounts, audio curves, serialized and size-bounded BPM analysis, full-track waveform and estimated beat-grid math, file validation, bundled demo loading and metadata, Air Mix planning, verified MediaPipe asset provenance, and the bounded local replay lifecycle. React integration tests mount the real mixer and camera hooks to verify timed Filter release, Web Audio parameters, independent left-hand/Deck A and right-hand/Deck B control, Demo Air Mix and Assisted Fade lifecycles, the decoded beat workspace, the isolated post-master recording tap, audio-only replay cleanup, live-stream handoff, frozen-frame release, optional face-analysis failure, overlay remounts, and camera restart. Prefer generated signals and landmark-coordinate cases over copyrighted or personally identifying fixtures.
 
 Coverage cannot fall below the checked-in project floor: 80% statements, 72% branches, 76% functions, and 82% lines.
 
@@ -41,12 +41,12 @@ The required command builds and serves the production application once on `127.0
 - stop ends the original track and clears the video source;
 - restart creates a fresh live stream;
 - application page errors, unexpected console errors, failed requests, and unapproved external origins fail the test;
-- the generated demo reaches manual playback without requesting camera access;
-- generated demo tracks loop so a cold vision-model download cannot end the demo before hand controls are ready;
+- the bundled demo reaches manual playback without requesting camera access;
+- bundled demo tracks loop so a cold vision-model download cannot end the demo before hand controls are ready;
 - the mobile performance bar remains reachable after scrolling, exposes 44px controls, and has no horizontal overflow at 390 CSS pixels;
 - the first-mix and performance controls reflow without horizontal overflow at 320 CSS pixels;
 - the primary tabs and first-mix CTA are reachable in keyboard order;
-- cooperative demo generation creates no browser long task of 50 ms or more; and
+- bundled-demo loading creates no browser long task of 50 ms or more; and
 - the camera-off DJ Room, loaded demo, camera-off Vision workspace, and 390px loaded state have no automated WCAG A/AA violations reported by axe-core.
 
 The focused `npm run test:camera` harness uses Chromium's non-personal test
@@ -74,14 +74,17 @@ At minimum, check the latest stable Chrome, Safari, and Firefox on desktop. Chec
 For each browser, verify:
 
 1. Camera permission allowed, denied, missing, and busy.
-2. Demo set loading, individual track replacement, playback, seeking, and reset.
-3. First visible hand causes no control jump.
+2. Bundled demo loading, one-track and two-track upload flows, individual track replacement, playback, seeking, and reset.
+3. First visible hand causes no control jump; physical left changes only Deck A and physical right changes only Deck B.
 4. Open hand engages; fist or loss locks; Filter returns to 50%.
 5. BPM Sync toggles and restores original rates.
-6. With the camera live, switch Vision → DJ Room → Vision and confirm landmarks remain on the visible canvas.
-7. Keyboard focus, arrow-key range control, reduced motion, and readable zoom.
-8. First-mix readiness advances only when both tracks, camera, and an armed gesture are actually ready.
-9. Screen-reader announcements occur on discrete readiness or clutch transitions, not on continuously changing control percentages.
+6. Demo Air Mix waits for the next authored bar, transitions to the other bundled deck, and restores the source safely when cancelled.
+7. Uploaded music is labeled Assisted Fade, starts without a phrase-perfect claim, and omits automatic tempo matching when beat-grid confidence is low.
+8. Record captures only the post-master audio, stops cleanly, previews locally, downloads, discards, and releases its object URL and audio tap.
+9. With the camera live, switch Vision → DJ Room → Vision and confirm landmarks remain on the visible canvas.
+10. Keyboard focus, arrow-key range control, reduced motion, and readable zoom.
+11. Camera → tracks → perform advances from real state, allows one loaded deck, and requires a trusted Start performance action before audio or Air Mix.
+12. Screen-reader announcements occur on discrete readiness or clutch transitions, not on continuously changing control percentages.
 
 ## Camera automation strategy
 

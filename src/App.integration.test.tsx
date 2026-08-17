@@ -39,6 +39,52 @@ type FakeAudioParam = {
   setTargetAtTime: ReturnType<typeof vi.fn>
 }
 
+class FakeMediaRecorder {
+  static instances: FakeMediaRecorder[] = []
+  static isTypeSupported(type: string) {
+    return type === 'audio/webm;codecs=opus'
+  }
+
+  readonly mimeType = 'audio/webm;codecs=opus'
+  state: RecordingState = 'inactive'
+  ondataavailable: ((event: BlobEvent) => void) | null = null
+  onerror: ((event: Event) => void) | null = null
+  onstop: ((event: Event) => void) | null = null
+
+  constructor() {
+    FakeMediaRecorder.instances.push(this)
+  }
+
+  start() {
+    this.state = 'recording'
+  }
+
+  stop() {
+    this.state = 'inactive'
+  }
+
+  emitData(data: Blob) {
+    this.ondataavailable?.({ data } as BlobEvent)
+  }
+
+  emitStop() {
+    this.onstop?.(new Event('stop'))
+  }
+}
+
+function createAudioCaptureStream() {
+  const track = Object.assign(new EventTarget(), {
+    kind: 'audio',
+    readyState: 'live' as MediaStreamTrackState,
+    stop: vi.fn(),
+  }) as unknown as MediaStreamTrack
+  return {
+    getTracks: () => [track],
+    getAudioTracks: () => [track],
+    getVideoTracks: () => [],
+  } as unknown as MediaStream
+}
+
 function audioParam(value = 0): FakeAudioParam {
   return { value, setTargetAtTime: vi.fn() }
 }
@@ -85,6 +131,10 @@ class FakeAudioContext {
 
   createGain() {
     return { gain: audioParam(), connect: vi.fn() } as unknown as GainNode
+  }
+
+  createMediaStreamDestination() {
+    return { stream: createAudioCaptureStream() } as unknown as MediaStreamAudioDestinationNode
   }
 
   resume = vi.fn(() => Promise.resolve())
@@ -162,13 +212,17 @@ describe('Ultra Vision camera-first DJ flow', () => {
     bundledDemo.loadBundledDemoTracks.mockReset()
     bundledDemo.loadBundledDemoTracks.mockResolvedValue([
       {
+        beatsPerBar: 4,
         bpm: 120,
         file: new File(['deck-a'], 'neon-pulse.wav', { type: 'audio/wav' }),
+        firstBarSeconds: 0,
         title: 'Neon Pulse',
       },
       {
+        beatsPerBar: 4,
         bpm: 126,
         file: new File(['deck-b'], 'midnight-circuit.wav', { type: 'audio/wav' }),
+        firstBarSeconds: 0,
         title: 'Midnight Circuit',
       },
     ])
@@ -205,6 +259,8 @@ describe('Ultra Vision camera-first DJ flow', () => {
       configurable: true,
       value: FakeAudioContext,
     })
+    FakeMediaRecorder.instances = []
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder)
     mediaPipe.resolveFileset.mockResolvedValue({})
     mediaPipe.createHand.mockResolvedValue({
       detectForVideo: vi.fn(() => ({ landmarks: [], handedness: [] })),
@@ -347,6 +403,11 @@ describe('Ultra Vision camera-first DJ flow', () => {
     expect(container.querySelector('[aria-label="Deck A hand control"]')).toBeTruthy()
     expect(container.querySelector('[aria-label="Deck B hand control"]')).toBeTruthy()
     expect(container.querySelectorAll('button[aria-label="Toggle BPM Sync"]')).toHaveLength(1)
+    const airMix = container.querySelector<HTMLButtonElement>('button[aria-label="Start Demo Air Mix"]')
+    expect(airMix).toBeTruthy()
+    expect(airMix?.disabled).toBe(false)
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Record audio-only master mix"]'))
+      .toBeTruthy()
     expect(container.textContent).not.toContain('Crossfader')
     expect(container.textContent).not.toContain('Full mixer')
 
@@ -495,8 +556,107 @@ describe('Ultra Vision camera-first DJ flow', () => {
     const sync = container.querySelector<HTMLButtonElement>('.uv-bpm-sync')
     expect(sync?.disabled).toBe(true)
     expect(sync?.getAttribute('aria-label')).toContain('Load Deck B')
+    const airMix = container.querySelector<HTMLButtonElement>('button[aria-label="Start Assisted Fade"]')
+    expect(airMix?.disabled).toBe(true)
     expect(container.querySelector<HTMLButtonElement>('button[aria-label^="Play Deck B"]')?.disabled)
       .toBe(true)
+  })
+
+  it('shows an honest, cancellable Demo Air Mix rail without claiming phrase lock', async () => {
+    await loadDemoSet()
+    await enterPerformance()
+    await act(async () => flushPromises())
+    const airMix = container.querySelector<HTMLButtonElement>('button[aria-label="Start Demo Air Mix"]')
+    if (!airMix) throw new Error('Demo Air Mix control was not rendered.')
+
+    await act(async () => {
+      click(airMix)
+      await flushPromises()
+    })
+
+    const rail = container.querySelector<HTMLElement>('.uv-air-mix-rail')
+    expect(rail).toBeTruthy()
+    expect(rail?.textContent).toContain('Demo Air Mix')
+    expect(rail?.textContent).toContain('next authored bar')
+    expect(rail?.textContent).not.toMatch(/phrase-perfect|beat-perfect/i)
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Cancel Demo Air Mix"]'))
+      .toBeTruthy()
+    expect(rail?.querySelector('progress')).toBeTruthy()
+
+    await act(async () => click(buttonByName(container, 'Cancel')))
+    expect(container.querySelector('.uv-air-mix-rail')).toBeNull()
+  })
+
+  it('cancels Air Mix when leaving the performance screen', async () => {
+    await loadDemoSet()
+    await enterPerformance()
+    const airMix = container.querySelector<HTMLButtonElement>('button[aria-label="Start Demo Air Mix"]')
+    if (!airMix) throw new Error('Demo Air Mix control was not rendered.')
+
+    await act(async () => {
+      click(airMix)
+      await flushPromises()
+    })
+    expect(container.querySelector('.uv-air-mix-rail')).toBeTruthy()
+
+    await act(async () => click(buttonByName(container, 'Vision')))
+    await act(async () => click(buttonByName(container, 'DJ Room')))
+
+    expect(container.querySelector('.uv-air-mix-rail')).toBeNull()
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Cancel Demo Air Mix"]'))
+      .toBeNull()
+    expect(container.querySelector('h1')?.textContent).toBe('Perform with your hands')
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label^="Play Deck A"]')
+      ?.textContent).toContain('PAUSE')
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label^="Play Deck B"]')
+      ?.textContent).toContain('PLAY')
+  })
+
+  it('records the local audio master, then offers preview, download, and discard', async () => {
+    await loadDemoSet()
+    await enterPerformance()
+    const record = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Record audio-only master mix"]',
+    )
+    if (!record) throw new Error('Local replay control was not rendered.')
+
+    await act(async () => {
+      click(record)
+      await flushPromises()
+    })
+
+    expect(container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Stop audio-only master mix recording"]',
+    )).toBeTruthy()
+    expect(buttonByName(container, 'Vision')?.disabled).toBe(true)
+    expect(container.textContent).toContain('0:00')
+    const recorder = FakeMediaRecorder.instances.at(-1)
+    if (!recorder) throw new Error('Local MediaRecorder was not created.')
+    recorder.emitData(new Blob(['master mix'], { type: 'audio/webm' }))
+
+    await act(async () => {
+      click(container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Stop audio-only master mix recording"]',
+      )!)
+      recorder.emitStop()
+      await flushPromises()
+    })
+
+    const dialog = container.querySelector<HTMLDialogElement>('dialog')
+    expect(buttonByName(container, 'Vision')?.disabled).toBe(false)
+    expect(dialog?.open).toBe(true)
+    expect(dialog?.textContent).toContain('Your master mix is ready')
+    expect(dialog?.textContent).toContain('Audio-only master mix · stays on this device.')
+    expect(dialog?.querySelector('audio[controls]')).toBeTruthy()
+    expect(dialog?.querySelector<HTMLAnchorElement>('a[download]')?.textContent).toContain('Download')
+
+    await act(async () => click(buttonByName(container, 'Keep for this tab')))
+    expect(dialog?.open).toBe(false)
+    await act(async () => click(buttonByName(container, 'Replay')))
+    expect(dialog?.open).toBe(true)
+
+    await act(async () => click(buttonByName(container, 'Discard')))
+    expect(container.querySelector('dialog')).toBeNull()
   })
 
   it('shows a recoverable camera error and retries without losing the flow', async () => {
