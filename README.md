@@ -156,7 +156,7 @@ Read [Building Ultra Vision with Codex](./docs/BUILDING_WITH_CODEX.md) for the d
 
 Ultra Vision is an active experimental project. Vision, two-deck mixing, dual-hand control, bounded local audio replay, and the real-browser camera lifecycle are functional. Phrase-aware mixing for uploaded tracks, video replay and hosted sharing, a broader measured hand-gesture fixture corpus, and measured long-session performance remain future work.
 
-Read the [roadmap](./ROADMAP.md), [testing strategy](./docs/TESTING.md), and [contributor guide](./CONTRIBUTING.md). Focused issues and pull requests are welcome.
+Read the [roadmap](./ROADMAP.md), [testing strategy](./docs/TESTING.md), [30-minute acceptance session](./docs/30_MINUTE_TEST_SESSION.md), its [print-ready PDF](./output/pdf/Ultra-Vision-30-Minute-Test-Guide.pdf), and the [contributor guide](./CONTRIBUTING.md). Focused issues and pull requests are welcome.
 
 ## License
 
