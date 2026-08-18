@@ -731,7 +731,7 @@ export function DjRoomScreen({
               ? 'Sit back. Raise one open hand and keep it inside the frame.'
               : step === 'tracks'
                 ? 'Add one track or two. Deck B is optional.'
-                : 'Left hand owns Deck A. Right hand owns Deck B. Point to choose; open your palm to move.'}
+                : 'Left hand: Deck A. Right hand: Deck B. Point to choose; open palm to move.'}
           </p>
         </header>
 

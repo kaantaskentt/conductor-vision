@@ -469,7 +469,7 @@ export function VisionScreen({
       <PageIntro
         eyebrow="Vision"
         title="See what the camera understands."
-        description="Real-time hand landmarks, face signals, frame-change regions, and color sampling—processed locally in your browser."
+        description="Hands, face signals, frame changes, and colors stay in your browser."
         actions={<CameraActions status={vision.status} start={vision.start} stop={vision.stop} />}
       />
       <section className="vision-layout">
