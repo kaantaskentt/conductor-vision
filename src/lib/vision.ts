@@ -36,6 +36,8 @@ export type HandSummary = {
   raised: FingerState
   x: number
   y: number
+  pointerX: number
+  pointerY: number
   wristAngle: number
 }
 
@@ -46,6 +48,8 @@ export type GestureFrame = {
   wristAngle: number
   openFingers: number
 }
+
+export type HandAnchor = Pick<HandSummary, 'label' | 'x' | 'y'>
 
 export type VisionAnalysis = {
   hands: HandSummary[]
@@ -63,7 +67,7 @@ export type VisionAnalysis = {
   bestColorPercent: number
   motionScore: number
   motionChangedPercent: number
-  motionDirection: string
+  changeRegion: string
   motionHistory: number[]
 }
 
@@ -76,7 +80,7 @@ export type PixelAnalysis = Pick<
   | 'bestColorPercent'
   | 'motionScore'
   | 'motionChangedPercent'
-  | 'motionDirection'
+  | 'changeRegion'
 >
 
 export function clamp(value: number, min = 0, max = 1) {
@@ -196,7 +200,8 @@ export function summarizeHands(result: HandLandmarkerResult): HandSummary[] {
     const fingers = countRaisedFingers(landmarks, label)
     const wrist = landmarks[0]
     const middle = landmarks[9]
-    const wristAngle = Math.atan2(middle.y - wrist.y, middle.x - wrist.x)
+    const indexTip = landmarks[8]
+    const wristAngle = Math.atan2(middle.y - wrist.y, wrist.x - middle.x)
 
     return {
       id: `${label}-${index}`,
@@ -205,9 +210,36 @@ export function summarizeHands(result: HandLandmarkerResult): HandSummary[] {
       raised: fingers.raised,
       x: 1 - middle.x,
       y: middle.y,
+      pointerX: 1 - indexTip.x,
+      pointerY: indexTip.y,
       wristAngle,
     }
   })
+}
+
+export function selectPrimaryHand(
+  hands: HandSummary[],
+  previous: HandAnchor | null,
+): HandSummary | null {
+  if (!hands.length) return null
+  if (!previous) return hands[0]
+
+  const sameHandedness = hands.filter((hand) => hand.label === previous.label)
+  if (!sameHandedness.length) return null
+
+  let closest = sameHandedness[0]
+  let closestDistance = Math.hypot(closest.x - previous.x, closest.y - previous.y)
+
+  for (let index = 1; index < sameHandedness.length; index += 1) {
+    const candidate = sameHandedness[index]
+    const candidateDistance = Math.hypot(candidate.x - previous.x, candidate.y - previous.y)
+    if (candidateDistance < closestDistance) {
+      closest = candidate
+      closestDistance = candidateDistance
+    }
+  }
+
+  return closestDistance <= 0.35 ? closest : null
 }
 
 export function summarizeFace(result: FaceLandmarkerResult) {
@@ -247,7 +279,7 @@ export function createEmptyAnalysis(targetColor: TargetColor = 'purple'): Vision
     bestColorPercent: 0,
     motionScore: 0,
     motionChangedPercent: 0,
-    motionDirection: 'Still',
+    changeRegion: 'Frame stable',
     motionHistory: Array.from({ length: 40 }, () => 0),
   }
 }
@@ -263,6 +295,10 @@ export function analyzePixels(
   let changed = 0
   let motionX = 0
   let motionY = 0
+  let changedMinX = image.width
+  let changedMaxX = -1
+  let changedMinY = image.height
+  let changedMaxY = -1
   let red = 0
   let green = 0
   let blue = 0
@@ -284,9 +320,15 @@ export function analyzePixels(
     if (nearest !== 'none') colorCounts.set(nearest, (colorCounts.get(nearest) ?? 0) + 1)
 
     if (previousGray && Math.abs(luminance - previousGray[sample]) > 22) {
+      const sampleX = sample % image.width
+      const sampleY = Math.floor(sample / image.width)
       changed += 1
-      motionX += sample % image.width
-      motionY += Math.floor(sample / image.width)
+      motionX += sampleX + 0.5
+      motionY += sampleY + 0.5
+      changedMinX = Math.min(changedMinX, sampleX)
+      changedMaxX = Math.max(changedMaxX, sampleX)
+      changedMinY = Math.min(changedMinY, sampleY)
+      changedMaxY = Math.max(changedMaxY, sampleY)
     }
   }
 
@@ -294,16 +336,26 @@ export function analyzePixels(
   const motionCenterX = changed ? motionX / changed / image.width : 0.5
   const motionCenterY = changed ? motionY / changed / image.height : 0.5
   const motionScore = Math.round(clamp(changedRatio * 7.5) * 100)
-  const motionDirection =
+  const horizontalOffset = motionCenterX - 0.5
+  const verticalOffset = motionCenterY - 0.5
+  const horizontalSpread = changed ? (changedMaxX - changedMinX + 1) / image.width : 0
+  const verticalSpread = changed ? (changedMaxY - changedMinY + 1) / image.height : 0
+  const changeRegion =
     changedRatio < 0.025
-      ? 'Still'
-      : Math.abs(motionCenterX - 0.5) > Math.abs(motionCenterY - 0.5)
-        ? motionCenterX > 0.5
-          ? 'Moving right'
-          : 'Moving left'
-        : motionCenterY > 0.5
-          ? 'Moving down'
-          : 'Moving up'
+      ? 'Frame stable'
+      : horizontalSpread >= 0.7 && verticalSpread >= 0.7
+        ? 'Change across frame'
+        : Math.abs(horizontalOffset) < 0.1 && Math.abs(verticalOffset) < 0.1
+          ? 'Change near center'
+          : Math.abs(horizontalOffset) > Math.abs(verticalOffset)
+            ? horizontalOffset > 0
+              // The camera feed is intentionally mirrored for the performer, so
+              // report horizontal regions in the coordinates they see on screen.
+              ? 'Change concentrated left'
+              : 'Change concentrated right'
+            : verticalOffset > 0
+              ? 'Change concentrated lower'
+              : 'Change concentrated upper'
 
   let bestColorName: TargetColor | 'none' = 'none'
   let bestCount = 0
@@ -323,7 +375,7 @@ export function analyzePixels(
     bestColorPercent: Math.round((bestCount / Math.max(samples, 1)) * 100),
     motionScore,
     motionChangedPercent: Math.round(changedRatio * 100),
-    motionDirection,
+    changeRegion,
   }
 
   return { gray, pixelAnalysis }

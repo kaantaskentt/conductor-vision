@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { analyzePixels, clamp, createEmptyAnalysis, rgbToHex, rgbToHsv } from './vision'
+import {
+  analyzePixels,
+  clamp,
+  createEmptyAnalysis,
+  rgbToHex,
+  rgbToHsv,
+  selectPrimaryHand,
+  summarizeHands,
+  type HandSummary,
+} from './vision'
 
 function imageData(width: number, height: number, pixels: number[]) {
   return {
@@ -39,6 +48,37 @@ describe('vision utilities', () => {
     expect(second.pixelAnalysis.targetCoverage).toBe(0)
     expect(second.pixelAnalysis.motionChangedPercent).toBe(100)
     expect(second.pixelAnalysis.motionScore).toBe(100)
+    expect(second.pixelAnalysis.changeRegion).toBe('Change across frame')
+  })
+
+  it('reports the visible mirrored region without claiming a movement direction', () => {
+    const previous = imageData(4, 2, Array.from({ length: 8 }, () => [0, 0, 0, 255]).flat())
+    const changedOnRight = imageData(4, 2, [
+      0, 0, 0, 255,
+      0, 0, 0, 255,
+      255, 255, 255, 255,
+      255, 255, 255, 255,
+      0, 0, 0, 255,
+      0, 0, 0, 255,
+      255, 255, 255, 255,
+      255, 255, 255, 255,
+    ])
+
+    const baseline = analyzePixels(previous, null, 'purple')
+    const result = analyzePixels(changedOnRight, baseline.gray, 'purple')
+
+    expect(result.pixelAnalysis.changeRegion).toBe('Change concentrated left')
+    expect(result.pixelAnalysis.changeRegion).not.toContain('Moving')
+  })
+
+  it('distinguishes a localized center change from a frame-wide change', () => {
+    const black = Array.from({ length: 25 }, () => [0, 0, 0, 255]).flat()
+    const centered = [...black]
+    centered.splice(12 * 4, 4, 255, 255, 255, 255)
+    const baseline = analyzePixels(imageData(5, 5, black), null, 'purple')
+    const result = analyzePixels(imageData(5, 5, centered), baseline.gray, 'purple')
+
+    expect(result.pixelAnalysis.changeRegion).toBe('Change near center')
   })
 
   it('creates a complete, stable idle state', () => {
@@ -46,5 +86,42 @@ describe('vision utilities', () => {
     expect(state.targetHex).toBe('#2dbedc')
     expect(state.motionHistory).toHaveLength(40)
     expect(state.hands).toEqual([])
+    expect(state.changeRegion).toBe('Frame stable')
+  })
+
+  it('keeps control on the nearest hand when detector ordering changes', () => {
+    const hand = (label: string, x: number, y: number): HandSummary => ({
+      id: `${label}-${x}`,
+      label,
+      x,
+      y,
+      pointerX: x,
+      pointerY: y,
+      count: 5,
+      wristAngle: 0,
+      raised: { thumb: true, index: true, middle: true, ring: true, pinky: true },
+    })
+    const previous = hand('Right', 0.2, 0.4)
+    const reordered = [hand('Left', 0.22, 0.4), hand('Right', 0.25, 0.42)]
+
+    expect(selectPrimaryHand(reordered, previous)?.label).toBe('Right')
+    expect(selectPrimaryHand([], previous)).toBeNull()
+    expect(selectPrimaryHand([hand('Left', 0.21, 0.4)], previous)).toBeNull()
+    expect(selectPrimaryHand([hand('Right', 0.8, 0.9)], previous)).toBeNull()
+  })
+
+  it('keeps palm motion and fingertip pointing in the same mirrored display space', () => {
+    const landmarks = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.5, z: 0 }))
+    landmarks[0] = { x: 0.5, y: 0.8, z: 0 }
+    landmarks[8] = { x: 0.9, y: 0.2, z: 0 }
+    landmarks[9] = { x: 0.7, y: 0.45, z: 0 }
+    const [hand] = summarizeHands({
+      landmarks: [landmarks],
+      handedness: [[{ categoryName: 'Right' }]],
+    } as never)
+
+    expect(hand.x).toBeCloseTo(0.3)
+    expect(hand.pointerX).toBeCloseTo(0.1)
+    expect(hand.pointerY).toBeCloseTo(0.2)
   })
 })

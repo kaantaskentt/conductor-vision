@@ -1,514 +1,1173 @@
 import {
+  ArrowLeftRight,
+  Camera,
+  Check,
+  Circle,
   Disc3,
-  Gauge,
+  Download,
+  FolderOpen,
   Hand,
-  Music2,
+  ListMusic,
+  Lock,
+  MoreHorizontal,
   Pause,
   Play,
   RefreshCw,
   RotateCcw,
+  ShieldCheck,
   SlidersHorizontal,
+  Sparkles,
+  Square,
+  Trash2,
   Upload,
   Volume2,
-  Waves,
 } from 'lucide-react'
-import { useRef } from 'react'
-import { CameraActions, CameraStage, PageIntro } from '../components/AppShell'
-import type { DeckId, DjControl, useDjMixer } from '../hooks/useDjMixer'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react'
+import airMixMotion from '../assets/air-mix-motion.jpg'
+import { CameraStage } from '../components/AppShell'
+import { PerformanceWaveform } from '../components/PerformanceWaveform'
+import type { DeckId, useDjMixer } from '../hooks/useDjMixer'
+import { useLocalReplay } from '../hooks/useLocalReplay'
 import type { useVisionRuntime } from '../hooks/useVisionRuntime'
+import {
+  airTargetAtBounds,
+  createAirDwellState,
+  transitionAirDwell,
+  type AirHandSlot,
+  type AirDwellState,
+  type AirTargetBounds,
+  type AirTargetId,
+} from '../lib/airTarget'
+import {
+  mapCameraPointToStage,
+  type CameraCoverGeometry,
+} from '../lib/cameraGeometry'
+import {
+  assignHandsToStableSlots,
+  createHandAssignmentState,
+  type HandAssignmentState,
+} from '../lib/handAssignment'
+import {
+  createLocalCrateSelection,
+  formatLocalTrackSize,
+  MAX_LOCAL_CRATE_TRACKS,
+  type LocalCrateTrack,
+} from '../lib/localCrate'
+import type { HandSummary } from '../lib/vision'
 
 const ACCEPTED_AUDIO = 'audio/mpeg,audio/wav,audio/flac,audio/ogg,.mp3,.wav,.flac,.ogg'
 
-const GESTURE_MODES: Array<{
-  control: DjControl
-  label: string
-  detail: string
-  icon: typeof Waves
-}> = [
-  {
-    control: 'crossfader',
-    label: 'Crossfader',
-    detail: 'Move left or right',
-    icon: Waves,
-  },
-  {
-    control: 'volume',
-    label: 'Channel',
-    detail: 'Move up or down',
-    icon: Volume2,
-  },
-  {
-    control: 'filter',
-    label: 'Filter',
-    detail: 'Rotate your wrist',
-    icon: SlidersHorizontal,
-  },
-  {
-    control: 'tempo',
-    label: 'Tempo',
-    detail: 'Move left or right',
-    icon: Gauge,
-  },
+type DjFlowStep = 'camera' | 'tracks' | 'perform'
+
+const FLOW_STEPS: Array<{ id: DjFlowStep; label: string }> = [
+  { id: 'camera', label: 'Camera' },
+  { id: 'tracks', label: 'Load Tracks' },
+  { id: 'perform', label: 'Perform' },
 ]
 
-function formatTime(seconds: number) {
-  if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
-  const minutes = Math.floor(seconds / 60)
-  const remainder = Math.floor(seconds % 60)
-  return `${minutes}:${remainder.toString().padStart(2, '0')}`
+const AIR_TARGET_LABELS: Record<AirTargetId, string> = {
+  'cue-a': 'Cue Deck A',
+  'play-a': 'Play Deck A',
+  'cue-b': 'Cue Deck B',
+  'play-b': 'Play Deck B',
+  volume: 'Volume',
+  filter: 'Filter',
+  'volume-a': 'Deck A volume',
+  'filter-a': 'Deck A filter',
+  'volume-b': 'Deck B volume',
+  'filter-b': 'Deck B filter',
+}
+
+const AIR_HAND_SLOTS: AirHandSlot[] = ['left', 'right']
+const DJ_CAMERA_OBJECT_POSITION = { x: 0.5, y: 0.42 } as const
+const AIR_TARGET_IDS = Object.keys(AIR_TARGET_LABELS) as AirTargetId[]
+
+function airTargetBoundsMatch(
+  current: AirTargetBounds | null,
+  next: AirTargetBounds,
+) {
+  if (!current) return false
+  return AIR_TARGET_IDS.every((target) => {
+    const currentRect = current[target]
+    const nextRect = next[target]
+    if (!currentRect || !nextRect) return currentRect === nextRect
+    return currentRect.left === nextRect.left &&
+      currentRect.top === nextRect.top &&
+      currentRect.right === nextRect.right &&
+      currentRect.bottom === nextRect.bottom
+  })
+}
+
+function isPointingHand(hand: HandSummary | null) {
+  return Boolean(
+    hand && hand.count >= 1 && hand.count <= 2 && hand.raised.index,
+  )
 }
 
 function deckLabel(id: DeckId) {
   return id === 'a' ? 'Deck A' : 'Deck B'
 }
 
-function DeckPanel({
+function formatReplayDuration(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1_000))
+  const minutes = Math.floor(totalSeconds / 60)
+  return `${minutes}:${(totalSeconds % 60).toString().padStart(2, '0')}`
+}
+
+function FlowProgress({
+  step,
+  canOpenTracks,
+  canPerform,
+  locked,
+  onStepChange,
+}: {
+  step: DjFlowStep
+  canOpenTracks: boolean
+  canPerform: boolean
+  locked: boolean
+  onStepChange: (step: DjFlowStep) => void
+}) {
+  const activeIndex = FLOW_STEPS.findIndex(({ id }) => id === step)
+
+  return (
+    <nav className="uv-flow-progress" aria-label="DJ Room setup">
+      {FLOW_STEPS.map((item, index) => {
+        const enabled = !locked && (
+          item.id === 'camera' || (item.id === 'tracks' ? canOpenTracks : canPerform)
+        )
+        const complete = index < activeIndex
+        return (
+          <button
+            key={item.id}
+            type="button"
+            className={item.id === step ? 'active' : complete ? 'complete' : ''}
+            onClick={() => onStepChange(item.id)}
+            disabled={!enabled}
+            aria-current={item.id === step ? 'step' : undefined}
+          >
+            <b aria-hidden="true">{complete ? <Check /> : index + 1}</b>
+            <span>{item.label}</span>
+          </button>
+        )
+      })}
+    </nav>
+  )
+}
+
+function TrackSlot({
   id,
   mixer,
-  onUpload,
+  onChoose,
+  disabled,
 }: {
   id: DeckId
   mixer: ReturnType<typeof useDjMixer>
-  onUpload: () => void
+  onChoose: () => void
+  disabled: boolean
 }) {
   const deck = mixer.decks[id]
-  const effectiveBpm = deck.bpm ? deck.bpm * (1 + deck.tempo / 100) : null
-
   return (
-    <article className={`deck-panel deck-${id}`}>
-      <div className="deck-heading">
-        <div>
-          <span className="deck-id">{deckLabel(id)}</span>
-          <strong>{deck.name}</strong>
-          <small>{deck.loaded ? 'Local audio · ready to mix' : 'Load a track to begin'}</small>
-        </div>
-        <div className="bpm-readout">
-          <strong>{effectiveBpm ? effectiveBpm.toFixed(1) : '—'}</strong>
-          <span>BPM</span>
-        </div>
+    <article className={`uv-track-slot deck-${id} ${deck.loaded ? 'loaded' : ''}`}>
+      <div className="uv-track-slot-heading">
+        <span>{deckLabel(id)}{id === 'b' ? ' · optional' : ''}</span>
+        {deck.loaded && <b>Ready</b>}
       </div>
-
-      <div className="deck-transport">
-        <div className={`deck-platter ${deck.playing ? 'playing' : ''}`}>
-          <Disc3 aria-hidden="true" />
-          <span>{id.toUpperCase()}</span>
-        </div>
-        <button
-          type="button"
-          className="deck-play"
-          onClick={() => void mixer.togglePlayback(id)}
-          disabled={!deck.loaded}
-          aria-label={deck.playing ? `Pause ${deckLabel(id)}` : `Play ${deckLabel(id)}`}
-        >
-          {deck.playing ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
-        </button>
-        <div className="deck-timeline">
-          <div>
-            <span>{formatTime(deck.currentTime)}</span>
-            <span>{formatTime(deck.duration)}</span>
+      <div className="uv-track-pulse" aria-hidden="true">
+        <Disc3 />
+      </div>
+      {deck.loaded ? (
+        <>
+          <strong title={deck.name}>{deck.name}</strong>
+          <small>{deck.bpm ? `${deck.bpm.toFixed(1)} BPM` : deck.bpmStatus}</small>
+          <div className="uv-track-preview" aria-hidden="true">
+            {deck.waveform.map((amplitude, index) => (
+              <i key={index} style={{ height: `${Math.max(10, amplitude)}%` }} />
+            ))}
           </div>
-          <input
-            type="range"
-            min="0"
-            max={Math.max(deck.duration, 1)}
-            step="0.05"
-            value={Math.min(deck.currentTime, Math.max(deck.duration, 1))}
-            onChange={(event) => mixer.seek(id, Number(event.target.value))}
-            disabled={!deck.loaded}
-            aria-label={`${deckLabel(id)} track position`}
-          />
-        </div>
-      </div>
-
-      <div className="phrase-pads" aria-label={`${deckLabel(id)} phrase jumps`}>
-        <span>Phrase jump</span>
-        <div>
-          {[1, 2, 3, 4].map((index) => (
-            <button
-              key={index}
-              type="button"
-              onClick={() => mixer.jumpToPhrase(id, index)}
-              disabled={!deck.loaded}
-              aria-label={`${deckLabel(id)} phrase ${index}`}
-            >
-              {index}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="deck-controls">
-        <div className="deck-control-row">
-          <span>
-            <Volume2 aria-hidden="true" />
-            Channel
-          </span>
-          <div className="deck-control-value">
-            <strong>{deck.volume}%</strong>
-            <button
-              type="button"
-              onClick={() => mixer.resetControl('volume', id)}
-              aria-label={`Reset ${deckLabel(id)} channel`}
-              title="Reset channel"
-            >
-              <RotateCcw aria-hidden="true" />
-            </button>
-          </div>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={deck.volume}
-            onChange={(event) => mixer.setDeckVolume(id, Number(event.target.value))}
-            onDoubleClick={() => mixer.resetControl('volume', id)}
-            aria-label={`${deckLabel(id)} volume`}
-            title="Double-click to reset"
-          />
-        </div>
-        <div className="deck-control-row">
-          <span>
-            <SlidersHorizontal aria-hidden="true" />
-            Filter
-          </span>
-          <div className="deck-control-value">
-            <strong>{deck.filter}%</strong>
-            <button
-              type="button"
-              onClick={() => mixer.resetControl('filter', id)}
-              aria-label={`Reset ${deckLabel(id)} filter`}
-              title="Open filter"
-            >
-              <RotateCcw aria-hidden="true" />
-            </button>
-          </div>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={deck.filter}
-            onChange={(event) => mixer.setDeckFilter(id, Number(event.target.value))}
-            onDoubleClick={() => mixer.resetControl('filter', id)}
-            aria-label={`${deckLabel(id)} filter`}
-            title="Double-click to reset"
-          />
-        </div>
-        <div className="deck-control-row">
-          <span>
-            <Gauge aria-hidden="true" />
-            Tempo
-          </span>
-          <div className="deck-control-value">
-            <strong>{deck.tempo > 0 ? '+' : ''}{deck.tempo.toFixed(1)}%</strong>
-            <button
-              type="button"
-              onClick={() => mixer.resetControl('tempo', id)}
-              aria-label={`Reset ${deckLabel(id)} tempo`}
-              title="Restore original tempo"
-            >
-              <RotateCcw aria-hidden="true" />
-            </button>
-          </div>
-          <input
-            type="range"
-            min="-20"
-            max="20"
-            step="0.1"
-            value={deck.tempo}
-            onChange={(event) => mixer.setDeckTempo(id, Number(event.target.value))}
-            onDoubleClick={() => mixer.resetControl('tempo', id)}
-            aria-label={`${deckLabel(id)} tempo`}
-            title="Double-click to reset"
-          />
-        </div>
-      </div>
-
-      <div className="deck-actions">
-        <button type="button" className="button secondary" onClick={onUpload}>
-          <Upload aria-hidden="true" />
-          {deck.loaded ? 'Replace' : 'Load track'}
-        </button>
-        <button
-          type="button"
-          className="button text"
-          onClick={() => mixer.tapTempo(id)}
-          disabled={!deck.loaded}
-        >
-          Tap BPM
-        </button>
-      </div>
-
-      <div className="deck-footer">
-        <div className="mini-level" aria-label={`${deckLabel(id)} audio level ${deck.audioLevel}%`}>
-          <i style={{ width: `${deck.audioLevel}%` }} />
-        </div>
-        <span>{deck.bpmStatus}</span>
-      </div>
-      {deck.error && (
-        <div className="inline-error" role="alert">
-          {deck.error}
-        </div>
+        </>
+      ) : (
+        <>
+          <strong>Choose audio</strong>
+          <small>MP3, WAV, FLAC, or OGG</small>
+        </>
       )}
+      <button type="button" className="button secondary" onClick={onChoose} disabled={disabled}>
+        <Upload aria-hidden="true" />
+        {deck.loaded ? `Replace ${deckLabel(id)}` : `Choose ${deckLabel(id)}`}
+      </button>
+      {deck.error && <p className="inline-error" role="alert">{deck.error}</p>}
     </article>
   )
 }
 
-function MixerConsole({ mixer }: { mixer: ReturnType<typeof useDjMixer> }) {
-  const bothLoaded = mixer.decks.a.loaded && mixer.decks.b.loaded
-  const anyPlaying = mixer.decks.a.playing || mixer.decks.b.playing
-
-  return (
-    <aside className="mixer-console">
-      <div className="mixer-heading">
-        <span>Master mixer</span>
-        <strong>{bothLoaded ? 'Two decks ready' : 'Load both decks'}</strong>
-      </div>
-
-      <div className="master-levels">
-        {(['a', 'b'] as DeckId[]).map((id) => (
-          <div key={id}>
-            <span>{id.toUpperCase()}</span>
-            <div>
-              {Array.from({ length: 12 }, (_, index) => (
-                <i
-                  key={index}
-                  className={
-                    index < Math.ceil((mixer.decks[id].audioLevel / 100) * 12) ? 'lit' : ''
-                  }
-                />
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <button
-        type="button"
-        className={`bpm-sync-toggle ${mixer.bpmSyncActive ? 'active' : ''}`}
-        onClick={mixer.toggleBpmSync}
-        disabled={!bothLoaded}
-        aria-pressed={mixer.bpmSyncActive}
-      >
-        <RefreshCw aria-hidden="true" />
-        <span>
-          <strong>BPM Sync</strong>
-          <small>
-            {mixer.bpmSyncActive
-              ? `${mixer.bpmSyncMessage} · click to restore`
-              : mixer.bpmSyncMessage}
-          </small>
-        </span>
-        <b>{mixer.bpmSyncActive ? 'ON' : 'OFF'}</b>
-      </button>
-
-      <div className="crossfader-control">
-        <div>
-          <span>A</span>
-          <strong>Equal-power crossfader</strong>
-          <span>B</span>
-        </div>
-        <input
-          type="range"
-          min="-100"
-          max="100"
-          value={mixer.crossfader}
-          onChange={(event) => mixer.setCrossfader(Number(event.target.value))}
-          onDoubleClick={() => mixer.resetControl('crossfader')}
-          aria-label="Master crossfader"
-          title="Double-click to center"
-        />
-        <output>
-          {mixer.crossfader === 0
-            ? 'Centered'
-            : mixer.crossfader < 0
-              ? `Deck A +${Math.abs(mixer.crossfader)}`
-              : `Deck B +${mixer.crossfader}`}
-        </output>
-        <button type="button" onClick={() => mixer.setCrossfader(0)}>
-          Center
-        </button>
-      </div>
-
-      <div className="master-actions">
-        <button
-          type="button"
-          className="button primary start-mix"
-          onClick={() => void mixer.toggleBoth()}
-          disabled={!bothLoaded}
-        >
-          {anyPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
-          {anyPlaying ? 'Pause both' : 'Start both'}
-        </button>
-        <button type="button" className="button secondary" onClick={mixer.resetMix}>
-          <RotateCcw aria-hidden="true" />
-          Reset mix
-        </button>
-      </div>
-    </aside>
-  )
-}
-
-function GestureConsole({
-  mixer,
-  vision,
+function PerformanceTarget({
+  target,
+  label,
+  detail,
+  deck,
+  active,
+  disabled,
+  icon,
+  airDwell,
+  onClick,
 }: {
-  mixer: ReturnType<typeof useDjMixer>
-  vision: ReturnType<typeof useVisionRuntime>
+  target: AirTargetId
+  label: string
+  detail: string
+  deck?: DeckId
+  active?: boolean
+  disabled?: boolean
+  icon: 'cue' | 'play' | 'pause' | 'volume' | 'filter'
+  airDwell: AirDwellState
+  onClick: () => void
 }) {
+  const progress = airDwell.target === target ? airDwell.progress : 0
+  const Icon = icon === 'cue'
+    ? RotateCcw
+    : icon === 'play'
+      ? Play
+      : icon === 'pause'
+        ? Pause
+        : icon === 'volume'
+          ? Volume2
+          : SlidersHorizontal
+  const style = { '--air-progress': `${Math.round(progress * 360)}deg` } as CSSProperties
+
   return (
-    <aside className="gesture-console">
-      <div className="panel-heading">
-        <div>
-          <span>Gesture routing</span>
-          <strong>{vision.analysis.hands.length ? 'Hand connected' : 'Waiting for a hand'}</strong>
-        </div>
-        <div className="gesture-heading-actions">
-          <span className={`status-dot ${vision.analysis.hands.length ? 'active' : ''}`} />
-          <button
-            type="button"
-            onClick={() => mixer.resetControl()}
-            aria-label="Reset selected gesture control"
-            title="Reset selected control"
-          >
-            <RotateCcw aria-hidden="true" />
-            Reset
-          </button>
-        </div>
-      </div>
-
-      <div className="deck-target" aria-label="Gesture deck target">
-        {(['a', 'b'] as DeckId[]).map((id) => (
-          <button
-            key={id}
-            type="button"
-            className={mixer.activeDeck === id ? 'active' : ''}
-            onClick={() => mixer.selectControl(mixer.selectedControl, id)}
-            aria-pressed={mixer.activeDeck === id}
-          >
-            {deckLabel(id)}
-          </button>
-        ))}
-      </div>
-
-      <div className="gesture-modes">
-        {GESTURE_MODES.map(({ control, label, detail, icon: Icon }) => (
-          <button
-            key={control}
-            type="button"
-            className={mixer.selectedControl === control ? 'active' : ''}
-            onClick={() => mixer.selectControl(control, mixer.activeDeck)}
-            onDoubleClick={() => mixer.resetControl(control, mixer.activeDeck)}
-            aria-pressed={mixer.selectedControl === control}
-            title="Double-click to reset this control"
-          >
-            <Icon aria-hidden="true" />
-            <span>
-              <strong>{label}</strong>
-              <small>{detail}</small>
-            </span>
-          </button>
-        ))}
-      </div>
-      <p className="gesture-reset-hint">Double-click any mode or slider to reset it.</p>
-
-      <div className="gesture-status">
-        <Hand aria-hidden="true" />
-        <div>
-          <span>Live instruction</span>
-          <strong>{mixer.gestureStatus}</strong>
-        </div>
-      </div>
-    </aside>
+    <button
+      type="button"
+      className={`uv-performance-target target-${target} ${active ? 'active' : ''} ${progress > 0 ? 'aiming' : ''}`}
+      data-air-target={target}
+      style={style}
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={`${AIR_TARGET_LABELS[target]}. ${detail}`}
+      aria-pressed={active === undefined ? undefined : active}
+    >
+      <span className="uv-target-icon"><Icon aria-hidden="true" /></span>
+      {deck && <small>{deckLabel(deck)}</small>}
+      <strong>{label}</strong>
+      <span>{detail}</span>
+    </button>
   )
 }
 
 export function DjRoomScreen({
   vision,
   mixer,
+  onNavigationLockChange,
 }: {
   vision: ReturnType<typeof useVisionRuntime>
   mixer: ReturnType<typeof useDjMixer>
+  onNavigationLockChange?: (locked: boolean) => void
 }) {
   const deckAInputRef = useRef<HTMLInputElement | null>(null)
   const deckBInputRef = useRef<HTMLInputElement | null>(null)
+  const localCrateInputRef = useRef<HTMLInputElement | null>(null)
+  const cameraShellRef = useRef<HTMLDivElement | null>(null)
+  const replayDialogRef = useRef<HTMLDialogElement | null>(null)
+  const cameraAdvancePendingRef = useRef(false)
+  const handAssignmentRef = useRef<HandAssignmentState>(createHandAssignmentState())
+  const airDwellRef = useRef<Record<AirHandSlot, AirDwellState>>({
+    left: createAirDwellState(),
+    right: createAirDwellState(),
+  })
+  const [step, setStep] = useState<DjFlowStep>(() => {
+    if (mixer.performanceAudioReady && (mixer.decks.a.loaded || mixer.decks.b.loaded)) {
+      return 'perform'
+    }
+    return vision.status === 'running' ? 'tracks' : 'camera'
+  })
+  const [cameraBypassed, setCameraBypassed] = useState(false)
+  const [performanceStarting, setPerformanceStarting] = useState(false)
+  const [cameraGeometry, setCameraGeometry] = useState<CameraCoverGeometry | null>(null)
+  const [airTargetBounds, setAirTargetBounds] = useState<AirTargetBounds | null>(null)
+  const [stableHands, setStableHands] = useState<
+    Record<AirHandSlot, HandSummary | null>
+  >({ left: null, right: null })
+  const [airDwells, setAirDwells] = useState<Record<AirHandSlot, AirDwellState>>({
+    left: createAirDwellState(),
+    right: createAirDwellState(),
+  })
+  const {
+    cancelAirMix,
+    cueDeck: cueMixerDeck,
+    decks,
+    selectPerformanceControl,
+    setPerformanceGestureInputEnabled,
+    togglePlayback,
+  } = mixer
+  const replay = useLocalReplay({ createMasterCapture: mixer.createMasterCapture })
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null)
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0)
+  const [replayPreviewOpen, setReplayPreviewOpen] = useState(false)
+  const [airMixCountdownMs, setAirMixCountdownMs] = useState(0)
+  const [localCrate, setLocalCrate] = useState<LocalCrateTrack[]>([])
+  const [localCrateNotice, setLocalCrateNotice] = useState('')
+
+  const anyTrackLoaded = decks.a.loaded || decks.b.loaded
+  const bothTracksLoaded = decks.a.loaded && decks.b.loaded
+  const replayActive = replay.status === 'recording' || replay.busy
+  const interactionLocked = performanceStarting || mixer.demoLoading || replayActive
+  const canOpenTracks = vision.status === 'running' || cameraBypassed || anyTrackLoaded
+  const canPerform = anyTrackLoaded
+  const canSync = Boolean(
+    bothTracksLoaded && decks.a.bpm && decks.b.bpm,
+  )
+  const anyPointing = AIR_HAND_SLOTS.some((slot) => isPointingHand(stableHands[slot]))
+  const airMixModeLabel = (mixer.airMix.mode === 'demo-air-mix' || (
+    mixer.airMix.mode === null &&
+    decks.a.sourceKind === 'demo' &&
+    decks.b.sourceKind === 'demo'
+  )) ? 'Demo Air Mix' : 'Assisted Fade'
+  const airMixRunning = mixer.airMix.phase === 'scheduled' || mixer.airMix.phase === 'fading'
+  const airMixVisible = mixer.airMix.phase !== 'idle'
+  const airMixStatus = mixer.airMix.phase === 'scheduled'
+    ? `NEXT BAR ${(airMixCountdownMs / 1_000).toFixed(1)}s`
+    : mixer.airMix.phase === 'fading'
+      ? `${Math.round(mixer.airMix.progress * 100)}%`
+      : mixer.airMix.phase === 'complete'
+        ? 'COMPLETE'
+        : mixer.airMix.phase === 'error'
+          ? 'RETRY'
+          : bothTracksLoaded
+            ? 'READY'
+            : 'NEEDS 2 DECKS'
+  const airPointers = useMemo(() => ({
+    left: stableHands.left && cameraGeometry
+      ? mapCameraPointToStage(
+          stableHands.left.pointerX ?? stableHands.left.x,
+          stableHands.left.pointerY ?? stableHands.left.y,
+          cameraGeometry,
+        )
+      : null,
+    right: stableHands.right && cameraGeometry
+      ? mapCameraPointToStage(
+          stableHands.right.pointerX ?? stableHands.right.x,
+          stableHands.right.pointerY ?? stableHands.right.y,
+          cameraGeometry,
+        )
+      : null,
+  }), [cameraGeometry, stableHands])
+
+  useEffect(() => {
+    if (replay.status !== 'recording') {
+      setRecordingStartedAt(null)
+      if (replay.artifact) setRecordingElapsedMs(replay.artifact.durationMs)
+      else if (!replay.busy) setRecordingElapsedMs(0)
+      return
+    }
+
+    const startedAt = recordingStartedAt ?? Date.now()
+    if (recordingStartedAt === null) setRecordingStartedAt(startedAt)
+    const update = () => setRecordingElapsedMs(Date.now() - startedAt)
+    update()
+    const interval = window.setInterval(update, 250)
+    return () => window.clearInterval(interval)
+  }, [recordingStartedAt, replay.artifact, replay.busy, replay.status])
+
+  useEffect(() => {
+    onNavigationLockChange?.(replayActive)
+    return () => onNavigationLockChange?.(false)
+  }, [onNavigationLockChange, replayActive])
+
+  useEffect(() => {
+    if (replay.status === 'preview' && replay.artifact) setReplayPreviewOpen(true)
+    else if (replay.status !== 'preview') setReplayPreviewOpen(false)
+  }, [replay.artifact, replay.status])
+
+  useEffect(() => {
+    const dialog = replayDialogRef.current
+    if (!dialog) return
+    if (replayPreviewOpen && replay.status === 'preview') {
+      if (!dialog.open) {
+        if (typeof dialog.showModal === 'function') dialog.showModal()
+        else dialog.setAttribute('open', '')
+      }
+      return
+    }
+    if (dialog.open) {
+      if (typeof dialog.close === 'function') dialog.close()
+      else dialog.removeAttribute('open')
+    }
+  }, [replay.status, replayPreviewOpen])
+
+  useEffect(() => {
+    if (mixer.airMix.phase !== 'scheduled' || mixer.airMix.scheduledAt === null) {
+      setAirMixCountdownMs(0)
+      return
+    }
+    const update = () => setAirMixCountdownMs(
+      Math.max(0, mixer.airMix.scheduledAt! - performance.now()),
+    )
+    update()
+    const interval = window.setInterval(update, 100)
+    return () => window.clearInterval(interval)
+  }, [mixer.airMix.phase, mixer.airMix.scheduledAt])
+
+  const handleCameraGeometryChange = useCallback((next: CameraCoverGeometry) => {
+    setCameraGeometry((current) => (
+      current &&
+      current.sourceWidth === next.sourceWidth &&
+      current.sourceHeight === next.sourceHeight &&
+      current.stageWidth === next.stageWidth &&
+      current.stageHeight === next.stageHeight &&
+      current.objectPositionX === next.objectPositionX &&
+      current.objectPositionY === next.objectPositionY
+        ? current
+        : next
+    ))
+  }, [])
+
+  useEffect(() => {
+    if (vision.status !== 'running' || !cameraAdvancePendingRef.current) return
+    cameraAdvancePendingRef.current = false
+    setStep('tracks')
+  }, [vision.status])
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+  }, [step])
+
+  useLayoutEffect(() => {
+    setPerformanceGestureInputEnabled(step === 'perform')
+    return () => {
+      if (step === 'perform') setPerformanceGestureInputEnabled(false)
+    }
+  }, [setPerformanceGestureInputEnabled, step])
+
+  useEffect(() => {
+    if (step !== 'perform' && airMixRunning) cancelAirMix()
+  }, [airMixRunning, cancelAirMix, step])
+
+  useEffect(() => () => cancelAirMix(), [cancelAirMix])
+
+  useLayoutEffect(() => {
+    const shell = cameraShellRef.current
+    if (step !== 'perform' || !shell) {
+      setAirTargetBounds(null)
+      return
+    }
+
+    const targetElements = Array.from(
+      shell.querySelectorAll<HTMLElement>('[data-air-target]'),
+    )
+    // Cache layout-normalized rectangles here so hand-frame updates only run
+    // pure hit math and never call getBoundingClientRect themselves.
+    const updateBounds = () => {
+      const shellRect = shell.getBoundingClientRect()
+      if (!shellRect.width || !shellRect.height) return
+
+      const next: Partial<Record<AirTargetId, {
+        left: number
+        top: number
+        right: number
+        bottom: number
+      }>> = {}
+      for (const element of targetElements) {
+        const target = element.dataset.airTarget as AirTargetId | undefined
+        if (!target || !Object.prototype.hasOwnProperty.call(AIR_TARGET_LABELS, target)) {
+          continue
+        }
+        const rect = element.getBoundingClientRect()
+        next[target] = {
+          left: (rect.left - shellRect.left) / shellRect.width,
+          top: (rect.top - shellRect.top) / shellRect.height,
+          right: (rect.right - shellRect.left) / shellRect.width,
+          bottom: (rect.bottom - shellRect.top) / shellRect.height,
+        }
+      }
+      setAirTargetBounds((current) => (
+        airTargetBoundsMatch(current, next) ? current : next
+      ))
+    }
+
+    updateBounds()
+    window.addEventListener('resize', updateBounds)
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updateBounds)
+    resizeObserver?.observe(shell)
+    targetElements.forEach((element) => resizeObserver?.observe(element))
+
+    return () => {
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', updateBounds)
+    }
+  }, [step])
+
+  const cueDeck = useCallback((id: DeckId) => {
+    if (!decks[id].loaded) return
+    cueMixerDeck(id)
+  }, [cueMixerDeck, decks])
+
+  const playDeck = useCallback((id: DeckId) => {
+    if (!decks[id].loaded) return
+    void togglePlayback(id)
+  }, [decks, togglePlayback])
+
+  const activateAirTarget = useCallback((target: AirTargetId) => {
+    if (target === 'cue-a') cueDeck('a')
+    else if (target === 'play-a') playDeck('a')
+    else if (target === 'cue-b') cueDeck('b')
+    else if (target === 'play-b') playDeck('b')
+    else if (target === 'volume-a') selectPerformanceControl('a', 'volume')
+    else if (target === 'filter-a') selectPerformanceControl('a', 'filter')
+    else if (target === 'volume-b') selectPerformanceControl('b', 'volume')
+    else if (target === 'filter-b') selectPerformanceControl('b', 'filter')
+  }, [
+    cueDeck,
+    playDeck,
+    selectPerformanceControl,
+  ])
+
+  useEffect(() => {
+    if (step !== 'perform' || vision.status !== 'running') {
+      handAssignmentRef.current = createHandAssignmentState()
+      setStableHands((current) => (
+        current.left === null && current.right === null
+          ? current
+          : { left: null, right: null }
+      ))
+      return
+    }
+    const assignment = assignHandsToStableSlots(
+      handAssignmentRef.current,
+      vision.analysis.hands,
+      performance.now(),
+    )
+    handAssignmentRef.current = assignment.state
+    setStableHands((current) => (
+      current.left === assignment.left && current.right === assignment.right
+        ? current
+        : { left: assignment.left, right: assignment.right }
+    ))
+  }, [step, vision.analysis.hands, vision.status])
+
+  useEffect(() => {
+    const next = { ...airDwellRef.current }
+    const activations: AirTargetId[] = []
+    const now = performance.now()
+
+    for (const slot of AIR_HAND_SLOTS) {
+      const hand = stableHands[slot]
+      const pointer = airPointers[slot]
+      const pointing =
+        step === 'perform' && vision.status === 'running' && isPointingHand(hand)
+      const enabled = pointing && Boolean(pointer?.visible) && Boolean(airTargetBounds)
+      const x = pointer?.x ?? 0
+      const y = pointer?.y ?? 0
+      const target = enabled && airTargetBounds
+        ? airTargetAtBounds(x, y, airTargetBounds, slot)
+        : null
+      const transition = transitionAirDwell(airDwellRef.current[slot], {
+        enabled,
+        target,
+        now,
+        x,
+        y,
+      })
+      next[slot] = transition.state
+      if (transition.activate) activations.push(transition.activate)
+    }
+
+    airDwellRef.current = next
+    setAirDwells((current) => (
+      AIR_HAND_SLOTS.every((slot) => (
+        current[slot].target === next[slot].target &&
+        current[slot].startedAt === next[slot].startedAt &&
+        current[slot].progress === next[slot].progress &&
+        current[slot].fired === next[slot].fired
+      ))
+        ? current
+        : next
+    ))
+    for (const target of activations) activateAirTarget(target)
+  }, [activateAirTarget, airPointers, airTargetBounds, stableHands, step, vision.status])
+
+  const loadFile = async (id: DeckId, file?: File) => {
+    if (!file || interactionLocked) return
+    await mixer.loadFile(id, file)
+  }
+
+  const selectLocalCrate = (files?: FileList | null) => {
+    if (!files || interactionLocked) return
+    const selection = createLocalCrateSelection(files)
+    setLocalCrate(selection.tracks)
+    const notices = [
+      selection.overflow
+        ? `Using the first ${MAX_LOCAL_CRATE_TRACKS} supported tracks.`
+        : '',
+      selection.rejected.length
+        ? `${selection.rejected.length} unsupported or oversized file${selection.rejected.length === 1 ? '' : 's'} skipped.`
+        : '',
+    ].filter(Boolean)
+    setLocalCrateNotice(notices.join(' '))
+  }
+
+  const loadDemo = async (bypassCamera = false) => {
+    if (interactionLocked) return
+    if (bypassCamera) setCameraBypassed(true)
+    const loaded = await mixer.loadDemoMix()
+    if (loaded) setStep('tracks')
+  }
+
+  const startCamera = () => {
+    if (vision.status === 'loading') {
+      cameraAdvancePendingRef.current = false
+      vision.stop()
+      return
+    }
+    if (vision.status === 'running') {
+      setStep('tracks')
+      return
+    }
+    cameraAdvancePendingRef.current = true
+    void vision.start()
+  }
+
+  const enterPerformance = async () => {
+    if (!anyTrackLoaded || interactionLocked) return
+    setPerformanceStarting(true)
+    const started = await mixer.startPerformance()
+    setPerformanceStarting(false)
+    if (started) setStep('perform')
+  }
+
+  const toggleReplay = async () => {
+    if (replay.status === 'recording') {
+      replay.stop('manual')
+      return
+    }
+    if (replay.status === 'preview' && replay.artifact) {
+      setReplayPreviewOpen(true)
+      return
+    }
+    await replay.start()
+  }
+
+  const cameraButtonLabel = vision.status === 'loading'
+    ? 'Cancel camera'
+    : vision.status === 'running'
+      ? 'Continue to tracks'
+      : vision.status === 'error'
+        ? 'Retry camera'
+        : 'Allow camera'
+
+  const cameraBackdrop = vision.status === 'running'
+    ? undefined
+    : <img className="uv-camera-preview-art" src={airMixMotion} alt="" />
 
   return (
-    <>
+    <div className={`uv-dj-flow flow-${step}`}>
       <input
         ref={deckAInputRef}
-        className="sr-only"
+        hidden
         type="file"
+        disabled={interactionLocked}
         accept={ACCEPTED_AUDIO}
         onChange={(event) => {
-          void mixer.loadFile('a', event.target.files?.[0])
+          void loadFile('a', event.target.files?.[0])
           event.currentTarget.value = ''
         }}
       />
       <input
         ref={deckBInputRef}
-        className="sr-only"
+        hidden
         type="file"
+        disabled={interactionLocked}
         accept={ACCEPTED_AUDIO}
         onChange={(event) => {
-          void mixer.loadFile('b', event.target.files?.[0])
+          void loadFile('b', event.target.files?.[0])
+          event.currentTarget.value = ''
+        }}
+      />
+      <input
+        ref={localCrateInputRef}
+        hidden
+        type="file"
+        multiple
+        disabled={interactionLocked}
+        accept={ACCEPTED_AUDIO}
+        onChange={(event) => {
+          selectLocalCrate(event.target.files)
           event.currentTarget.value = ''
         }}
       />
 
-      <PageIntro
-        eyebrow="DJ Room"
-        title="Mix two tracks with movement."
-        description="Two local decks, automatic BPM analysis, tempo sync, phrase jumps, and a camera-controlled mixer."
-        actions={
-          <>
-            <button
-              type="button"
-              className="button secondary"
-              onClick={() => deckAInputRef.current?.click()}
-            >
-              <Music2 aria-hidden="true" />
-              Load deck A
-            </button>
-            <button
-              type="button"
-              className="button secondary"
-              onClick={() => deckBInputRef.current?.click()}
-            >
-              <Disc3 aria-hidden="true" />
-              Load deck B
-            </button>
-            <CameraActions status={vision.status} start={vision.start} stop={vision.stop} />
-          </>
-        }
+      <FlowProgress
+        step={step}
+        canOpenTracks={canOpenTracks}
+        canPerform={canPerform}
+        locked={interactionLocked}
+        onStepChange={(nextStep) => {
+          cameraAdvancePendingRef.current = false
+          if (interactionLocked) return
+          if (nextStep === 'perform') void enterPerformance()
+          else setStep(nextStep)
+        }}
       />
 
-      <section className="dj-vision-layout">
-        <CameraStage
-          status={vision.status}
-          message={vision.message}
-          setVideoElement={vision.setVideoElement}
-          setCanvasElement={vision.setCanvasElement}
-          overlay={
-            <div className="dj-room-overlay">
-              <span>
-                <Hand aria-hidden="true" />
-                {vision.analysis.hands.length ? 'Mixer connected' : 'Find a hand'}
-              </span>
-              <span>
-                {mixer.selectedControl === 'crossfader'
-                  ? 'Crossfader'
-                  : `${deckLabel(mixer.activeDeck)} ${mixer.selectedControl}`}
-              </span>
-            </div>
-          }
-        />
-        <GestureConsole mixer={mixer} vision={vision} />
+      <section className="uv-flow-camera-section" aria-labelledby="uv-flow-title">
+        <header className="uv-flow-heading">
+          <span>{step === 'camera' ? 'Camera setup' : step === 'tracks' ? 'Your music' : 'Open hand · live'}</span>
+          <h1 id="uv-flow-title">
+            {step === 'camera'
+              ? 'Start with your camera'
+              : step === 'tracks'
+                ? 'Load your tracks'
+                : 'Perform with your hands'}
+          </h1>
+          <p>
+            {step === 'camera'
+              ? 'Sit back. Raise one open hand and keep it inside the frame.'
+              : step === 'tracks'
+                ? 'Add one track or two. Deck B is optional.'
+                : 'Left hand: Deck A. Right hand: Deck B. Point to choose; open palm to move.'}
+          </p>
+        </header>
+
+        <div
+          ref={cameraShellRef}
+          className="uv-camera-shell"
+          aria-hidden={step === 'tracks' ? 'true' : undefined}
+        >
+          <CameraStage
+            status={vision.status}
+            message={vision.message}
+            setVideoElement={vision.setVideoElement}
+            setCanvasElement={vision.setCanvasElement}
+            backdrop={cameraBackdrop}
+            objectPosition={DJ_CAMERA_OBJECT_POSITION}
+            onGeometryChange={handleCameraGeometryChange}
+            overlay={step === 'perform' && vision.status === 'running' ? (
+              <div className="uv-live-readout">
+                <span><Hand aria-hidden="true" /> {anyPointing ? 'Aim and hold' : mixer.gestureStatus}</span>
+                <strong>Left · Deck A · Right · Deck B</strong>
+              </div>
+            ) : undefined}
+          />
+
+          {step === 'perform' && vision.status !== 'error' && (
+            <>
+              <div className="uv-target-rail rail-a">
+                <PerformanceTarget
+                  target="cue-a"
+                  label="CUE"
+                  detail="Restart"
+                  deck="a"
+                  icon="cue"
+                  airDwell={airDwells.left}
+                  disabled={!mixer.decks.a.loaded}
+                  onClick={() => cueDeck('a')}
+                />
+                <PerformanceTarget
+                  target="play-a"
+                  label={mixer.decks.a.playing ? 'PAUSE' : 'PLAY'}
+                  detail={mixer.decks.a.playing ? 'Hold' : 'Start'}
+                  deck="a"
+                  icon={mixer.decks.a.playing ? 'pause' : 'play'}
+                  airDwell={airDwells.left}
+                  disabled={!mixer.decks.a.loaded}
+                  onClick={() => playDeck('a')}
+                />
+              </div>
+              <div className="uv-target-rail rail-b">
+                <PerformanceTarget
+                  target="cue-b"
+                  label="CUE"
+                  detail="Restart"
+                  deck="b"
+                  icon="cue"
+                  airDwell={airDwells.right}
+                  disabled={!mixer.decks.b.loaded}
+                  onClick={() => cueDeck('b')}
+                />
+                <PerformanceTarget
+                  target="play-b"
+                  label={mixer.decks.b.playing ? 'PAUSE' : 'PLAY'}
+                  detail={mixer.decks.b.playing ? 'Hold' : 'Start'}
+                  deck="b"
+                  icon={mixer.decks.b.playing ? 'pause' : 'play'}
+                  airDwell={airDwells.right}
+                  disabled={!mixer.decks.b.loaded}
+                  onClick={() => playDeck('b')}
+                />
+              </div>
+              <div className="uv-control-targets">
+                <div className="uv-deck-control-pair deck-a" aria-label="Deck A hand control">
+                  <span>LEFT HAND · DECK A</span>
+                  <PerformanceTarget
+                    target="volume-a"
+                    label="VOLUME"
+                    detail={`${mixer.decks.a.volume}%`}
+                    icon="volume"
+                    airDwell={airDwells.left}
+                    disabled={!mixer.decks.a.loaded}
+                    active={mixer.performanceControls.a === 'volume'}
+                    onClick={() => mixer.selectPerformanceControl('a', 'volume')}
+                  />
+                  <PerformanceTarget
+                    target="filter-a"
+                    label="FILTER"
+                    detail={mixer.decks.a.filter === 50 ? 'Neutral' : `${mixer.decks.a.filter}%`}
+                    icon="filter"
+                    airDwell={airDwells.left}
+                    disabled={!mixer.decks.a.loaded}
+                    active={mixer.performanceControls.a === 'filter'}
+                    onClick={() => mixer.selectPerformanceControl('a', 'filter')}
+                  />
+                </div>
+                <div className="uv-deck-control-pair deck-b" aria-label="Deck B hand control">
+                  <span>RIGHT HAND · DECK B</span>
+                  <PerformanceTarget
+                    target="volume-b"
+                    label="VOLUME"
+                    detail={`${mixer.decks.b.volume}%`}
+                    icon="volume"
+                    airDwell={airDwells.right}
+                    disabled={!mixer.decks.b.loaded}
+                    active={mixer.performanceControls.b === 'volume'}
+                    onClick={() => mixer.selectPerformanceControl('b', 'volume')}
+                  />
+                  <PerformanceTarget
+                    target="filter-b"
+                    label="FILTER"
+                    detail={mixer.decks.b.filter === 50 ? 'Neutral' : `${mixer.decks.b.filter}%`}
+                    icon="filter"
+                    airDwell={airDwells.right}
+                    disabled={!mixer.decks.b.loaded}
+                    active={mixer.performanceControls.b === 'filter'}
+                    onClick={() => mixer.selectPerformanceControl('b', 'filter')}
+                  />
+                </div>
+              </div>
+              {AIR_HAND_SLOTS.map((slot) => {
+                const hand = stableHands[slot]
+                const pointer = airPointers[slot]
+                if (!hand || !pointer?.visible || vision.status !== 'running') return null
+                return (
+                  <span
+                    key={slot}
+                    className={`uv-air-cursor cursor-${slot} ${isPointingHand(hand) ? 'pointing' : ''}`}
+                    style={{ left: `${pointer.x * 100}%`, top: `${pointer.y * 100}%` }}
+                    aria-hidden="true"
+                  />
+                )
+              })}
+            </>
+          )}
+        </div>
+
+        {step === 'camera' && (
+          <div className="uv-camera-actions">
+            <button
+              type="button"
+              className="button primary"
+              onClick={startCamera}
+              disabled={interactionLocked}
+            >
+              <Camera aria-hidden="true" />
+              {cameraButtonLabel}
+            </button>
+            <button
+              type="button"
+              className="button text"
+              onClick={() => void loadDemo(true)}
+              disabled={interactionLocked}
+            >
+              <Sparkles aria-hidden="true" />
+              {mixer.demoLoading ? 'Building demo…' : 'Use demo instead'}
+            </button>
+            <span><Lock aria-hidden="true" /> Processed locally · No video leaves your browser.</span>
+          </div>
+        )}
       </section>
 
-      <section className="dj-console">
-        <DeckPanel id="a" mixer={mixer} onUpload={() => deckAInputRef.current?.click()} />
-        <MixerConsole mixer={mixer} />
-        <DeckPanel id="b" mixer={mixer} onUpload={() => deckBInputRef.current?.click()} />
-      </section>
-    </>
+      {step === 'tracks' && (
+        <section className="uv-track-loader" aria-label="Load tracks">
+          <div className="uv-camera-ready">
+            <span className={vision.status === 'running' ? 'ready' : ''} />
+            {vision.status === 'running' ? 'Camera ready' : 'Manual demo mode'}
+          </div>
+          <section className="uv-local-crate" aria-labelledby="uv-local-crate-title">
+            <header>
+              <div>
+                <span><ListMusic aria-hidden="true" /> PRIVATE LOCAL CRATE</span>
+                <h2 id="uv-local-crate-title">
+                  {localCrate.length
+                    ? `${localCrate.length} track${localCrate.length === 1 ? '' : 's'} ready`
+                    : 'Bring your own set'}
+                </h2>
+                <p>Choose up to ten tracks. They stay in this browser tab and are analyzed when loaded.</p>
+              </div>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => localCrateInputRef.current?.click()}
+                disabled={interactionLocked}
+              >
+                <FolderOpen aria-hidden="true" />
+                {localCrate.length ? 'Replace crate' : 'Choose up to 10 tracks'}
+              </button>
+            </header>
+            {localCrateNotice && <output className="uv-local-crate-notice">{localCrateNotice}</output>}
+            {localCrate.length > 0 && (
+              <ol>
+                {localCrate.map((track, index) => (
+                  <li key={track.id}>
+                    <b>{String(index + 1).padStart(2, '0')}</b>
+                    <div>
+                      <strong title={track.name}>{track.name}</strong>
+                      <span>{formatLocalTrackSize(track.size)} · local only</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void loadFile('a', track.file)}
+                      disabled={interactionLocked}
+                      aria-label={`Load ${track.name} into Deck A`}
+                    >
+                      A
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void loadFile('b', track.file)}
+                      disabled={interactionLocked}
+                      aria-label={`Load ${track.name} into Deck B`}
+                    >
+                      B
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
+          <div className="uv-track-grid">
+            <TrackSlot
+              id="a"
+              mixer={mixer}
+              disabled={interactionLocked}
+              onChoose={() => deckAInputRef.current?.click()}
+            />
+            <TrackSlot
+              id="b"
+              mixer={mixer}
+              disabled={interactionLocked}
+              onChoose={() => deckBInputRef.current?.click()}
+            />
+          </div>
+          <div className="uv-track-actions">
+            <button
+              type="button"
+              className="button primary"
+              onClick={() => void enterPerformance()}
+              disabled={!anyTrackLoaded || interactionLocked}
+            >
+              <Play aria-hidden="true" />
+              {performanceStarting ? 'Enabling sound…' : 'Start performance'}
+            </button>
+            <button
+              type="button"
+              className="button text"
+              onClick={() => void loadDemo()}
+              disabled={interactionLocked}
+            >
+              <Sparkles aria-hidden="true" />
+              {mixer.demoLoading ? 'Building demo tracks…' : 'Try demo tracks'}
+            </button>
+            {!anyTrackLoaded && <small>Add Deck A to continue. Deck B is optional.</small>}
+          </div>
+        </section>
+      )}
+
+      {step === 'perform' && (
+        <section className="uv-performance-workspace" aria-labelledby="uv-performance-title">
+          <div className="uv-performance-toolbar">
+            <div className="uv-performance-core-actions">
+              <button
+                type="button"
+                className={`uv-command-pill uv-bpm-sync ${mixer.bpmSyncActive ? 'active' : ''}`}
+                onClick={mixer.toggleBpmSync}
+                disabled={!canSync || airMixRunning}
+                aria-pressed={mixer.bpmSyncActive}
+                aria-label={canSync ? 'Toggle BPM Sync' : 'Load Deck B and wait for both BPMs to use BPM Sync'}
+                title={canSync ? mixer.bpmSyncMessage : 'Load Deck B and wait for both BPMs to use BPM Sync'}
+              >
+                {mixer.bpmSyncActive ? <Lock aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
+                <span>BPM SYNC</span>
+                <b>{mixer.bpmSyncActive ? 'LOCKED' : canSync ? 'READY' : 'NEEDS 2 DECKS'}</b>
+              </button>
+              <button
+                type="button"
+                className={`uv-command-pill uv-air-mix ${airMixRunning ? 'active' : ''} phase-${mixer.airMix.phase}`}
+                onClick={() => {
+                  if (airMixRunning) mixer.cancelAirMix()
+                  else void mixer.startAirMix()
+                }}
+                disabled={!bothTracksLoaded}
+                aria-pressed={airMixRunning}
+                aria-label={airMixRunning ? `Cancel ${airMixModeLabel}` : `Start ${airMixModeLabel}`}
+                title={bothTracksLoaded ? mixer.airMix.copy : 'Load both decks before starting Air Mix'}
+              >
+                <ArrowLeftRight aria-hidden="true" />
+                <span>{airMixModeLabel}</span>
+                <b>{airMixStatus}</b>
+              </button>
+            </div>
+            <div className="uv-performance-status">
+              <strong id="uv-performance-title">Dual hand control</strong>
+              <span>
+                Left/A · {mixer.performanceControls.a} · Right/B · {mixer.performanceControls.b}
+              </span>
+              {vision.status === 'error' && (
+                <span className="uv-performance-camera-error" role="alert">
+                  {vision.message}
+                </span>
+              )}
+              {(mixer.decks.a.error || mixer.decks.b.error) && (
+                <span className="uv-performance-audio-error" role="alert">
+                  {mixer.decks.a.error ?? mixer.decks.b.error}
+                </span>
+              )}
+              {replay.error && (
+                <span className="uv-performance-replay-error" role="alert">
+                  {replay.error.message}
+                </span>
+              )}
+            </div>
+            <div className="uv-performance-actions">
+              <button
+                type="button"
+                className={`uv-record-control ${replay.status === 'recording' ? 'active' : ''}`}
+                onClick={() => void toggleReplay()}
+                disabled={replay.busy || (
+                  replay.status !== 'recording' &&
+                  replay.status !== 'preview' &&
+                  !decks.a.playing &&
+                  !decks.b.playing
+                )}
+                aria-label={replay.status === 'recording'
+                  ? 'Stop audio-only master mix recording'
+                  : replay.status === 'preview'
+                    ? 'Open local master mix replay'
+                    : 'Record audio-only master mix'}
+                title={replay.label}
+              >
+                {replay.status === 'recording'
+                  ? <Square aria-hidden="true" />
+                  : replay.status === 'preview'
+                    ? <Download aria-hidden="true" />
+                    : <Circle aria-hidden="true" />}
+                <span>
+                  {replay.status === 'recording'
+                    ? 'Stop'
+                    : replay.busy
+                      ? 'Saving…'
+                      : replay.status === 'preview'
+                        ? 'Replay'
+                        : 'Record'}
+                </span>
+                {replay.status === 'recording' && <b>{formatReplayDuration(recordingElapsedMs)}</b>}
+              </button>
+              <details className="uv-secondary-menu">
+                <summary aria-label="More performance actions">
+                  <MoreHorizontal aria-hidden="true" />
+                  <span className="sr-only">More performance actions</span>
+                </summary>
+                <div>
+                  {vision.status === 'running' ? (
+                    <button type="button" onClick={vision.stop}><Camera aria-hidden="true" /> Stop camera</button>
+                  ) : (
+                    <button type="button" onClick={() => void vision.start()}>
+                      <Camera aria-hidden="true" /> {vision.status === 'error' ? 'Retry camera' : 'Start camera'}
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setStep('tracks')} disabled={replayActive}>
+                    <Upload aria-hidden="true" /> Change tracks
+                  </button>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <div className="uv-waveform-stack">
+            <PerformanceWaveform
+              deckId="a"
+              deck={mixer.decks.a}
+              onSeek={(time) => mixer.seek('a', time)}
+            />
+            {airMixVisible && (
+              <div
+                className={`uv-air-mix-rail phase-${mixer.airMix.phase}`}
+                role={mixer.airMix.phase === 'error' ? 'alert' : undefined}
+              >
+                <span>{airMixModeLabel}</span>
+                <strong aria-live="polite">{mixer.airMix.copy}</strong>
+                <progress
+                  className="uv-air-mix-progress"
+                  aria-label={`${airMixModeLabel} progress`}
+                  max={100}
+                  value={Math.round(mixer.airMix.progress * 100)}
+                />
+                <button type="button" onClick={() => mixer.cancelAirMix()}>
+                  {airMixRunning ? 'Cancel' : 'Dismiss'}
+                </button>
+              </div>
+            )}
+            <PerformanceWaveform
+              deckId="b"
+              deck={mixer.decks.b}
+              onSeek={(time) => mixer.seek('b', time)}
+            />
+          </div>
+          <p className="uv-beat-note">
+            <ShieldCheck aria-hidden="true" /> Uploaded-track beat and bar markers are estimates. Audio and camera stay in this browser tab.
+          </p>
+        </section>
+      )}
+
+      {replay.status === 'preview' && replay.artifact && replay.download && (
+        <dialog
+          ref={replayDialogRef}
+          className="uv-replay-sheet"
+          aria-labelledby="uv-replay-title"
+          onCancel={(event) => {
+            event.preventDefault()
+            setReplayPreviewOpen(false)
+          }}
+        >
+          <header>
+            <div>
+              <span>LOCAL REPLAY</span>
+              <h2 id="uv-replay-title">Your master mix is ready</h2>
+            </div>
+            <strong>{formatReplayDuration(replay.artifact.durationMs)}</strong>
+          </header>
+          <p>{replay.label}</p>
+          <audio controls src={replay.artifact.url} preload="metadata">
+            Your browser cannot preview this recording.
+          </audio>
+          <div className="uv-replay-sheet-actions">
+            <a href={replay.download.url} download={replay.download.filename}>
+              <Download aria-hidden="true" /> Download
+            </a>
+            <button type="button" onClick={() => setReplayPreviewOpen(false)}>
+              <Check aria-hidden="true" /> Keep for this tab
+            </button>
+            <button type="button" onClick={replay.discard}>
+              <Trash2 aria-hidden="true" /> Discard
+            </button>
+          </div>
+        </dialog>
+      )}
+    </div>
   )
 }

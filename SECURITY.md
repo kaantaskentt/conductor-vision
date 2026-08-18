@@ -23,7 +23,9 @@ Ultra Vision is currently a client-only application:
 
 - camera frames and uploaded media remain in the browser tab;
 - there are no accounts, secrets, databases, or application APIs;
-- MediaPipe runtime files and model weights are fetched from the origins listed in the content security policy;
+- lock-pinned MediaPipe WASM is served from the application origin;
+- hand and face model bundles are accepted only after exact byte-length and SHA-256 verification, then supplied to MediaPipe as in-memory bytes;
+- the content security policy permits the model host for those verified byte fetches, never as a script origin, and no camera frame is included in the request;
 - a future server or model backend requires a new threat review before release.
 
 ## Automated checks

@@ -5,8 +5,9 @@ import {
   Hand,
   ShieldCheck,
 } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import type { CameraStatus } from '../hooks/useVisionRuntime'
+import type { CameraCoverGeometry } from '../lib/cameraGeometry'
 
 export type Screen = 'vision' | 'dj-room'
 
@@ -23,9 +24,11 @@ function ScreenIcon({ screen }: { screen: Screen }) {
 export function AppHeader({
   screen,
   onScreenChange,
+  navigationLocked = false,
 }: {
   screen: Screen
   onScreenChange: (screen: Screen) => void
+  navigationLocked?: boolean
 }) {
   return (
     <header className="app-header">
@@ -44,6 +47,10 @@ export function AppHeader({
             type="button"
             className={screen === item ? 'active' : ''}
             aria-current={screen === item ? 'page' : undefined}
+            disabled={navigationLocked && screen !== item}
+            title={navigationLocked && screen !== item
+              ? 'Stop the local recording before leaving DJ Room'
+              : undefined}
             onClick={() => onScreenChange(item)}
           >
             <ScreenIcon screen={item} />
@@ -65,20 +72,22 @@ export function PageIntro({
   title,
   description,
   actions,
+  className,
 }: {
   eyebrow: string
   title: string
   description: string
-  actions: ReactNode
+  actions?: ReactNode
+  className?: string
 }) {
   return (
-    <section className="page-intro">
+    <section className={`page-intro ${className ?? ''}`.trim()}>
       <div>
         <p className="eyebrow">{eyebrow}</p>
         <h1>{title}</h1>
         <p className="page-description">{description}</p>
       </div>
-      <div className="page-actions">{actions}</div>
+      {actions ? <div className="page-actions">{actions}</div> : null}
     </section>
   )
 }
@@ -89,35 +98,123 @@ export function CameraStage({
   setVideoElement,
   setCanvasElement,
   compact = false,
+  backdrop,
   overlay,
+  objectPosition = { x: 0.5, y: 0.5 },
+  onGeometryChange,
 }: {
   status: CameraStatus
   message: string
   setVideoElement: (element: HTMLVideoElement | null) => void
   setCanvasElement: (element: HTMLCanvasElement | null) => void
   compact?: boolean
+  backdrop?: ReactNode
   overlay?: ReactNode
+  objectPosition?: Readonly<{ x: number; y: number }>
+  onGeometryChange?: (geometry: CameraCoverGeometry) => void
 }) {
   const isRunning = status === 'running'
+  const isLoading = status === 'loading'
+  const stageRef = useRef<HTMLDivElement | null>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const objectPositionX = objectPosition.x
+  const objectPositionY = objectPosition.y
+  const mediaObjectPosition = `${objectPositionX * 100}% ${objectPositionY * 100}%`
+
+  const handleVideoElement = useCallback((element: HTMLVideoElement | null) => {
+    videoRef.current = element
+    setVideoElement(element)
+  }, [setVideoElement])
+
+  useEffect(() => {
+    const stage = stageRef.current
+    const video = videoRef.current
+    if (!stage || !video || !onGeometryChange) return
+
+    const updateGeometry = () => {
+      const bounds = stage.getBoundingClientRect()
+      const stageWidth = stage.clientWidth || bounds.width
+      const stageHeight = stage.clientHeight || bounds.height
+      if (!video.videoWidth || !video.videoHeight || !stageWidth || !stageHeight) return
+      onGeometryChange({
+        sourceWidth: video.videoWidth,
+        sourceHeight: video.videoHeight,
+        stageWidth,
+        stageHeight,
+        objectPositionX,
+        objectPositionY,
+      })
+    }
+
+    updateGeometry()
+    video.addEventListener('loadedmetadata', updateGeometry)
+    video.addEventListener('resize', updateGeometry)
+    window.addEventListener('resize', updateGeometry)
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updateGeometry)
+    resizeObserver?.observe(stage)
+
+    return () => {
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', updateGeometry)
+      video.removeEventListener('resize', updateGeometry)
+      video.removeEventListener('loadedmetadata', updateGeometry)
+    }
+  }, [objectPositionX, objectPositionY, onGeometryChange])
 
   return (
-    <div className={`camera-stage ${compact ? 'compact' : ''}`}>
-      <video ref={setVideoElement} className="camera-feed" playsInline muted />
-      <canvas ref={setCanvasElement} className="camera-overlay" />
+    <div
+      ref={stageRef}
+      className={`camera-stage status-${status} ${compact ? 'compact' : ''}`.trim()}
+      data-camera-status={status}
+    >
+      {backdrop ? (
+        <div className="camera-stage-backdrop" aria-hidden="true">
+          {backdrop}
+        </div>
+      ) : null}
+      <video
+        ref={handleVideoElement}
+        className="camera-feed"
+        style={{ objectPosition: mediaObjectPosition }}
+        playsInline
+        muted
+        aria-hidden="true"
+        tabIndex={-1}
+      />
+      <canvas
+        ref={setCanvasElement}
+        className="camera-overlay"
+        style={{ objectPosition: mediaObjectPosition }}
+        aria-hidden="true"
+      />
       <div className="stage-corners" aria-hidden="true" />
-      <div className={`live-pill ${isRunning ? 'running' : ''}`}>
+      <div className={`live-pill ${isRunning ? 'running' : isLoading ? 'loading' : ''}`}>
         <span />
-        {isRunning ? 'Live on device' : status === 'loading' ? 'Loading models' : 'Camera off'}
+        {isRunning
+          ? 'Live on device'
+          : isLoading
+            ? 'Preparing on device'
+            : status === 'error'
+              ? 'Camera error'
+              : 'Camera off'}
       </div>
-      {!isRunning && (
+      {status === 'idle' || status === 'error' ? (
         <div className="camera-empty">
           <Camera aria-hidden="true" />
-          <strong>{status === 'loading' ? 'Preparing local vision' : 'Camera off'}</strong>
+          <strong>{status === 'error' ? 'Camera needs attention' : 'Camera off'}</strong>
           <p>{message}</p>
           <span>
             <Hand aria-hidden="true" />
             Hand tracking inactive
           </span>
+        </div>
+      ) : null}
+      {isLoading && (
+        <div className="camera-loading">
+          <strong>Preparing local vision</strong>
+          <span>{message}</span>
         </div>
       )}
       {isRunning && overlay}
@@ -129,21 +226,30 @@ export function CameraActions({
   status,
   start,
   stop,
+  variant = 'primary',
 }: {
   status: CameraStatus
   start: () => void
   stop: () => void
+  variant?: 'primary' | 'secondary'
 }) {
   const running = status === 'running'
+  const loading = status === 'loading'
+  const active = running || loading
   return (
     <button
       type="button"
-      className="button primary"
-      onClick={running ? stop : start}
-      disabled={status === 'loading'}
+      className={`button ${variant}`}
+      onClick={active ? stop : start}
     >
       <Camera aria-hidden="true" />
-      {status === 'loading' ? 'Loading…' : running ? 'Stop camera' : 'Start camera'}
+      {loading
+        ? 'Cancel camera'
+        : running
+          ? 'Stop camera'
+          : status === 'error'
+            ? 'Retry camera'
+            : 'Start camera'}
     </button>
   )
 }

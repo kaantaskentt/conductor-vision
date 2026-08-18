@@ -28,14 +28,50 @@ import {
 
 type PixelStudy = 'mask' | 'depth'
 
-function PixelPreview({ source, label }: { source: string; label: string }) {
+function PixelPreview({
+  source,
+  label,
+  onError,
+}: {
+  source: string
+  label: string
+  onError: (message: string) => void
+}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    void drawPixelStudioPreview(source, canvas)
-  }, [source])
+    const pendingCanvas = document.createElement('canvas')
+    let current = true
+
+    // Decode into a detached canvas so an older image request can never paint
+    // over the canvas now representing a newer upload or camera capture.
+    canvas.width = 1
+    canvas.height = 1
+    void drawPixelStudioPreview(source, pendingCanvas)
+      .then(() => {
+        if (!current || canvasRef.current !== canvas) return
+        const context = canvas.getContext('2d')
+        if (!context) throw new Error('Canvas preview is not available in this browser.')
+        canvas.width = pendingCanvas.width
+        canvas.height = pendingCanvas.height
+        context.clearRect(0, 0, canvas.width, canvas.height)
+        context.drawImage(pendingCanvas, 0, 0, canvas.width, canvas.height)
+      })
+      .catch((error: unknown) => {
+        if (!current) return
+        onError(
+          error instanceof Error
+            ? error.message
+            : 'The image preview could not be created. Try another file.',
+        )
+      })
+
+    return () => {
+      current = false
+    }
+  }, [onError, source])
 
   return (
     <figure className="pixel-preview">
@@ -55,14 +91,22 @@ function PixelStudio({ vision }: { vision: ReturnType<typeof useVisionRuntime> }
     'Transparent local pixel studies—not segmentation or depth models.',
   )
   const objectUrlRef = useRef<string | null>(null)
+  const studyRequestRef = useRef(0)
 
   useEffect(() => {
     return () => {
+      studyRequestRef.current += 1
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
     }
   }, [])
 
+  function cancelPendingStudy() {
+    studyRequestRef.current += 1
+    setBusy(false)
+  }
+
   function clearSource() {
+    cancelPendingStudy()
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
     objectUrlRef.current = null
     setSource(null)
@@ -80,6 +124,7 @@ function PixelStudio({ vision }: { vision: ReturnType<typeof useVisionRuntime> }
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
       const url = URL.createObjectURL(file)
       objectUrlRef.current = url
+      cancelPendingStudy()
       setSource(url)
       setResult(null)
       setSourceName('Uploaded image')
@@ -94,6 +139,7 @@ function PixelStudio({ vision }: { vision: ReturnType<typeof useVisionRuntime> }
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
       objectUrlRef.current = null
       const dataUrl = vision.captureFrame()
+      cancelPendingStudy()
       setSource(dataUrl)
       setResult(null)
       setSourceName('Camera capture')
@@ -108,23 +154,32 @@ function PixelStudio({ vision }: { vision: ReturnType<typeof useVisionRuntime> }
       setMessage('Upload an image or capture a camera frame first.')
       return
     }
+    const requestId = studyRequestRef.current + 1
+    studyRequestRef.current = requestId
+    const requestedStudy = study
     setBusy(true)
-    setMessage(study === 'mask' ? 'Building a color similarity mask…' : 'Building a luminance study…')
+    setMessage(
+      requestedStudy === 'mask'
+        ? 'Building a color similarity mask…'
+        : 'Building a luminance study…',
+    )
     try {
       const preview =
-        study === 'mask'
+        requestedStudy === 'mask'
           ? await createColorMaskPreview(source)
           : await createDepthStudyPreview(source)
+      if (studyRequestRef.current !== requestId) return
       setResult(preview)
       setMessage(
-        study === 'mask'
+        requestedStudy === 'mask'
           ? 'Purple marks pixels similar to the center sample.'
           : 'Color maps luminance—not physical distance.',
       )
     } catch (error) {
+      if (studyRequestRef.current !== requestId) return
       setMessage(error instanceof Error ? error.message : 'The preview could not be created.')
     } finally {
-      setBusy(false)
+      if (studyRequestRef.current === requestId) setBusy(false)
     }
   }
 
@@ -159,9 +214,16 @@ function PixelStudio({ vision }: { vision: ReturnType<typeof useVisionRuntime> }
           <button
             type="button"
             className={study === 'mask' ? 'active' : ''}
+            aria-pressed={study === 'mask'}
             onClick={() => {
+              cancelPendingStudy()
               setStudy('mask')
               setResult(null)
+              setMessage(
+                source
+                  ? 'Color similarity selected. Run it locally.'
+                  : 'Upload an image or capture the live camera frame.',
+              )
             }}
           >
             <span>
@@ -173,9 +235,16 @@ function PixelStudio({ vision }: { vision: ReturnType<typeof useVisionRuntime> }
           <button
             type="button"
             className={study === 'depth' ? 'active' : ''}
+            aria-pressed={study === 'depth'}
             onClick={() => {
+              cancelPendingStudy()
               setStudy('depth')
               setResult(null)
+              setMessage(
+                source
+                  ? 'Luminance map selected. Run it locally.'
+                  : 'Upload an image or capture the live camera frame.',
+              )
             }}
           >
             <span>
@@ -197,6 +266,7 @@ function PixelStudio({ vision }: { vision: ReturnType<typeof useVisionRuntime> }
               <PixelPreview
                 source={result ?? source ?? ''}
                 label={result ? `${study} preview` : sourceName}
+                onError={setMessage}
               />
             ) : (
               <div className="pixel-empty">
@@ -257,9 +327,9 @@ function DetectionInspector({ analysis }: { analysis: VisionAnalysis }) {
       icon: ScanFace,
     },
     {
-      label: 'Motion',
+      label: 'Frame change',
       value: `${analysis.motionScore}`,
-      detail: analysis.motionDirection,
+      detail: analysis.changeRegion,
       icon: Activity,
     },
   ]
@@ -314,12 +384,16 @@ function MotionCard({ analysis }: { analysis: VisionAnalysis }) {
     <article className="detail-card motion-card">
       <div className="panel-heading">
         <div>
-          <span>Motion history</span>
-          <strong>{analysis.motionDirection}</strong>
+          <span>Frame-change history</span>
+          <strong>{analysis.changeRegion}</strong>
         </div>
-        <b>{analysis.motionChangedPercent}% changing</b>
+        <b>{analysis.motionChangedPercent}% pixels changing</b>
       </div>
-      <svg viewBox="0 0 100 48" preserveAspectRatio="none" aria-label="Recent motion level">
+      <svg
+        viewBox="0 0 100 48"
+        preserveAspectRatio="none"
+        aria-label="Recent frame-change level"
+      >
         <defs>
           <linearGradient id="motion-fill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#7c4dff" stopOpacity="0.45" />
@@ -395,7 +469,7 @@ export function VisionScreen({
       <PageIntro
         eyebrow="Vision"
         title="See what the camera understands."
-        description="Real-time hand landmarks, face signals, motion, and color sampling—processed locally in your browser."
+        description="Hands, face signals, frame changes, and colors stay in your browser."
         actions={<CameraActions status={vision.status} start={vision.start} stop={vision.stop} />}
       />
       <section className="vision-layout">

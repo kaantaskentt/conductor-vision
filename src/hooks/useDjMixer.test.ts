@@ -1,14 +1,35 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { equalPowerCrossfade } from '../lib/djAudio'
 import {
+  analyzedBpmPatch,
+  appendWaveformSample,
+  bipolarFilterFrequencies,
+  bipolarFilterResonance,
   bpmFromTapTimes,
+  channelGainFromPercent,
   chooseSyncMaster,
-  equalPowerCrossfade,
+  createBpmAnalysisQueue,
   estimateBpmFromSamples,
+  isGestureFrameEngaged,
+  MAX_BPM_ANALYSIS_BYTES,
   matchedTempoPercent,
   phraseTimeForIndex,
+  relativeGestureValue,
+  shouldAutoAnalyzeBpm,
+  smoothBoundedControlValue,
   smoothControlValue,
   validateAudioFile,
 } from './useDjMixer'
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve
+    reject = nextReject
+  })
+  return { promise, resolve, reject }
+}
 
 describe('DJ mixer audio safeguards and math', () => {
   it('maps four phrase jumps across the track', () => {
@@ -35,17 +56,78 @@ describe('DJ mixer audio safeguards and math', () => {
     expect(matchedTempoPercent(0, 120)).toBeNull()
   })
 
-  it('uses the playing deck as the BPM Sync master and otherwise defaults to Deck A', () => {
-    expect(chooseSyncMaster(false, true)).toBe('b')
-    expect(chooseSyncMaster(true, false)).toBe('a')
-    expect(chooseSyncMaster(false, false)).toBe('a')
-    expect(chooseSyncMaster(true, true)).toBe('a')
+  it('uses the playing deck as the BPM Sync master and the audible deck when both play', () => {
+    expect(chooseSyncMaster(false, true, -100)).toBe('b')
+    expect(chooseSyncMaster(true, false, 100)).toBe('a')
+    expect(chooseSyncMaster(false, false, 100)).toBe('a')
+    expect(chooseSyncMaster(true, true, -1)).toBe('a')
+    expect(chooseSyncMaster(true, true, 0)).toBe('a')
+    expect(chooseSyncMaster(true, true, 1)).toBe('b')
+    expect(chooseSyncMaster(true, true, 100)).toBe('b')
   })
 
   it('smooths gesture values without overshooting the target', () => {
     expect(smoothControlValue(0, 100)).toBe(32)
     expect(smoothControlValue(80, 20, 0.5)).toBe(50)
     expect(smoothControlValue(10, 20, 2)).toBe(20)
+  })
+
+  it('clamps the hidden gesture accumulator so reversing from an end stop responds immediately', () => {
+    expect(smoothBoundedControlValue(140, 160, -100, 100, 0.5)).toBe(100)
+    expect(smoothBoundedControlValue(100, -100, -100, 100, 0.32)).toBe(36)
+    expect(smoothBoundedControlValue(-20, -40, 0, 100, 0.5)).toBe(0)
+  })
+
+  it('keeps the mixer locked until an intentional open-hand clutch is present', () => {
+    expect(
+      isGestureFrameEngaged({ detected: true, x: 0.9, y: 0.2, wristAngle: 0, openFingers: 0 }),
+    ).toBe(false)
+    expect(
+      isGestureFrameEngaged({ detected: true, x: 0.9, y: 0.2, wristAngle: 0, openFingers: 2 }),
+    ).toBe(false)
+    expect(
+      isGestureFrameEngaged(
+        { detected: true, x: 0.9, y: 0.2, wristAngle: 0, openFingers: 2 },
+        true,
+      ),
+    ).toBe(true)
+    expect(
+      isGestureFrameEngaged({ detected: false, x: 0.5, y: 0.5, wristAngle: 0, openFingers: 5 }),
+    ).toBe(false)
+  })
+
+  it('uses relative pickup so a newly seen hand cannot jump a control', () => {
+    expect(relativeGestureValue(0, 0.9, 0.9, 200)).toBe(0)
+    expect(relativeGestureValue(82, 0.5, 0.51, 120)).toBe(82)
+    expect(relativeGestureValue(0, 0.5, 0.75, 200)).toBeCloseTo(45)
+    expect(relativeGestureValue(82, 0.6, 0.3, 120)).toBeCloseTo(49)
+  })
+
+  it('uses a center-neutral bipolar DJ filter', () => {
+    expect(bipolarFilterFrequencies(50)).toEqual({ highpass: 20, lowpass: 20_000 })
+    expect(bipolarFilterFrequencies(0).highpass).toBe(20)
+    expect(bipolarFilterFrequencies(0).lowpass).toBeCloseTo(220)
+    expect(bipolarFilterFrequencies(100).highpass).toBeCloseTo(16_000)
+    expect(bipolarFilterFrequencies(100).lowpass).toBe(20_000)
+    expect(bipolarFilterFrequencies(40).lowpass).toBeLessThan(5_000)
+    expect(bipolarFilterFrequencies(60).highpass).toBeGreaterThan(150)
+    expect(bipolarFilterResonance(50)).toBeCloseTo(0.82)
+    expect(bipolarFilterResonance(0)).toBeCloseTo(2.1)
+    expect(bipolarFilterResonance(100)).toBeCloseTo(2.1)
+  })
+
+  it('uses a DJ-style channel fader taper with a true mute at zero', () => {
+    expect(channelGainFromPercent(0)).toBe(0)
+    expect(channelGainFromPercent(100)).toBe(1)
+    expect(channelGainFromPercent(82)).toBeGreaterThan(0.8)
+    expect(channelGainFromPercent(50)).toBeCloseTo(0.251, 2)
+    expect(channelGainFromPercent(25)).toBeLessThan(0.05)
+  })
+
+  it('builds a bounded live waveform history from real analyser levels', () => {
+    expect(appendWaveformSample([0, 12, 24], 36, 4)).toEqual([0, 12, 24, 36])
+    expect(appendWaveformSample([0, 12, 24, 36], 140, 4)).toEqual([12, 24, 36, 100])
+    expect(appendWaveformSample([12], 20, 0)).toEqual([])
   })
 
   it('derives a stable BPM from manual taps', () => {
@@ -63,6 +145,95 @@ describe('DJ mixer audio safeguards and math', () => {
       }
     }
     expect(estimateBpmFromSamples(samples, sampleRate)).toBe(120)
+  })
+
+  it('serializes BPM decoders so two deck loads cannot decode concurrently', async () => {
+    const firstGate = deferred<void>()
+    const secondGate = deferred<void>()
+    let active = 0
+    let maximumActive = 0
+    const analyze = vi.fn(async (file: File) => {
+      active += 1
+      maximumActive = Math.max(maximumActive, active)
+      await (file.name === 'first.mp3' ? firstGate.promise : secondGate.promise)
+      active -= 1
+      return file.name === 'first.mp3' ? 120 : 126
+    })
+    const queue = createBpmAnalysisQueue(analyze)
+    const first = queue.enqueue(
+      new File(['first'], 'first.mp3', { type: 'audio/mpeg' }),
+      () => true,
+    )
+    const second = queue.enqueue(
+      new File(['second'], 'second.mp3', { type: 'audio/mpeg' }),
+      () => true,
+    )
+
+    await Promise.resolve()
+    expect(analyze).toHaveBeenCalledTimes(1)
+    expect(maximumActive).toBe(1)
+
+    firstGate.resolve()
+    await expect(first).resolves.toEqual({ status: 'complete', bpm: 120 })
+    await Promise.resolve()
+    expect(analyze).toHaveBeenCalledTimes(2)
+    expect(maximumActive).toBe(1)
+
+    secondGate.resolve()
+    await expect(second).resolves.toEqual({ status: 'complete', bpm: 126 })
+    expect(maximumActive).toBe(1)
+  })
+
+  it('skips stale queued BPM work before allocating another decoder', async () => {
+    const firstGate = deferred<void>()
+    const analyze = vi.fn(async () => {
+      await firstGate.promise
+      return 120
+    })
+    const queue = createBpmAnalysisQueue(analyze)
+    const first = queue.enqueue(
+      new File(['first'], 'first.mp3', { type: 'audio/mpeg' }),
+      () => true,
+    )
+    let secondIsCurrent = true
+    const second = queue.enqueue(
+      new File(['second'], 'second.mp3', { type: 'audio/mpeg' }),
+      () => secondIsCurrent,
+    )
+
+    await Promise.resolve()
+    secondIsCurrent = false
+    firstGate.resolve()
+    await first
+
+    await expect(second).resolves.toEqual({ status: 'stale' })
+    expect(analyze).toHaveBeenCalledTimes(1)
+  })
+
+  it('bounds automatic BPM analysis before compressed audio is decoded', () => {
+    expect(shouldAutoAnalyzeBpm({ size: MAX_BPM_ANALYSIS_BYTES })).toBe(true)
+    expect(shouldAutoAnalyzeBpm({ size: MAX_BPM_ANALYSIS_BYTES + 1 })).toBe(false)
+  })
+
+  it('adopts full-waveform BPM for larger tracks without overwriting an existing tempo', () => {
+    const analysis = {
+      bpm: 128,
+      source: 'detected' as const,
+      bpmConfidence: 0.72,
+      beatOffsetSeconds: 0.1,
+      beatGridConfidence: 0.4,
+      durationSeconds: 300,
+      overview: [0.2, 1],
+      beats: [],
+      bars: [],
+    }
+
+    expect(analyzedBpmPatch(null, analysis)).toEqual({
+      bpm: 128,
+      bpmStatus: '128 BPM detected',
+    })
+    expect(analyzedBpmPatch(126, analysis)).toEqual({})
+    expect(analyzedBpmPatch(null, null)).toEqual({})
   })
 
   it('accepts supported local audio and rejects misleading files', () => {

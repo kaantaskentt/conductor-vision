@@ -10,6 +10,10 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+coverage
+artifacts/
+/.playwright-cli/
+/output/playwright/
 *.local
 
 # Editor directories and files
@@ -23,3 +27,4 @@ dist-ssr
 *.sln
 *.sw?
 .vercel
+.env*
